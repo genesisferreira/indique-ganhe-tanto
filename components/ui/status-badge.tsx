@@ -18,6 +18,7 @@ type StatusType =
   | "offline"
   | "aprovado"
   | "pago"
+  | "cancelado"
 
 interface StatusBadgeProps {
   status: StatusType
@@ -95,6 +96,10 @@ const statusConfig: Record<
   pago: {
     label: "Pago",
     className: "bg-primary/20 text-primary border-primary/30",
+  },
+  cancelado: {
+    label: "Cancelado",
+    className: "bg-destructive/20 text-destructive border-destructive/30",
   },
 }
 

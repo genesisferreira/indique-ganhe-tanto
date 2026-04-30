@@ -4,10 +4,12 @@ import { LucideIcon } from "lucide-react"
 interface StatCardProps {
   title: string
   value: string | number
+  subtitle?: string
   icon?: LucideIcon
   trend?: {
     value: number
-    label: string
+    label?: string
+    isPositive?: boolean
   }
   variant?: "default" | "primary" | "success" | "warning" | "destructive"
   className?: string
@@ -16,6 +18,7 @@ interface StatCardProps {
 export function StatCard({
   title,
   value,
+  subtitle,
   icon: Icon,
   trend,
   variant = "default",
@@ -49,6 +52,7 @@ export function StatCard({
         <div className="space-y-1">
           <p className="text-sm font-medium text-muted-foreground">{title}</p>
           <p className="text-2xl font-bold text-foreground">{value}</p>
+          {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
         </div>
         {Icon && (
           <div
@@ -66,13 +70,13 @@ export function StatCard({
           <span
             className={cn(
               "text-xs font-medium",
-              trend.value >= 0 ? "text-success" : "text-destructive"
+              (trend.isPositive ?? trend.value >= 0) ? "text-success" : "text-destructive"
             )}
           >
             {trend.value >= 0 ? "+" : ""}
             {trend.value}%
           </span>
-          <span className="text-xs text-muted-foreground">{trend.label}</span>
+          {trend.label && <span className="text-xs text-muted-foreground">{trend.label}</span>}
         </div>
       )}
     </div>
