@@ -1,7 +1,7 @@
 import type { Indicador, Comercial } from './profile'
 import type { Plano } from './plan'
 
-export type IndicacaoStatus = 'pendente' | 'em_atendimento' | 'em_negociacao' | 'aprovada' | 'recusada' | 'paga'
+export type IndicacaoStatus = 'pendente' | 'em_andamento' | 'em_atendimento' | 'em_negociacao' | 'aprovada' | 'recusada' | 'paga'
 
 export type RecompensaTipo = 'pix' | 'desconto_fatura'
 
@@ -21,7 +21,7 @@ export interface Indicacao {
   comercialId?: string
   comercial?: Comercial
   observacoes?: string
-  primeiraFaturaPaga: boolean
+  primeiraFaturaPaga?: boolean
   dataAprovacao?: Date
   dataRecusa?: Date
   motivoRecusa?: string

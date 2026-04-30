@@ -11,7 +11,7 @@ import {
   Clock,
   AlertTriangle,
 } from "lucide-react"
-import type { ComercialDisponibilidade } from "@/lib/types"
+import type { ComercialDisponibilidade } from "@/types"
 
 const statusOptions = [
   {

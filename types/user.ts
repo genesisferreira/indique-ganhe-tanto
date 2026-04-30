@@ -7,9 +7,9 @@ export interface User {
   telefone: string
   role: UserRole
   avatar?: string
-  ativo: boolean
+  ativo?: boolean
   createdAt: Date
-  updatedAt: Date
+  updatedAt?: Date
 }
 
 export interface UserSession {

@@ -4,11 +4,11 @@ export interface Plano {
   velocidade: string
   preco: number
   descricao: string
-  valorRecompensa: number
+  valorRecompensa?: number
   ativo: boolean
-  ordem: number
-  createdAt: Date
-  updatedAt: Date
+  ordem?: number
+  createdAt?: Date
+  updatedAt?: Date
 }
 
 export interface PlanoCreateData {

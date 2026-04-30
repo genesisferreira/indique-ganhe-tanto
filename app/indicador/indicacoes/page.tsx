@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select"
 import { indicacoes, currentIndicador } from "@/lib/mock-data"
 import { Plus, Search, Eye, Filter } from "lucide-react"
-import type { IndicacaoStatus } from "@/lib/types"
+import type { IndicacaoStatus } from "@/types"
 
 const statusOptions = [
   { value: "all", label: "Todos os status" },

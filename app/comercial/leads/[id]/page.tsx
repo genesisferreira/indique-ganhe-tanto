@@ -28,7 +28,7 @@ import {
   Plus,
   Send,
 } from "lucide-react"
-import type { LeadStatus } from "@/lib/types"
+import type { LeadStatus } from "@/types"
 
 const statusOptions = [
   { value: "novo", label: "Novo" },
