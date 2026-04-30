@@ -124,7 +124,7 @@ export default function IndicadorDashboard() {
                     {indicacao.nomeIndicado}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    {indicacao.plano.nome} - R${" "}
+                    {indicacao.plano?.nome || "Plano"} - R${" "}
                     {indicacao.valorRecompensa.toLocaleString("pt-BR", {
                       minimumFractionDigits: 2,
                     })}

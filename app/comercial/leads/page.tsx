@@ -33,6 +33,7 @@ export default function LeadsPage() {
   const meusLeads = leads.filter((l) => l.comercialId === currentComercial.id)
 
   const filteredLeads = meusLeads.filter((lead) => {
+    if (!lead.indicacao) return false
     const matchesSearch = lead.indicacao.nomeIndicado
       .toLowerCase()
       .includes(search.toLowerCase())
@@ -83,63 +84,68 @@ export default function LeadsPage() {
             <p className="text-muted-foreground">Nenhum lead encontrado</p>
           </div>
         ) : (
-          filteredLeads.map((lead) => (
-            <div
-              key={lead.id}
-              className="rounded-xl border bg-card p-5 hover:border-primary/50 transition-colors"
-            >
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold text-lg">
-                    {lead.indicacao.nomeIndicado.charAt(0)}
+          filteredLeads.map((lead) => {
+            const indicacao = lead.indicacao
+            if (!indicacao) return null
+            
+            return (
+              <div
+                key={lead.id}
+                className="rounded-xl border bg-card p-5 hover:border-primary/50 transition-colors"
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold text-lg">
+                      {indicacao.nomeIndicado.charAt(0)}
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-foreground">
+                        {indicacao.nomeIndicado}
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        {indicacao.plano?.nome || "Plano não definido"}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-foreground">
-                      {lead.indicacao.nomeIndicado}
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                      {lead.indicacao.plano.nome}
-                    </p>
-                  </div>
+                  <StatusBadge status={lead.status} />
                 </div>
-                <StatusBadge status={lead.status} />
-              </div>
 
-              <div className="space-y-2 mb-4">
-                <div className="flex items-center gap-2 text-sm">
-                  <Phone className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-foreground">
-                    {lead.indicacao.telefoneIndicado}
-                  </span>
-                </div>
-                {lead.retornoAgendado && (
+                <div className="space-y-2 mb-4">
                   <div className="flex items-center gap-2 text-sm">
-                    <Clock className="w-4 h-4 text-warning" />
-                    <span className="text-warning">
-                      Retorno:{" "}
-                      {lead.retornoAgendado.toLocaleDateString("pt-BR")} às{" "}
-                      {lead.retornoAgendado.toLocaleTimeString("pt-BR", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                    <Phone className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-foreground">
+                      {indicacao.telefoneIndicado}
                     </span>
                   </div>
-                )}
-              </div>
+                  {lead.retornoAgendado && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <Clock className="w-4 h-4 text-warning" />
+                      <span className="text-warning">
+                        Retorno:{" "}
+                        {lead.retornoAgendado.toLocaleDateString("pt-BR")} às{" "}
+                        {lead.retornoAgendado.toLocaleTimeString("pt-BR", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </div>
+                  )}
+                </div>
 
-              <div className="flex items-center gap-2 pt-4 border-t border-border">
-                <p className="text-xs text-muted-foreground flex-1">
-                  Indicado por: {lead.indicacao.indicador.nome}
-                </p>
-                <Button variant="ghost" size="sm" asChild>
-                  <Link href={`/comercial/leads/${lead.id}`}>
-                    <Eye className="w-4 h-4 mr-1" />
-                    Detalhes
-                  </Link>
-                </Button>
+                <div className="flex items-center gap-2 pt-4 border-t border-border">
+                  <p className="text-xs text-muted-foreground flex-1">
+                    Indicado por: {indicacao.indicador?.nome || "Desconhecido"}
+                  </p>
+                  <Button variant="ghost" size="sm" asChild>
+                    <Link href={`/comercial/leads/${lead.id}`}>
+                      <Eye className="w-4 h-4 mr-1" />
+                      Detalhes
+                    </Link>
+                  </Button>
+                </div>
               </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
     </div>

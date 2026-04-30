@@ -102,7 +102,10 @@ export default function ComercialDashboard() {
               Nenhum lead ativo no momento
             </div>
           ) : (
-            leadsAtivos.slice(0, 5).map((lead) => (
+            leadsAtivos.slice(0, 5).map((lead) => {
+              const indicacao = lead.indicacao
+              if (!indicacao) return null
+              return (
               <Link
                 key={lead.id}
                 href={`/comercial/leads/${lead.id}`}
@@ -110,15 +113,15 @@ export default function ComercialDashboard() {
               >
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">
-                    {lead.indicacao.nomeIndicado.charAt(0)}
+                    {indicacao.nomeIndicado.charAt(0)}
                   </div>
                   <div>
                     <p className="font-medium text-foreground">
-                      {lead.indicacao.nomeIndicado}
+                      {indicacao.nomeIndicado}
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {lead.indicacao.telefoneIndicado} -{" "}
-                      {lead.indicacao.plano.nome}
+                      {indicacao.telefoneIndicado} -{" "}
+                      {indicacao.plano?.nome || "Plano"}
                     </p>
                   </div>
                 </div>
@@ -131,7 +134,8 @@ export default function ComercialDashboard() {
                   </Button>
                 </div>
               </Link>
-            ))
+              )
+            })
           )}
         </div>
       </div>

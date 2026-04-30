@@ -147,10 +147,10 @@ export default function MinhasIndicacoesPage() {
                     </td>
                     <td className="px-4 py-3">
                       <p className="text-sm text-foreground">
-                        {indicacao.plano.nome}
+                        {indicacao.plano?.nome || "Plano"}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {indicacao.plano.velocidade}
+                        {indicacao.plano?.velocidade || "-"}
                       </p>
                     </td>
                     <td className="px-4 py-3 text-sm font-medium text-foreground">
