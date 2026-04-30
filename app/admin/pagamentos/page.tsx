@@ -12,34 +12,36 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { mockPagamentos, mockIndicadores } from "@/lib/mock-data"
-import { Search, DollarSign, Clock, CheckCircle, XCircle, MoreHorizontal, Eye, Check, X, Upload } from "lucide-react"
+import { pagamentos, indicadores } from "@/lib/mock-data"
+import { Search, DollarSign, Clock, CheckCircle, MoreHorizontal, Eye, Check, X, Upload } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import type { Pagamento, Indicador } from "@/types"
 
 export default function AdminPagamentosPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("todos")
-  const [selectedPagamento, setSelectedPagamento] = useState<typeof mockPagamentos[0] | null>(null)
+  const [selectedPagamento, setSelectedPagamento] = useState<Pagamento | null>(null)
   const [dialogType, setDialogType] = useState<"aprovar" | "rejeitar" | "detalhes" | null>(null)
 
-  const filteredPagamentos = mockPagamentos.filter(pagamento => {
-    const indicador = mockIndicadores.find(i => i.id === pagamento.indicadorId)
+  const filteredPagamentos = pagamentos.filter((pagamento: Pagamento) => {
+    const indicador = indicadores.find((i: Indicador) => i.id === pagamento.indicadorId)
     const matchesSearch = indicador?.nome.toLowerCase().includes(search.toLowerCase()) ||
-                         pagamento.chavePix.toLowerCase().includes(search.toLowerCase())
+                         (pagamento.indicador?.chavePix?.toLowerCase().includes(search.toLowerCase()) ?? false)
     const matchesStatus = statusFilter === "todos" || pagamento.status === statusFilter
     return matchesSearch && matchesStatus
   })
 
-  const totalPendente = mockPagamentos.filter(p => p.status === "pendente").reduce((acc, p) => acc + p.valor, 0)
-  const totalPago = mockPagamentos.filter(p => p.status === "pago").reduce((acc, p) => acc + p.valor, 0)
-  const pagamentosPendentes = mockPagamentos.filter(p => p.status === "pendente").length
+  const totalPendente = pagamentos.filter((p: Pagamento) => p.status === "pendente").reduce((acc, p) => acc + p.valor, 0)
+  const totalPago = pagamentos.filter((p: Pagamento) => p.status === "pago").reduce((acc, p) => acc + p.valor, 0)
+  const pagamentosPendentes = pagamentos.filter((p: Pagamento) => p.status === "pendente").length
+  const pagamentosPagos = pagamentos.filter((p: Pagamento) => p.status === "pago").length
 
   const getIndicadorNome = (indicadorId: string) => {
-    const indicador = mockIndicadores.find(i => i.id === indicadorId)
+    const indicador = indicadores.find((i: Indicador) => i.id === indicadorId)
     return indicador?.nome || "Desconhecido"
   }
 
-  const handleAction = (pagamento: typeof mockPagamentos[0], type: "aprovar" | "rejeitar" | "detalhes") => {
+  const handleAction = (pagamento: Pagamento, type: "aprovar" | "rejeitar" | "detalhes") => {
     setSelectedPagamento(pagamento)
     setDialogType(type)
   }
@@ -48,49 +50,46 @@ export default function AdminPagamentosPage() {
     {
       key: "indicador",
       header: "Indicador",
-      render: (pagamento: typeof mockPagamentos[0]) => (
+      cell: (pagamento: Pagamento) => (
         <p className="font-medium">{getIndicadorNome(pagamento.indicadorId)}</p>
       ),
     },
     {
       key: "valor",
       header: "Valor",
-      render: (pagamento: typeof mockPagamentos[0]) => (
+      cell: (pagamento: Pagamento) => (
         <span className="font-semibold">
           R$ {pagamento.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
         </span>
       ),
     },
     {
-      key: "chavePix",
-      header: "Chave PIX",
-      render: (pagamento: typeof mockPagamentos[0]) => (
-        <div>
-          <p className="text-xs text-muted-foreground">{pagamento.tipoChavePix.toUpperCase()}</p>
-          <p className="font-mono text-sm">{pagamento.chavePix}</p>
-        </div>
+      key: "tipo",
+      header: "Tipo",
+      cell: (pagamento: Pagamento) => (
+        <span className="text-sm capitalize">{pagamento.tipo === 'pix' ? 'PIX' : 'Desconto'}</span>
       ),
     },
     {
       key: "dataSolicitacao",
       header: "Solicitação",
-      render: (pagamento: typeof mockPagamentos[0]) => (
+      cell: (pagamento: Pagamento) => (
         <span className="text-sm text-muted-foreground">
-          {new Date(pagamento.dataSolicitacao).toLocaleDateString("pt-BR")}
+          {new Date(pagamento.createdAt).toLocaleDateString("pt-BR")}
         </span>
       ),
     },
     {
       key: "status",
       header: "Status",
-      render: (pagamento: typeof mockPagamentos[0]) => (
-        <StatusBadge status={pagamento.status} type="pagamento" />
+      cell: (pagamento: Pagamento) => (
+        <StatusBadge status={pagamento.status} />
       ),
     },
     {
       key: "acoes",
       header: "Ações",
-      render: (pagamento: typeof mockPagamentos[0]) => (
+      cell: (pagamento: Pagamento) => (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon">
@@ -144,7 +143,7 @@ export default function AdminPagamentosPage() {
         />
         <StatCard
           title="Média por Pagamento"
-          value={`R$ ${(totalPago / mockPagamentos.filter(p => p.status === "pago").length || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          value={`R$ ${(pagamentosPagos > 0 ? totalPago / pagamentosPagos : 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
           icon={DollarSign}
         />
       </div>
@@ -157,7 +156,7 @@ export default function AdminPagamentosPage() {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  placeholder="Buscar por indicador ou chave PIX..."
+                  placeholder="Buscar por indicador..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="w-full pl-9 sm:w-[300px]"
@@ -171,7 +170,6 @@ export default function AdminPagamentosPage() {
                   <SelectItem value="todos">Todos</SelectItem>
                   <SelectItem value="pendente">Pendentes</SelectItem>
                   <SelectItem value="pago">Pagos</SelectItem>
-                  <SelectItem value="rejeitado">Rejeitados</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -206,10 +204,6 @@ export default function AdminPagamentosPage() {
                 <p className="text-xl font-bold text-success">
                   R$ {selectedPagamento.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                 </p>
-              </div>
-              <div className="rounded-lg bg-muted/30 p-4">
-                <p className="text-sm text-muted-foreground">Chave PIX ({selectedPagamento.tipoChavePix})</p>
-                <p className="font-mono">{selectedPagamento.chavePix}</p>
               </div>
               <div className="grid gap-2">
                 <Label>Comprovante de Pagamento</Label>
@@ -286,7 +280,7 @@ export default function AdminPagamentosPage() {
                 </div>
                 <div className="rounded-lg bg-muted/30 p-4">
                   <p className="text-sm text-muted-foreground">Status</p>
-                  <StatusBadge status={selectedPagamento.status} type="pagamento" />
+                  <StatusBadge status={selectedPagamento.status} />
                 </div>
               </div>
               <div className="rounded-lg bg-muted/30 p-4">
@@ -295,14 +289,10 @@ export default function AdminPagamentosPage() {
                   R$ {selectedPagamento.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                 </p>
               </div>
-              <div className="rounded-lg bg-muted/30 p-4">
-                <p className="text-sm text-muted-foreground">Chave PIX ({selectedPagamento.tipoChavePix})</p>
-                <p className="font-mono">{selectedPagamento.chavePix}</p>
-              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="rounded-lg bg-muted/30 p-4">
                   <p className="text-sm text-muted-foreground">Data Solicitação</p>
-                  <p className="font-medium">{new Date(selectedPagamento.dataSolicitacao).toLocaleDateString("pt-BR")}</p>
+                  <p className="font-medium">{new Date(selectedPagamento.createdAt).toLocaleDateString("pt-BR")}</p>
                 </div>
                 {selectedPagamento.dataPagamento && (
                   <div className="rounded-lg bg-muted/30 p-4">
