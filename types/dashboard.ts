@@ -41,14 +41,14 @@ export interface RankingIndicador {
   indicador: Indicador
   indicacoes: number
   aprovadas: number
-  taxaConversao: number
+  taxaConversao?: number
 }
 
 export interface RankingComercial {
   comercial: Comercial
   vendas: number
   tempoMedio: string
-  taxaConversao: number
+  taxaConversao?: number
 }
 
 export interface GraficoData {

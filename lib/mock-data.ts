@@ -10,7 +10,7 @@ import type {
   DashboardIndicador,
   DashboardComercial,
   DashboardAdmin,
-} from './types'
+} from '@/types'
 
 // Planos
 export const planos: Plano[] = [

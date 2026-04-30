@@ -14,7 +14,7 @@ export interface Lead {
   ultimoContato?: Date
   retornoAgendado?: Date
   observacoes: string[]
-  tentativasContato: number
+  tentativasContato?: number
   createdAt: Date
   updatedAt: Date
 }

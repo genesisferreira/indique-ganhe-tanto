@@ -47,7 +47,10 @@ export default function RetornosPage() {
             </h2>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {retornosAtrasados.map((lead) => (
+            {retornosAtrasados.map((lead) => {
+              const indicacao = lead.indicacao
+              if (!indicacao) return null
+              return (
               <div
                 key={lead.id}
                 className="rounded-xl border border-destructive/50 bg-destructive/5 p-5"
@@ -55,14 +58,14 @@ export default function RetornosPage() {
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center text-destructive font-semibold">
-                      {lead.indicacao.nomeIndicado.charAt(0)}
+                      {indicacao.nomeIndicado.charAt(0)}
                     </div>
                     <div>
                       <h3 className="font-semibold text-foreground">
-                        {lead.indicacao.nomeIndicado}
+                        {indicacao.nomeIndicado}
                       </h3>
                       <p className="text-sm text-muted-foreground">
-                        {lead.indicacao.plano.nome}
+                        {indicacao.plano?.nome || "Plano"}
                       </p>
                     </div>
                   </div>
@@ -91,7 +94,8 @@ export default function RetornosPage() {
                   </Button>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}
@@ -112,7 +116,10 @@ export default function RetornosPage() {
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {retornosHoje.map((lead) => (
+            {retornosHoje.map((lead) => {
+              const indicacao = lead.indicacao
+              if (!indicacao) return null
+              return (
               <div
                 key={lead.id}
                 className="rounded-xl border border-primary/50 bg-primary/5 p-5"
@@ -120,14 +127,14 @@ export default function RetornosPage() {
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">
-                      {lead.indicacao.nomeIndicado.charAt(0)}
+                      {indicacao.nomeIndicado.charAt(0)}
                     </div>
                     <div>
                       <h3 className="font-semibold text-foreground">
-                        {lead.indicacao.nomeIndicado}
+                        {indicacao.nomeIndicado}
                       </h3>
                       <p className="text-sm text-muted-foreground">
-                        {lead.indicacao.plano.nome}
+                        {indicacao.plano?.nome || "Plano"}
                       </p>
                     </div>
                   </div>
@@ -157,7 +164,8 @@ export default function RetornosPage() {
                   </Button>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
@@ -178,19 +186,22 @@ export default function RetornosPage() {
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {retornosFuturos.map((lead) => (
+            {retornosFuturos.map((lead) => {
+              const indicacao = lead.indicacao
+              if (!indicacao) return null
+              return (
               <div key={lead.id} className="rounded-xl border bg-card p-5">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">
-                      {lead.indicacao.nomeIndicado.charAt(0)}
+                      {indicacao.nomeIndicado.charAt(0)}
                     </div>
                     <div>
                       <h3 className="font-semibold text-foreground">
-                        {lead.indicacao.nomeIndicado}
+                        {indicacao.nomeIndicado}
                       </h3>
                       <p className="text-sm text-muted-foreground">
-                        {lead.indicacao.plano.nome}
+                        {indicacao.plano?.nome || "Plano"}
                       </p>
                     </div>
                   </div>
@@ -215,7 +226,8 @@ export default function RetornosPage() {
                   </Link>
                 </Button>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

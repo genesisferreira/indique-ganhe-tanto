@@ -114,10 +114,10 @@ export default function PagamentosPage() {
                   >
                     <td className="px-4 py-3">
                       <p className="font-medium text-foreground">
-                        {pagamento.indicacao.nomeIndicado}
+                        {pagamento.indicacao?.nomeIndicado || "Indicação"}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {pagamento.indicacao.plano.nome}
+                        {pagamento.indicacao?.plano?.nome || "Plano"}
                       </p>
                     </td>
                     <td className="px-4 py-3 text-sm font-semibold text-foreground">

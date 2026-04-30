@@ -11,22 +11,22 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { mockComerciais } from "@/lib/mock-data"
+import { comerciais } from "@/lib/mock-data"
 import { Plus, Search, Eye, Edit, MoreHorizontal, CheckCircle, XCircle } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import Link from "next/link"
+import type { Comercial } from "@/types"
 
 export default function AdminComerciaisPage() {
   const [search, setSearch] = useState("")
   const [disponibilidadeFilter, setDisponibilidadeFilter] = useState<string>("todos")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
 
-  const filteredComerciais = mockComerciais.filter(comercial => {
+  const filteredComerciais = comerciais.filter((comercial: Comercial) => {
     const matchesSearch = comercial.nome.toLowerCase().includes(search.toLowerCase()) ||
                          comercial.email.toLowerCase().includes(search.toLowerCase())
     const matchesDisponibilidade = disponibilidadeFilter === "todos" || 
-                                   (disponibilidadeFilter === "disponivel" && comercial.disponivel) ||
-                                   (disponibilidadeFilter === "indisponivel" && !comercial.disponivel)
+                                   comercial.disponibilidade === disponibilidadeFilter
     return matchesSearch && matchesDisponibilidade
   })
 
@@ -34,7 +34,7 @@ export default function AdminComerciaisPage() {
     {
       key: "nome",
       header: "Nome",
-      render: (comercial: typeof mockComerciais[0]) => (
+      cell: (comercial: Comercial) => (
         <div>
           <p className="font-medium">{comercial.nome}</p>
           <p className="text-sm text-muted-foreground">{comercial.email}</p>
@@ -44,59 +44,40 @@ export default function AdminComerciaisPage() {
     {
       key: "telefone",
       header: "Telefone",
-      render: (comercial: typeof mockComerciais[0]) => (
+      cell: (comercial: Comercial) => (
         <span className="text-sm">{comercial.telefone}</span>
       ),
     },
     {
-      key: "leadsAtribuidos",
+      key: "leadsAtivos",
       header: "Leads",
-      render: (comercial: typeof mockComerciais[0]) => (
+      cell: (comercial: Comercial) => (
         <div className="text-center">
-          <p className="font-semibold">{comercial.leadsAtribuidos}</p>
-          <p className="text-xs text-muted-foreground">{comercial.conversoes} conv.</p>
+          <p className="font-semibold">{comercial.leadsAtivos}</p>
+          <p className="text-xs text-muted-foreground">{comercial.vendasRealizadas} vendas</p>
         </div>
       ),
     },
     {
-      key: "taxaConversao",
-      header: "Taxa",
-      render: (comercial: typeof mockComerciais[0]) => (
-        <span className={`font-semibold ${comercial.taxaConversao >= 30 ? "text-success" : comercial.taxaConversao >= 20 ? "text-warning" : "text-destructive"}`}>
-          {comercial.taxaConversao.toFixed(1)}%
+      key: "tempoMedio",
+      header: "Tempo Médio",
+      cell: (comercial: Comercial) => (
+        <span className="font-semibold">
+          {comercial.tempoMedioPrimeiroContato} min
         </span>
       ),
     },
     {
-      key: "disponivel",
+      key: "disponibilidade",
       header: "Disponibilidade",
-      render: (comercial: typeof mockComerciais[0]) => (
-        <div className="flex items-center gap-2">
-          {comercial.disponivel ? (
-            <span className="flex items-center gap-1 text-success">
-              <CheckCircle className="h-4 w-4" />
-              Disponível
-            </span>
-          ) : (
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <XCircle className="h-4 w-4" />
-              Indisponível
-            </span>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "status",
-      header: "Status",
-      render: (comercial: typeof mockComerciais[0]) => (
-        <StatusBadge status={comercial.status} type="comercial" />
+      cell: (comercial: Comercial) => (
+        <StatusBadge status={comercial.disponibilidade} />
       ),
     },
     {
       key: "acoes",
       header: "Ações",
-      render: (comercial: typeof mockComerciais[0]) => (
+      cell: (comercial: Comercial) => (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon">
@@ -125,52 +106,51 @@ export default function AdminComerciaisPage() {
       <PageHeader
         title="Gerenciar Comerciais"
         description="Visualize e gerencie a equipe comercial"
-        action={
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Novo Comercial
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle>Cadastrar Novo Comercial</DialogTitle>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="nome">Nome Completo</Label>
-                  <Input id="nome" placeholder="Digite o nome completo" />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="email">E-mail</Label>
-                  <Input id="email" type="email" placeholder="Digite o e-mail" />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="telefone">Telefone</Label>
-                  <Input id="telefone" placeholder="(00) 00000-0000" />
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="disponivel">Disponível para atendimento</Label>
-                  <Switch id="disponivel" defaultChecked />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="senha">Senha Temporária</Label>
-                  <Input id="senha" type="password" placeholder="Digite uma senha" />
-                </div>
+      >
+        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Novo Comercial
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-[500px]">
+            <DialogHeader>
+              <DialogTitle>Cadastrar Novo Comercial</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="nome">Nome Completo</Label>
+                <Input id="nome" placeholder="Digite o nome completo" />
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                  Cancelar
-                </Button>
-                <Button onClick={() => setIsDialogOpen(false)}>
-                  Cadastrar
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        }
-      />
+              <div className="grid gap-2">
+                <Label htmlFor="email">E-mail</Label>
+                <Input id="email" type="email" placeholder="Digite o e-mail" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="telefone">Telefone</Label>
+                <Input id="telefone" placeholder="(00) 00000-0000" />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="disponivel">Disponível para atendimento</Label>
+                <Switch id="disponivel" defaultChecked />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="senha">Senha Temporária</Label>
+                <Input id="senha" type="password" placeholder="Digite uma senha" />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+                Cancelar
+              </Button>
+              <Button onClick={() => setIsDialogOpen(false)}>
+                Cadastrar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </PageHeader>
 
       <Card className="border-border/50 bg-card/50">
         <CardHeader>
@@ -193,7 +173,8 @@ export default function AdminComerciaisPage() {
                 <SelectContent>
                   <SelectItem value="todos">Todos</SelectItem>
                   <SelectItem value="disponivel">Disponíveis</SelectItem>
-                  <SelectItem value="indisponivel">Indisponíveis</SelectItem>
+                  <SelectItem value="em_pausa">Em Pausa</SelectItem>
+                  <SelectItem value="offline">Offline</SelectItem>
                 </SelectContent>
               </Select>
             </div>

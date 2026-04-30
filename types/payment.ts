@@ -18,7 +18,7 @@ export interface Pagamento {
   observacoes?: string
   aprovadoPor?: string
   createdAt: Date
-  updatedAt: Date
+  updatedAt?: Date
 }
 
 export interface PagamentoCreateData {

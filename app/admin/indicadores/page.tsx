@@ -10,21 +10,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { mockIndicadores } from "@/lib/mock-data"
+import { indicadores } from "@/lib/mock-data"
 import { Plus, Search, Eye, Edit, Ban, CheckCircle, MoreHorizontal } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import Link from "next/link"
+import type { Indicador } from "@/types"
 
 export default function AdminIndicadoresPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("todos")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
 
-  const filteredIndicadores = mockIndicadores.filter(indicador => {
+  const filteredIndicadores = indicadores.filter((indicador: Indicador) => {
     const matchesSearch = indicador.nome.toLowerCase().includes(search.toLowerCase()) ||
                          indicador.email.toLowerCase().includes(search.toLowerCase()) ||
-                         indicador.cpf.includes(search)
-    const matchesStatus = statusFilter === "todos" || indicador.status === statusFilter
+                         (indicador.cpf?.includes(search) ?? false)
+    const matchesStatus = statusFilter === "todos" || 
+                          (statusFilter === "ativo" && indicador.ativo !== false) ||
+                          (statusFilter === "inativo" && indicador.ativo === false)
     return matchesSearch && matchesStatus
   })
 
@@ -32,7 +35,7 @@ export default function AdminIndicadoresPage() {
     {
       key: "nome",
       header: "Nome",
-      render: (indicador: typeof mockIndicadores[0]) => (
+      cell: (indicador: Indicador) => (
         <div>
           <p className="font-medium">{indicador.nome}</p>
           <p className="text-sm text-muted-foreground">{indicador.email}</p>
@@ -42,24 +45,24 @@ export default function AdminIndicadoresPage() {
     {
       key: "cpf",
       header: "CPF",
-      render: (indicador: typeof mockIndicadores[0]) => (
-        <span className="font-mono text-sm">{indicador.cpf}</span>
+      cell: (indicador: Indicador) => (
+        <span className="font-mono text-sm">{indicador.cpf || "-"}</span>
       ),
     },
     {
       key: "indicacoes",
       header: "Indicações",
-      render: (indicador: typeof mockIndicadores[0]) => (
+      cell: (indicador: Indicador) => (
         <div className="text-center">
           <p className="font-semibold">{indicador.totalIndicacoes}</p>
-          <p className="text-xs text-muted-foreground">{indicador.indicacoesConvertidas} convertidas</p>
+          <p className="text-xs text-muted-foreground">{indicador.indicacoesAprovadas} aprovadas</p>
         </div>
       ),
     },
     {
       key: "saldo",
       header: "Saldo",
-      render: (indicador: typeof mockIndicadores[0]) => (
+      cell: (indicador: Indicador) => (
         <span className="font-semibold text-success">
           R$ {indicador.saldoDisponivel.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
         </span>
@@ -68,23 +71,23 @@ export default function AdminIndicadoresPage() {
     {
       key: "status",
       header: "Status",
-      render: (indicador: typeof mockIndicadores[0]) => (
-        <StatusBadge status={indicador.status} type="indicador" />
+      cell: (indicador: Indicador) => (
+        <StatusBadge status={indicador.ativo !== false ? "disponivel" : "offline"} />
       ),
     },
     {
       key: "dataCadastro",
       header: "Cadastro",
-      render: (indicador: typeof mockIndicadores[0]) => (
+      cell: (indicador: Indicador) => (
         <span className="text-sm text-muted-foreground">
-          {new Date(indicador.dataCadastro).toLocaleDateString("pt-BR")}
+          {new Date(indicador.createdAt).toLocaleDateString("pt-BR")}
         </span>
       ),
     },
     {
       key: "acoes",
       header: "Ações",
-      render: (indicador: typeof mockIndicadores[0]) => (
+      cell: (indicador: Indicador) => (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon">
@@ -102,7 +105,7 @@ export default function AdminIndicadoresPage() {
               <Edit className="mr-2 h-4 w-4" />
               Editar
             </DropdownMenuItem>
-            {indicador.status === "ativo" ? (
+            {indicador.ativo !== false ? (
               <DropdownMenuItem className="text-destructive">
                 <Ban className="mr-2 h-4 w-4" />
                 Bloquear
@@ -124,54 +127,53 @@ export default function AdminIndicadoresPage() {
       <PageHeader
         title="Gerenciar Indicadores"
         description="Visualize e gerencie todos os indicadores cadastrados"
-        action={
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Novo Indicador
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle>Cadastrar Novo Indicador</DialogTitle>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
+      >
+        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Novo Indicador
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-[500px]">
+            <DialogHeader>
+              <DialogTitle>Cadastrar Novo Indicador</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="nome">Nome Completo</Label>
+                <Input id="nome" placeholder="Digite o nome completo" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="email">E-mail</Label>
+                <Input id="email" type="email" placeholder="Digite o e-mail" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="nome">Nome Completo</Label>
-                  <Input id="nome" placeholder="Digite o nome completo" />
+                  <Label htmlFor="cpf">CPF</Label>
+                  <Input id="cpf" placeholder="000.000.000-00" />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="email">E-mail</Label>
-                  <Input id="email" type="email" placeholder="Digite o e-mail" />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="cpf">CPF</Label>
-                    <Input id="cpf" placeholder="000.000.000-00" />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="telefone">Telefone</Label>
-                    <Input id="telefone" placeholder="(00) 00000-0000" />
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="senha">Senha Temporária</Label>
-                  <Input id="senha" type="password" placeholder="Digite uma senha" />
+                  <Label htmlFor="telefone">Telefone</Label>
+                  <Input id="telefone" placeholder="(00) 00000-0000" />
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                  Cancelar
-                </Button>
-                <Button onClick={() => setIsDialogOpen(false)}>
-                  Cadastrar
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        }
-      />
+              <div className="grid gap-2">
+                <Label htmlFor="senha">Senha Temporária</Label>
+                <Input id="senha" type="password" placeholder="Digite uma senha" />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+                Cancelar
+              </Button>
+              <Button onClick={() => setIsDialogOpen(false)}>
+                Cadastrar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </PageHeader>
 
       <Card className="border-border/50 bg-card/50">
         <CardHeader>
@@ -194,8 +196,7 @@ export default function AdminIndicadoresPage() {
                 <SelectContent>
                   <SelectItem value="todos">Todos</SelectItem>
                   <SelectItem value="ativo">Ativos</SelectItem>
-                  <SelectItem value="pendente">Pendentes</SelectItem>
-                  <SelectItem value="bloqueado">Bloqueados</SelectItem>
+                  <SelectItem value="inativo">Inativos</SelectItem>
                 </SelectContent>
               </Select>
             </div>

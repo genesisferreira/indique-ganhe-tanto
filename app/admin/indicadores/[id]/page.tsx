@@ -8,21 +8,22 @@ import { DataTable } from "@/components/ui/data-table"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { mockIndicadores, mockIndicacoes, mockPagamentos } from "@/lib/mock-data"
-import { ArrowLeft, FileText, DollarSign, TrendingUp, Calendar, Mail, Phone, MapPin, CreditCard, Edit, Ban, CheckCircle } from "lucide-react"
+import { indicadores, indicacoes, pagamentos } from "@/lib/mock-data"
+import { ArrowLeft, FileText, DollarSign, TrendingUp, Calendar, Mail, Phone, CreditCard, Edit, Ban, CheckCircle } from "lucide-react"
 import Link from "next/link"
+import type { Indicador, Indicacao, Pagamento } from "@/types"
 
 export default function AdminIndicadorDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
-  const indicador = mockIndicadores.find(i => i.id === id) || mockIndicadores[0]
-  const indicacoes = mockIndicacoes.filter(i => i.indicadorId === indicador.id)
-  const pagamentos = mockPagamentos.filter(p => p.indicadorId === indicador.id)
+  const indicador = indicadores.find((i: Indicador) => i.id === id) || indicadores[0]
+  const indicadorIndicacoes = indicacoes.filter((i: Indicacao) => i.indicadorId === indicador.id)
+  const indicadorPagamentos = pagamentos.filter((p: Pagamento) => p.indicadorId === indicador.id)
 
   const indicacoesColumns = [
     {
       key: "indicado",
       header: "Indicado",
-      render: (item: typeof mockIndicacoes[0]) => (
+      cell: (item: Indicacao) => (
         <div>
           <p className="font-medium">{item.nomeIndicado}</p>
           <p className="text-sm text-muted-foreground">{item.telefoneIndicado}</p>
@@ -32,23 +33,23 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
     {
       key: "plano",
       header: "Plano",
-      render: (item: typeof mockIndicacoes[0]) => (
-        <span className="text-sm">{item.planoInteresse || "Não informado"}</span>
+      cell: (item: Indicacao) => (
+        <span className="text-sm">{item.plano?.nome || "Não informado"}</span>
       ),
     },
     {
       key: "status",
       header: "Status",
-      render: (item: typeof mockIndicacoes[0]) => (
-        <StatusBadge status={item.status} type="indicacao" />
+      cell: (item: Indicacao) => (
+        <StatusBadge status={item.status} />
       ),
     },
     {
       key: "data",
       header: "Data",
-      render: (item: typeof mockIndicacoes[0]) => (
+      cell: (item: Indicacao) => (
         <span className="text-sm text-muted-foreground">
-          {new Date(item.dataIndicacao).toLocaleDateString("pt-BR")}
+          {new Date(item.createdAt).toLocaleDateString("pt-BR")}
         </span>
       ),
     },
@@ -58,36 +59,38 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
     {
       key: "data",
       header: "Data",
-      render: (item: typeof mockPagamentos[0]) => (
+      cell: (item: Pagamento) => (
         <span className="text-sm">
-          {new Date(item.dataSolicitacao).toLocaleDateString("pt-BR")}
+          {new Date(item.createdAt).toLocaleDateString("pt-BR")}
         </span>
       ),
     },
     {
       key: "valor",
       header: "Valor",
-      render: (item: typeof mockPagamentos[0]) => (
+      cell: (item: Pagamento) => (
         <span className="font-semibold">
           R$ {item.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
         </span>
       ),
     },
     {
-      key: "chavePix",
-      header: "Chave PIX",
-      render: (item: typeof mockPagamentos[0]) => (
-        <span className="font-mono text-sm">{item.chavePix}</span>
+      key: "tipo",
+      header: "Tipo",
+      cell: (item: Pagamento) => (
+        <span className="text-sm capitalize">{item.tipo === 'pix' ? 'PIX' : 'Desconto'}</span>
       ),
     },
     {
       key: "status",
       header: "Status",
-      render: (item: typeof mockPagamentos[0]) => (
-        <StatusBadge status={item.status} type="pagamento" />
+      cell: (item: Pagamento) => (
+        <StatusBadge status={item.status} />
       ),
     },
   ]
+
+  const isAtivo = indicador.ativo !== false
 
   return (
     <div className="space-y-6">
@@ -99,17 +102,17 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
         </Button>
         <PageHeader
           title={indicador.nome}
-          description={`Cadastrado em ${new Date(indicador.dataCadastro).toLocaleDateString("pt-BR")}`}
+          description={`Cadastrado em ${new Date(indicador.createdAt).toLocaleDateString("pt-BR")}`}
         />
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <StatusBadge status={indicador.status} type="indicador" />
+        <StatusBadge status={isAtivo ? "disponivel" : "offline"} />
         <Button variant="outline" size="sm">
           <Edit className="mr-2 h-4 w-4" />
           Editar
         </Button>
-        {indicador.status === "ativo" ? (
+        {isAtivo ? (
           <Button variant="outline" size="sm" className="text-destructive">
             <Ban className="mr-2 h-4 w-4" />
             Bloquear
@@ -129,14 +132,14 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
           icon={FileText}
         />
         <StatCard
-          title="Conversões"
-          value={indicador.indicacoesConvertidas}
+          title="Aprovadas"
+          value={indicador.indicacoesAprovadas}
           icon={TrendingUp}
           variant="success"
         />
         <StatCard
           title="Taxa de Conversão"
-          value={`${((indicador.indicacoesConvertidas / indicador.totalIndicacoes) * 100).toFixed(1)}%`}
+          value={`${((indicador.indicacoesAprovadas / indicador.totalIndicacoes) * 100).toFixed(1)}%`}
           icon={TrendingUp}
         />
         <StatCard
@@ -171,21 +174,14 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
               <CreditCard className="h-5 w-5 text-muted-foreground" />
               <div>
                 <p className="text-sm text-muted-foreground">CPF</p>
-                <p className="font-medium font-mono">{indicador.cpf}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <MapPin className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <p className="text-sm text-muted-foreground">Cidade/UF</p>
-                <p className="font-medium">{indicador.cidade}/{indicador.uf}</p>
+                <p className="font-medium font-mono">{indicador.cpf || "Não informado"}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
               <Calendar className="h-5 w-5 text-muted-foreground" />
               <div>
                 <p className="text-sm text-muted-foreground">Cadastro</p>
-                <p className="font-medium">{new Date(indicador.dataCadastro).toLocaleDateString("pt-BR")}</p>
+                <p className="font-medium">{new Date(indicador.createdAt).toLocaleDateString("pt-BR")}</p>
               </div>
             </div>
           </CardContent>
@@ -198,8 +194,8 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
           <CardContent>
             {indicador.chavePix ? (
               <div className="rounded-lg bg-muted/30 p-4">
-                <p className="text-sm text-muted-foreground">Tipo: {indicador.chavePix.tipo.toUpperCase()}</p>
-                <p className="mt-1 font-mono text-lg">{indicador.chavePix.chave}</p>
+                <p className="text-sm text-muted-foreground">Tipo: {indicador.tipoChavePix?.toUpperCase()}</p>
+                <p className="mt-1 font-mono text-lg">{indicador.chavePix}</p>
               </div>
             ) : (
               <p className="text-muted-foreground">Nenhuma chave PIX cadastrada</p>
@@ -210,15 +206,15 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
 
       <Tabs defaultValue="indicacoes" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="indicacoes">Indicações ({indicacoes.length})</TabsTrigger>
-          <TabsTrigger value="pagamentos">Pagamentos ({pagamentos.length})</TabsTrigger>
+          <TabsTrigger value="indicacoes">Indicações ({indicadorIndicacoes.length})</TabsTrigger>
+          <TabsTrigger value="pagamentos">Pagamentos ({indicadorPagamentos.length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="indicacoes">
           <Card className="border-border/50 bg-card/50">
             <CardContent className="pt-6">
               <DataTable
-                data={indicacoes}
+                data={indicadorIndicacoes}
                 columns={indicacoesColumns}
                 emptyMessage="Nenhuma indicação encontrada"
               />
@@ -230,7 +226,7 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
           <Card className="border-border/50 bg-card/50">
             <CardContent className="pt-6">
               <DataTable
-                data={pagamentos}
+                data={indicadorPagamentos}
                 columns={pagamentosColumns}
                 emptyMessage="Nenhum pagamento encontrado"
               />

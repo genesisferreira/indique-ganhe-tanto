@@ -25,10 +25,9 @@ import {
   Calendar,
   Clock,
   MessageSquare,
-  Plus,
   Send,
 } from "lucide-react"
-import type { LeadStatus } from "@/lib/types"
+import type { LeadStatus } from "@/types"
 
 const statusOptions = [
   { value: "novo", label: "Novo" },
@@ -46,9 +45,9 @@ export default function DetalheLeadPage({
   const { id } = use(params)
   const lead = leads.find((l) => l.id === id)
   const [novaObservacao, setNovaObservacao] = useState("")
-  const [status, setStatus] = useState(lead?.status || "novo")
+  const [status, setStatus] = useState<LeadStatus>(lead?.status || "novo")
 
-  if (!lead) {
+  if (!lead || !lead.indicacao) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
         <p className="text-muted-foreground mb-4">Lead não encontrado</p>
@@ -60,6 +59,9 @@ export default function DetalheLeadPage({
   }
 
   const leadHistorico = historicos.filter((h) => h.leadId === lead.id)
+  const indicacao = lead.indicacao
+  const plano = indicacao.plano
+  const indicador = indicacao.indicador
 
   return (
     <div>
@@ -74,7 +76,7 @@ export default function DetalheLeadPage({
       </div>
 
       <PageHeader
-        title={lead.indicacao.nomeIndicado}
+        title={indicacao.nomeIndicado}
         description={`Lead #${lead.id}`}
       >
         <StatusBadge status={lead.status} />
@@ -96,7 +98,7 @@ export default function DetalheLeadPage({
                 <div>
                   <p className="text-xs text-muted-foreground">Nome</p>
                   <p className="font-medium text-foreground">
-                    {lead.indicacao.nomeIndicado}
+                    {indicacao.nomeIndicado}
                   </p>
                 </div>
               </div>
@@ -107,14 +109,14 @@ export default function DetalheLeadPage({
                 <div>
                   <p className="text-xs text-muted-foreground">Telefone</p>
                   <a
-                    href={`tel:${lead.indicacao.telefoneIndicado}`}
+                    href={`tel:${indicacao.telefoneIndicado}`}
                     className="font-medium text-primary hover:underline"
                   >
-                    {lead.indicacao.telefoneIndicado}
+                    {indicacao.telefoneIndicado}
                   </a>
                 </div>
               </div>
-              {lead.indicacao.emailIndicado && (
+              {indicacao.emailIndicado && (
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
                     <Mail className="w-5 h-5 text-primary" />
@@ -122,31 +124,33 @@ export default function DetalheLeadPage({
                   <div>
                     <p className="text-xs text-muted-foreground">E-mail</p>
                     <a
-                      href={`mailto:${lead.indicacao.emailIndicado}`}
+                      href={`mailto:${indicacao.emailIndicado}`}
                       className="font-medium text-primary hover:underline"
                     >
-                      {lead.indicacao.emailIndicado}
+                      {indicacao.emailIndicado}
                     </a>
                   </div>
                 </div>
               )}
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                  <Zap className="w-5 h-5 text-primary" />
+              {plano && (
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                    <Zap className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Plano de Interesse
+                    </p>
+                    <p className="font-medium text-foreground">
+                      {plano.nome} - R${" "}
+                      {plano.preco.toLocaleString("pt-BR", {
+                        minimumFractionDigits: 2,
+                      })}
+                      /mês
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">
-                    Plano de Interesse
-                  </p>
-                  <p className="font-medium text-foreground">
-                    {lead.indicacao.plano.nome} - R${" "}
-                    {lead.indicacao.plano.preco.toLocaleString("pt-BR", {
-                      minimumFractionDigits: 2,
-                    })}
-                    /mês
-                  </p>
-                </div>
-              </div>
+              )}
             </div>
 
             {/* Quick Actions */}
@@ -206,7 +210,7 @@ export default function DetalheLeadPage({
                     className="flex gap-4 p-4 rounded-lg bg-muted/30"
                   >
                     <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold shrink-0">
-                      {hist.comercial.nome.charAt(0)}
+                      {hist.comercial?.nome.charAt(0) || "?"}
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center justify-between mb-1">
@@ -255,24 +259,26 @@ export default function DetalheLeadPage({
           </div>
 
           {/* Indicador */}
-          <div className="rounded-xl border bg-card p-6">
-            <h2 className="text-lg font-semibold text-foreground mb-4">
-              Indicado por
-            </h2>
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">
-                {lead.indicacao.indicador.nome.charAt(0)}
-              </div>
-              <div>
-                <p className="font-medium text-foreground">
-                  {lead.indicacao.indicador.nome}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {lead.indicacao.indicador.telefone}
-                </p>
+          {indicador && (
+            <div className="rounded-xl border bg-card p-6">
+              <h2 className="text-lg font-semibold text-foreground mb-4">
+                Indicado por
+              </h2>
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">
+                  {indicador.nome.charAt(0)}
+                </div>
+                <div>
+                  <p className="font-medium text-foreground">
+                    {indicador.nome}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {indicador.telefone}
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Timing */}
           <div className="rounded-xl border bg-card p-6">
@@ -293,7 +299,7 @@ export default function DetalheLeadPage({
                 <div className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <Clock className="w-4 h-4" />
-                    <span>1º Contato</span>
+                    <span>1 Contato</span>
                   </div>
                   <span className="text-foreground">
                     {lead.primeiroContato.toLocaleDateString("pt-BR")}

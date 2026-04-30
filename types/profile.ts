@@ -6,7 +6,7 @@ export type ComercialDisponibilidade = 'disponivel' | 'em_pausa' | 'offline'
 
 export interface Indicador extends User {
   role: 'indicador'
-  cpf: string
+  cpf?: string
   chavePix?: string
   tipoChavePix?: TipoChavePix
   totalIndicacoes: number

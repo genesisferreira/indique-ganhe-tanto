@@ -165,16 +165,16 @@ export default function DetalheIndicacaoPage({
               </div>
               <div className="flex-1">
                 <p className="font-semibold text-foreground">
-                  {indicacao.plano.nome}
+                  {indicacao.plano?.nome || "Plano"}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {indicacao.plano.velocidade} - {indicacao.plano.descricao}
+                  {indicacao.plano?.velocidade || "-"} - {indicacao.plano?.descricao || "-"}
                 </p>
               </div>
               <div className="text-right">
                 <p className="text-lg font-bold text-primary">
                   R${" "}
-                  {indicacao.plano.preco.toLocaleString("pt-BR", {
+                  {(indicacao.plano?.preco || 0).toLocaleString("pt-BR", {
                     minimumFractionDigits: 2,
                   })}
                 </p>

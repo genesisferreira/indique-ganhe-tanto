@@ -8,16 +8,17 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { mockIndicacoes, mockIndicadores, mockComerciais } from "@/lib/mock-data"
+import { indicacoes, indicadores, comerciais } from "@/lib/mock-data"
 import { Search, Eye, MoreHorizontal, UserPlus, RefreshCw } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "@/components/ui/dropdown-menu"
 import Link from "next/link"
+import type { Indicacao, Indicador, Comercial } from "@/types"
 
 export default function AdminIndicacoesPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("todos")
 
-  const filteredIndicacoes = mockIndicacoes.filter(indicacao => {
+  const filteredIndicacoes = indicacoes.filter((indicacao: Indicacao) => {
     const matchesSearch = indicacao.nomeIndicado.toLowerCase().includes(search.toLowerCase()) ||
                          indicacao.telefoneIndicado.includes(search)
     const matchesStatus = statusFilter === "todos" || indicacao.status === statusFilter
@@ -25,13 +26,13 @@ export default function AdminIndicacoesPage() {
   })
 
   const getIndicadorNome = (indicadorId: string) => {
-    const indicador = mockIndicadores.find(i => i.id === indicadorId)
+    const indicador = indicadores.find((i: Indicador) => i.id === indicadorId)
     return indicador?.nome || "Desconhecido"
   }
 
   const getComercialNome = (comercialId?: string) => {
     if (!comercialId) return "Não atribuído"
-    const comercial = mockComerciais.find(c => c.id === comercialId)
+    const comercial = comerciais.find((c: Comercial) => c.id === comercialId)
     return comercial?.nome || "Desconhecido"
   }
 
@@ -39,7 +40,7 @@ export default function AdminIndicacoesPage() {
     {
       key: "indicado",
       header: "Indicado",
-      render: (indicacao: typeof mockIndicacoes[0]) => (
+      cell: (indicacao: Indicacao) => (
         <div>
           <p className="font-medium">{indicacao.nomeIndicado}</p>
           <p className="text-sm text-muted-foreground">{indicacao.telefoneIndicado}</p>
@@ -49,7 +50,7 @@ export default function AdminIndicacoesPage() {
     {
       key: "indicador",
       header: "Indicador",
-      render: (indicacao: typeof mockIndicacoes[0]) => (
+      cell: (indicacao: Indicacao) => (
         <Link href={`/admin/indicadores/${indicacao.indicadorId}`} className="text-primary hover:underline">
           {getIndicadorNome(indicacao.indicadorId)}
         </Link>
@@ -58,7 +59,7 @@ export default function AdminIndicacoesPage() {
     {
       key: "comercial",
       header: "Comercial",
-      render: (indicacao: typeof mockIndicacoes[0]) => (
+      cell: (indicacao: Indicacao) => (
         <span className={indicacao.comercialId ? "" : "text-muted-foreground"}>
           {getComercialNome(indicacao.comercialId)}
         </span>
@@ -67,30 +68,30 @@ export default function AdminIndicacoesPage() {
     {
       key: "plano",
       header: "Plano",
-      render: (indicacao: typeof mockIndicacoes[0]) => (
-        <span className="text-sm">{indicacao.planoInteresse || "Não informado"}</span>
+      cell: (indicacao: Indicacao) => (
+        <span className="text-sm">{indicacao.plano?.nome || "Não informado"}</span>
       ),
     },
     {
       key: "status",
       header: "Status",
-      render: (indicacao: typeof mockIndicacoes[0]) => (
-        <StatusBadge status={indicacao.status} type="indicacao" />
+      cell: (indicacao: Indicacao) => (
+        <StatusBadge status={indicacao.status} />
       ),
     },
     {
       key: "data",
       header: "Data",
-      render: (indicacao: typeof mockIndicacoes[0]) => (
+      cell: (indicacao: Indicacao) => (
         <span className="text-sm text-muted-foreground">
-          {new Date(indicacao.dataIndicacao).toLocaleDateString("pt-BR")}
+          {new Date(indicacao.createdAt).toLocaleDateString("pt-BR")}
         </span>
       ),
     },
     {
       key: "acoes",
       header: "Ações",
-      render: (indicacao: typeof mockIndicacoes[0]) => (
+      cell: (indicacao: Indicacao) => (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon">
@@ -110,7 +111,7 @@ export default function AdminIndicacoesPage() {
                 Atribuir Comercial
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {mockComerciais.filter(c => c.disponivel).map(comercial => (
+                {comerciais.filter((c: Comercial) => c.disponibilidade === 'disponivel').map((comercial: Comercial) => (
                   <DropdownMenuItem key={comercial.id}>
                     {comercial.nome}
                   </DropdownMenuItem>
@@ -123,10 +124,10 @@ export default function AdminIndicacoesPage() {
                 Alterar Status
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                <DropdownMenuItem>Nova</DropdownMenuItem>
-                <DropdownMenuItem>Em Atendimento</DropdownMenuItem>
-                <DropdownMenuItem>Convertida</DropdownMenuItem>
-                <DropdownMenuItem>Perdida</DropdownMenuItem>
+                <DropdownMenuItem>Pendente</DropdownMenuItem>
+                <DropdownMenuItem>Em Andamento</DropdownMenuItem>
+                <DropdownMenuItem>Aprovada</DropdownMenuItem>
+                <DropdownMenuItem>Recusada</DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           </DropdownMenuContent>
@@ -162,10 +163,11 @@ export default function AdminIndicacoesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="todos">Todos</SelectItem>
-                  <SelectItem value="nova">Novas</SelectItem>
-                  <SelectItem value="em_atendimento">Em Atendimento</SelectItem>
-                  <SelectItem value="convertida">Convertidas</SelectItem>
-                  <SelectItem value="perdida">Perdidas</SelectItem>
+                  <SelectItem value="pendente">Pendentes</SelectItem>
+                  <SelectItem value="em_andamento">Em Andamento</SelectItem>
+                  <SelectItem value="aprovada">Aprovadas</SelectItem>
+                  <SelectItem value="recusada">Recusadas</SelectItem>
+                  <SelectItem value="paga">Pagas</SelectItem>
                 </SelectContent>
               </Select>
             </div>

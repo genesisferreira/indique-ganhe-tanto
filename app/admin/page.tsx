@@ -3,29 +3,30 @@
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { mockIndicacoes, mockIndicadores, mockComerciais, mockPagamentos } from "@/lib/mock-data"
-import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle, XCircle } from "lucide-react"
+import { indicacoes, indicadores, comerciais, pagamentos } from "@/lib/mock-data"
+import type { Indicacao, Indicador, Comercial, Pagamento } from "@/types"
+import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts"
 
 export default function AdminDashboard() {
-  const totalIndicadores = mockIndicadores.length
-  const indicadoresAtivos = mockIndicadores.filter(i => i.status === "ativo").length
-  const totalComerciais = mockComerciais.length
-  const comerciaisDisponiveis = mockComerciais.filter(c => c.disponivel).length
+  const totalIndicadores = indicadores.length
+  const indicadoresAtivos = indicadores.filter((i: Indicador) => i.ativo !== false).length
+  const totalComerciais = comerciais.length
+  const comerciaisDisponiveis = comerciais.filter((c: Comercial) => c.ativo !== false).length
   
-  const totalIndicacoes = mockIndicacoes.length
-  const indicacoesConvertidas = mockIndicacoes.filter(i => i.status === "convertida").length
-  const taxaConversao = ((indicacoesConvertidas / totalIndicacoes) * 100).toFixed(1)
+  const totalIndicacoes = indicacoes.length
+  const indicacoesAprovadas = indicacoes.filter((i: Indicacao) => i.status === "aprovada").length
+  const taxaConversao = totalIndicacoes > 0 ? ((indicacoesAprovadas / totalIndicacoes) * 100).toFixed(1) : "0"
   
-  const pagamentosPendentes = mockPagamentos.filter(p => p.status === "pendente")
-  const totalPendente = pagamentosPendentes.reduce((acc, p) => acc + p.valor, 0)
-  const totalPago = mockPagamentos.filter(p => p.status === "pago").reduce((acc, p) => acc + p.valor, 0)
+  const pagamentosPendentes = pagamentos.filter((p: Pagamento) => p.status === "pendente")
+  const totalPendente = pagamentosPendentes.reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
+  const totalPago = pagamentos.filter((p: Pagamento) => p.status === "pago").reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
 
   const statusData = [
-    { name: "Nova", value: mockIndicacoes.filter(i => i.status === "nova").length, color: "#3b82f6" },
-    { name: "Em Atend.", value: mockIndicacoes.filter(i => i.status === "em_atendimento").length, color: "#f59e0b" },
-    { name: "Convertida", value: mockIndicacoes.filter(i => i.status === "convertida").length, color: "#22c55e" },
-    { name: "Perdida", value: mockIndicacoes.filter(i => i.status === "perdida").length, color: "#ef4444" },
+    { name: "Pendente", value: indicacoes.filter((i: Indicacao) => i.status === "pendente").length, color: "#f59e0b" },
+    { name: "Em Andamento", value: indicacoes.filter((i: Indicacao) => i.status === "em_andamento").length, color: "#3b82f6" },
+    { name: "Aprovada", value: indicacoes.filter((i: Indicacao) => i.status === "aprovada").length, color: "#22c55e" },
+    { name: "Recusada", value: indicacoes.filter((i: Indicacao) => i.status === "recusada").length, color: "#ef4444" },
   ]
 
   const monthlyData = [
@@ -37,12 +38,12 @@ export default function AdminDashboard() {
     { mes: "Jun", indicacoes: 68, conversoes: 30 },
   ]
 
-  const topIndicadores = mockIndicadores
-    .sort((a, b) => b.indicacoesConvertidas - a.indicacoesConvertidas)
+  const topIndicadores = indicadores
+    .sort((a: Indicador, b: Indicador) => b.indicacoesAprovadas - a.indicacoesAprovadas)
     .slice(0, 5)
-    .map(i => ({
+    .map((i: Indicador) => ({
       nome: i.nome.split(" ")[0],
-      conversoes: i.indicacoesConvertidas,
+      conversoes: i.indicacoesAprovadas,
       total: i.totalIndicacoes,
     }))
 
@@ -50,7 +51,7 @@ export default function AdminDashboard() {
     <div className="space-y-6">
       <PageHeader
         title="Dashboard Administrativo"
-        description="Visão geral completa do sistema de indicações"
+        description="Visao geral completa do sistema de indicacoes"
       />
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -62,23 +63,23 @@ export default function AdminDashboard() {
           trend={{ value: 12, isPositive: true }}
         />
         <StatCard
-          title="Taxa de Conversão"
+          title="Taxa de Conversao"
           value={`${taxaConversao}%`}
-          subtitle={`${indicacoesConvertidas} de ${totalIndicacoes}`}
+          subtitle={`${indicacoesAprovadas} de ${totalIndicacoes}`}
           icon={TrendingUp}
           trend={{ value: 5.2, isPositive: true }}
         />
         <StatCard
           title="Pagamentos Pendentes"
           value={`R$ ${totalPendente.toLocaleString("pt-BR")}`}
-          subtitle={`${pagamentosPendentes.length} solicitações`}
+          subtitle={`${pagamentosPendentes.length} solicitacoes`}
           icon={Clock}
           variant="warning"
         />
         <StatCard
           title="Total Pago"
           value={`R$ ${totalPago.toLocaleString("pt-BR")}`}
-          subtitle="Neste mês"
+          subtitle="Neste mes"
           icon={DollarSign}
           variant="success"
         />
@@ -87,7 +88,7 @@ export default function AdminDashboard() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="border-border/50 bg-card/50">
           <CardHeader>
-            <CardTitle className="text-lg font-semibold">Indicações por Mês</CardTitle>
+            <CardTitle className="text-lg font-semibold">Indicacoes por Mes</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
@@ -109,7 +110,7 @@ export default function AdminDashboard() {
                     stroke="hsl(var(--primary))"
                     strokeWidth={2}
                     dot={{ fill: "hsl(var(--primary))" }}
-                    name="Indicações"
+                    name="Indicacoes"
                   />
                   <Line
                     type="monotone"
@@ -117,7 +118,7 @@ export default function AdminDashboard() {
                     stroke="hsl(var(--success))"
                     strokeWidth={2}
                     dot={{ fill: "hsl(var(--success))" }}
-                    name="Conversões"
+                    name="Conversoes"
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -127,7 +128,7 @@ export default function AdminDashboard() {
 
         <Card className="border-border/50 bg-card/50">
           <CardHeader>
-            <CardTitle className="text-lg font-semibold">Status das Indicações</CardTitle>
+            <CardTitle className="text-lg font-semibold">Status das Indicacoes</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
@@ -180,7 +181,7 @@ export default function AdminDashboard() {
                       borderRadius: "8px",
                     }}
                   />
-                  <Bar dataKey="conversoes" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} name="Conversões" />
+                  <Bar dataKey="conversoes" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} name="Conversoes" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -212,7 +213,7 @@ export default function AdminDashboard() {
                 </div>
                 <div>
                   <p className="font-medium">Comerciais</p>
-                  <p className="text-sm text-muted-foreground">{comerciaisDisponiveis} disponíveis</p>
+                  <p className="text-sm text-muted-foreground">{comerciaisDisponiveis} disponiveis</p>
                 </div>
               </div>
               <span className="text-2xl font-bold">{totalComerciais}</span>
@@ -224,7 +225,7 @@ export default function AdminDashboard() {
                   <CheckCircle className="h-5 w-5 text-success" />
                 </div>
                 <div>
-                  <p className="font-medium">Conversões Hoje</p>
+                  <p className="font-medium">Conversoes Hoje</p>
                   <p className="text-sm text-muted-foreground">Meta: 10</p>
                 </div>
               </div>
@@ -241,7 +242,7 @@ export default function AdminDashboard() {
                   <p className="text-sm text-muted-foreground">Aguardando atendimento</p>
                 </div>
               </div>
-              <span className="text-2xl font-bold">{mockIndicacoes.filter(i => i.status === "nova").length}</span>
+              <span className="text-2xl font-bold">{indicacoes.filter((i: Indicacao) => i.status === "pendente").length}</span>
             </div>
           </CardContent>
         </Card>

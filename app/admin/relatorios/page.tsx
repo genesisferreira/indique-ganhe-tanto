@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { mockIndicacoes, mockIndicadores, mockComerciais, mockPagamentos } from "@/lib/mock-data"
-import { Download, TrendingUp, Users, DollarSign, FileText, BarChart3, PieChart as PieChartIcon, Calendar } from "lucide-react"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, AreaChart, Area } from "recharts"
+import { indicacoes, indicadores, comerciais, pagamentos } from "@/lib/mock-data"
+import { Download, TrendingUp, Users, DollarSign, FileText, BarChart3, PieChart as PieChartIcon } from "lucide-react"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts"
+import type { Indicacao, Indicador, Comercial, Pagamento } from "@/types"
 
 export default function AdminRelatoriosPage() {
   const [periodo, setPeriodo] = useState("6meses")
@@ -24,18 +25,18 @@ export default function AdminRelatoriosPage() {
   ]
 
   const statusData = [
-    { name: "Nova", value: mockIndicacoes.filter(i => i.status === "nova").length, color: "#3b82f6" },
-    { name: "Em Atend.", value: mockIndicacoes.filter(i => i.status === "em_atendimento").length, color: "#f59e0b" },
-    { name: "Convertida", value: mockIndicacoes.filter(i => i.status === "convertida").length, color: "#22c55e" },
-    { name: "Perdida", value: mockIndicacoes.filter(i => i.status === "perdida").length, color: "#ef4444" },
+    { name: "Pendente", value: indicacoes.filter((i: Indicacao) => i.status === "pendente").length, color: "#3b82f6" },
+    { name: "Em Andamento", value: indicacoes.filter((i: Indicacao) => i.status === "em_andamento").length, color: "#f59e0b" },
+    { name: "Aprovada", value: indicacoes.filter((i: Indicacao) => i.status === "aprovada").length, color: "#22c55e" },
+    { name: "Recusada", value: indicacoes.filter((i: Indicacao) => i.status === "recusada").length, color: "#ef4444" },
   ]
 
-  const comercialData = mockComerciais.map(c => ({
+  const comercialData = comerciais.map((c: Comercial) => ({
     nome: c.nome.split(" ")[0],
     conversoes: c.conversoes,
     leads: c.leadsAtribuidos,
     taxa: c.taxaConversao,
-  })).sort((a, b) => b.conversoes - a.conversoes).slice(0, 5)
+  })).sort((a: { conversoes: number }, b: { conversoes: number }) => b.conversoes - a.conversoes).slice(0, 5)
 
   const planoData = [
     { plano: "100 Mega", quantidade: 45, cor: "#3b82f6" },
@@ -45,37 +46,37 @@ export default function AdminRelatoriosPage() {
     { plano: "1 Giga", quantidade: 15, cor: "#ef4444" },
   ]
 
-  const totalIndicacoes = mockIndicacoes.length
-  const totalConversoes = mockIndicacoes.filter(i => i.status === "convertida").length
-  const taxaGeral = ((totalConversoes / totalIndicacoes) * 100).toFixed(1)
-  const totalPago = mockPagamentos.filter(p => p.status === "pago").reduce((acc, p) => acc + p.valor, 0)
+  const totalIndicacoes = indicacoes.length
+  const totalConversoes = indicacoes.filter((i: Indicacao) => i.status === "aprovada").length
+  const taxaGeral = totalIndicacoes > 0 ? ((totalConversoes / totalIndicacoes) * 100).toFixed(1) : "0"
+  const totalPago = pagamentos.filter((p: Pagamento) => p.status === "pago").reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Relatórios"
-        description="Análises e métricas detalhadas do sistema"
-        action={
-          <div className="flex items-center gap-2">
-            <Select value={periodo} onValueChange={setPeriodo}>
-              <SelectTrigger className="w-[150px]">
-                <SelectValue placeholder="Período" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="7dias">Últimos 7 dias</SelectItem>
-                <SelectItem value="30dias">Últimos 30 dias</SelectItem>
-                <SelectItem value="3meses">Últimos 3 meses</SelectItem>
-                <SelectItem value="6meses">Últimos 6 meses</SelectItem>
-                <SelectItem value="1ano">Último ano</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="outline">
-              <Download className="mr-2 h-4 w-4" />
-              Exportar
-            </Button>
-          </div>
-        }
-      />
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <PageHeader
+          title="Relatórios"
+          description="Análises e métricas detalhadas do sistema"
+        />
+        <div className="flex items-center gap-2">
+          <Select value={periodo} onValueChange={setPeriodo}>
+            <SelectTrigger className="w-[150px]">
+              <SelectValue placeholder="Período" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="7dias">Últimos 7 dias</SelectItem>
+              <SelectItem value="30dias">Últimos 30 dias</SelectItem>
+              <SelectItem value="3meses">Últimos 3 meses</SelectItem>
+              <SelectItem value="6meses">Últimos 6 meses</SelectItem>
+              <SelectItem value="1ano">Último ano</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button variant="outline">
+            <Download className="mr-2 h-4 w-4" />
+            Exportar
+          </Button>
+        </div>
+      </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
@@ -92,7 +93,7 @@ export default function AdminRelatoriosPage() {
         />
         <StatCard
           title="Indicadores Ativos"
-          value={mockIndicadores.filter(i => i.status === "ativo").length}
+          value={indicadores.length}
           icon={Users}
         />
         <StatCard

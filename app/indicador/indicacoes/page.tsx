@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select"
 import { indicacoes, currentIndicador } from "@/lib/mock-data"
 import { Plus, Search, Eye, Filter } from "lucide-react"
-import type { IndicacaoStatus } from "@/lib/types"
+import type { IndicacaoStatus } from "@/types"
 
 const statusOptions = [
   { value: "all", label: "Todos os status" },
@@ -147,10 +147,10 @@ export default function MinhasIndicacoesPage() {
                     </td>
                     <td className="px-4 py-3">
                       <p className="text-sm text-foreground">
-                        {indicacao.plano.nome}
+                        {indicacao.plano?.nome || "Plano"}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {indicacao.plano.velocidade}
+                        {indicacao.plano?.velocidade || "-"}
                       </p>
                     </td>
                     <td className="px-4 py-3 text-sm font-medium text-foreground">
