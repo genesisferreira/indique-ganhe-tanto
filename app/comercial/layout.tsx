@@ -1,5 +1,5 @@
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
-import { currentComercial } from "@/lib/mock-data"
+import { currentComercial } from "@/lib/services/mock-data.service"
 
 export default function ComercialLayout({
   children,

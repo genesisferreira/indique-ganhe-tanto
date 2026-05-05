@@ -20,7 +20,7 @@ import {
   dashboardIndicador,
   indicacoes,
   currentIndicador,
-} from "@/lib/mock-data"
+} from "@/lib/services/mock-data.service"
 
 const recentIndicacoes = indicacoes
   .filter((i) => i.indicadorId === currentIndicador.id)

@@ -3,7 +3,7 @@
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { indicacoes, indicadores, comerciais, pagamentos } from "@/lib/mock-data"
+import { indicacoes, indicadores, comerciais, pagamentos } from "@/lib/services/mock-data.service"
 import type { Indicacao, Indicador, Comercial, Pagamento } from "@/types"
 import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts"

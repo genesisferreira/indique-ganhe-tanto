@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
-import { currentIndicador } from "@/lib/mock-data"
+import { currentIndicador } from "@/lib/services/mock-data.service"
 import { User, Mail, Phone, Calendar, Eye, EyeOff, Lock, Save } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 

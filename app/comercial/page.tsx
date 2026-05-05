@@ -16,7 +16,7 @@ import {
   ArrowRight,
   Phone,
 } from "lucide-react"
-import { dashboardComercial, leads, currentComercial } from "@/lib/mock-data"
+import { dashboardComercial, leads, currentComercial } from "@/lib/services/mock-data.service"
 
 const meusLeads = leads.filter((l) => l.comercialId === currentComercial.id)
 const leadsAtivos = meusLeads.filter(

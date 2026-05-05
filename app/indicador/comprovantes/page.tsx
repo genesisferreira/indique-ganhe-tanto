@@ -2,7 +2,7 @@
 
 import { PageHeader } from "@/components/ui/page-header"
 import { Button } from "@/components/ui/button"
-import { pagamentos, currentIndicador } from "@/lib/mock-data"
+import { pagamentos, currentIndicador } from "@/lib/services/mock-data.service"
 import { FileText, Download, Calendar, Wallet, Eye } from "lucide-react"
 
 export default function ComprovantesPage() {

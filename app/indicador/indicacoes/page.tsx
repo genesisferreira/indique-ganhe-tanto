@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { indicacoes, currentIndicador } from "@/lib/mock-data"
+import { indicacoes, currentIndicador } from "@/lib/services/mock-data.service"
 import { Plus, Search, Eye, Filter } from "lucide-react"
 import type { IndicacaoStatus } from "@/types"
 

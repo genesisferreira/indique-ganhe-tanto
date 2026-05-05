@@ -2,7 +2,7 @@
 
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
-import { currentComercial, dashboardComercial } from "@/lib/mock-data"
+import { currentComercial, dashboardComercial } from "@/lib/services/mock-data.service"
 import {
   ShoppingCart,
   UserX,

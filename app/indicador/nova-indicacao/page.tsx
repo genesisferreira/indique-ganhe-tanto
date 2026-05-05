@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/ui/page-header"
-import { planos } from "@/lib/mock-data"
+import { planos } from "@/lib/services/mock-data.service"
 import { CheckCircle2, Wallet, Receipt, Info } from "lucide-react"
 
 export default function NovaIndicacaoPage() {

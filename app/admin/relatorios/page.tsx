@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { indicacoes, indicadores, comerciais, pagamentos } from "@/lib/mock-data"
+import { indicacoes, indicadores, comerciais, pagamentos } from "@/lib/services/mock-data.service"
 import { Download, TrendingUp, Users, DollarSign, FileText, BarChart3, PieChart as PieChartIcon } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts"
 import type { Indicacao, Indicador, Comercial, Pagamento } from "@/types"
@@ -33,9 +33,9 @@ export default function AdminRelatoriosPage() {
 
   const comercialData = comerciais.map((c: Comercial) => ({
     nome: c.nome.split(" ")[0],
-    conversoes: c.conversoes,
-    leads: c.leadsAtribuidos,
-    taxa: c.taxaConversao,
+    conversoes: c.vendasRealizadas,
+    leads: c.leadsAtivos,
+    taxa: c.leadsAtivos > 0 ? Number(((c.vendasRealizadas / c.leadsAtivos) * 100).toFixed(1)) : 0,
   })).sort((a: { conversoes: number }, b: { conversoes: number }) => b.conversoes - a.conversoes).slice(0, 5)
 
   const planoData = [

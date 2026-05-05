@@ -4,7 +4,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
-import { leads, currentComercial } from "@/lib/mock-data"
+import { leads, currentComercial } from "@/lib/services/mock-data.service"
 import { Clock, Phone, Eye, Calendar, AlertTriangle } from "lucide-react"
 
 export default function RetornosPage() {

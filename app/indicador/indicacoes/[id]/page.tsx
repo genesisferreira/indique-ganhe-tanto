@@ -5,7 +5,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
-import { indicacoes } from "@/lib/mock-data"
+import { indicacoes } from "@/lib/services/mock-data.service"
 import {
   ArrowLeft,
   User,

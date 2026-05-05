@@ -1,7 +1,7 @@
 "use client"
 
 import { PageHeader } from "@/components/ui/page-header"
-import { historicos, currentComercial } from "@/lib/mock-data"
+import { historicos, currentComercial } from "@/lib/services/mock-data.service"
 import { Clock, Phone, MessageSquare, CheckCircle2, XCircle } from "lucide-react"
 
 const iconMap: Record<string, React.ElementType> = {

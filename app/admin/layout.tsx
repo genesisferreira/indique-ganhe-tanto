@@ -1,7 +1,7 @@
 "use client"
 
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
-import { currentAdmin } from "@/lib/mock-data"
+import { currentAdmin } from "@/lib/services/mock-data.service"
 
 export default function AdminLayout({
   children,

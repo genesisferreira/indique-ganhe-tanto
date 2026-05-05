@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/ui/page-header"
-import { currentIndicador } from "@/lib/mock-data"
+import { currentIndicador } from "@/lib/services/mock-data.service"
 import { Key, AlertTriangle, CheckCircle2, Pencil } from "lucide-react"
 
 const pixTypes = [

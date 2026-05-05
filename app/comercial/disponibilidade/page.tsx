@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
-import { currentComercial } from "@/lib/mock-data"
+import { currentComercial } from "@/lib/services/mock-data.service"
 import {
   CheckCircle2,
   PauseCircle,

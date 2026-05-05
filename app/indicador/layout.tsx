@@ -1,5 +1,5 @@
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
-import { currentIndicador } from "@/lib/mock-data"
+import { currentIndicador } from "@/lib/services/mock-data.service"
 
 export default function IndicadorLayout({
   children,

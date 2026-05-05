@@ -2,7 +2,7 @@
 
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
-import { pagamentos, currentIndicador } from "@/lib/mock-data"
+import { pagamentos, currentIndicador } from "@/lib/services/mock-data.service"
 import { Wallet, Receipt, Calendar, ArrowUpRight } from "lucide-react"
 
 export default function PagamentosPage() {

@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { pagamentos, indicadores } from "@/lib/mock-data"
+import { pagamentos, indicadores } from "@/lib/services/mock-data.service"
 import { Search, DollarSign, Clock, CheckCircle, MoreHorizontal, Eye, Check, X, Upload } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import type { Pagamento, Indicador } from "@/types"

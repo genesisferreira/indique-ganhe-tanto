@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
-import { leads, historicos } from "@/lib/mock-data"
+import { leads, historicos } from "@/lib/services/mock-data.service"
 import {
   ArrowLeft,
   User,

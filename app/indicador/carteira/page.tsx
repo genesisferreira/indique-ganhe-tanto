@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
-import { currentIndicador, dashboardIndicador } from "@/lib/mock-data"
+import { currentIndicador, dashboardIndicador } from "@/lib/services/mock-data.service"
 import {
   Wallet,
   TrendingUp,

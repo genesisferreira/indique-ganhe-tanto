@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { leads, currentComercial } from "@/lib/mock-data"
+import { leads, currentComercial } from "@/lib/services/mock-data.service"
 import { Search, Filter, Eye, Phone, Clock } from "lucide-react"
 
 const statusOptions = [
