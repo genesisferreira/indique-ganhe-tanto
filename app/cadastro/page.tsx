@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Zap, Eye, EyeOff, ArrowLeft, CheckCircle2 } from "lucide-react"
+import { getSupabaseClient } from "@/lib/supabase/client"
 
 const pixTypes = [
   { value: "cpf", label: "CPF" },
@@ -29,18 +30,101 @@ export default function CadastroPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [step, setStep] = useState(1)
+  const [nome, setNome] = useState("")
+  const [email, setEmail] = useState("")
+  const [telefone, setTelefone] = useState("")
+  const [password, setPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
+  const [tipoPix, setTipoPix] = useState("")
+  const [chavePix, setChavePix] = useState("")
+  const [error, setError] = useState("")
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (step === 1) {
+      if (password.length < 8) {
+        setError("A senha deve ter no mínimo 8 caracteres.")
+        return
+      }
+      if (password !== confirmPassword) {
+        setError("As senhas não conferem.")
+        return
+      }
+      setError("")
       setStep(2)
       return
     }
 
+    if (!tipoPix || !chavePix) {
+      setError("Informe o tipo e a chave PIX para continuar.")
+      return
+    }
+
     setIsLoading(true)
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    router.push("/indicador")
+    setError("")
+
+    try {
+      const supabase = getSupabaseClient()
+
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+      })
+
+      if (signUpError) {
+        setError(signUpError.message || "Não foi possível criar a conta.")
+        return
+      }
+
+      const userId = signUpData.user?.id
+      if (!userId) {
+        setError("Conta criada, mas não foi possível obter o usuário autenticado.")
+        return
+      }
+
+      const db = supabase as any
+
+      const { error: profileError } = await db.from("profiles").upsert(
+        {
+          id: userId,
+          full_name: nome,
+          email,
+          phone: telefone,
+          role: "indicador",
+          is_active: true,
+        },
+        { onConflict: "id" }
+      )
+
+      if (profileError) {
+        setError(profileError.message || "Conta criada, mas houve erro ao salvar perfil.")
+        return
+      }
+
+      if (tipoPix && chavePix) {
+        const { error: pixError } = await db.from("pix_keys").upsert(
+          {
+            profile_id: userId,
+            key_type: tipoPix,
+            key_value: chavePix,
+            is_primary: true,
+          },
+          { onConflict: "key_value" }
+        )
+
+        if (pixError) {
+          setError(pixError.message || "Conta criada, mas houve erro ao salvar chave PIX.")
+          return
+        }
+      }
+
+      router.push("/indicador")
+    } catch {
+      setError("Erro inesperado ao criar conta. Tente novamente.")
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -112,6 +196,8 @@ export default function CadastroPage() {
                     id="nome"
                     type="text"
                     placeholder="Seu nome completo"
+                    value={nome}
+                    onChange={(e) => setNome(e.target.value)}
                     required
                   />
                 </div>
@@ -122,6 +208,8 @@ export default function CadastroPage() {
                     id="email"
                     type="email"
                     placeholder="seu@email.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     required
                   />
                 </div>
@@ -132,6 +220,8 @@ export default function CadastroPage() {
                     id="telefone"
                     type="tel"
                     placeholder="(11) 99999-9999"
+                    value={telefone}
+                    onChange={(e) => setTelefone(e.target.value)}
                     required
                   />
                 </div>
@@ -143,6 +233,8 @@ export default function CadastroPage() {
                       id="password"
                       type={showPassword ? "text" : "password"}
                       placeholder="Mínimo 8 caracteres"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
                       required
                     />
                     <button
@@ -166,6 +258,8 @@ export default function CadastroPage() {
                       id="confirmPassword"
                       type={showConfirmPassword ? "text" : "password"}
                       placeholder="Confirme sua senha"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
                       required
                     />
                     <button
@@ -202,7 +296,7 @@ export default function CadastroPage() {
 
                 <div className="space-y-2">
                   <Label htmlFor="tipoPix">Tipo de Chave Pix</Label>
-                  <Select required>
+                  <Select value={tipoPix} onValueChange={setTipoPix}>
                     <SelectTrigger>
                       <SelectValue placeholder="Selecione o tipo" />
                     </SelectTrigger>
@@ -222,6 +316,8 @@ export default function CadastroPage() {
                     id="chavePix"
                     type="text"
                     placeholder="Digite sua chave Pix"
+                    value={chavePix}
+                    onChange={(e) => setChavePix(e.target.value)}
                     required
                   />
                 </div>
@@ -240,6 +336,11 @@ export default function CadastroPage() {
                   </Button>
                 </div>
               </>
+            )}
+            {error && (
+              <p className="text-sm text-destructive" role="alert">
+                {error}
+              </p>
             )}
           </form>
 
