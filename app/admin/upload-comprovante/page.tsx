@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { pagamentos } from "@/lib/mock-data"
+import { pagamentos } from "@/lib/services/mock-data.service"
 import type { Pagamento } from "@/types"
 import { Upload, FileText, CheckCircle, AlertCircle, Image, X, Search } from "lucide-react"
 
@@ -44,7 +44,7 @@ export default function AdminUploadComprovantePage() {
     }, 1500)
   }
 
-  const selectedPagamentoData = pagamentos.find(p => p.id === selectedPagamento)
+  const selectedPagamentoData = pagamentos.find((p: Pagamento) => p.id === selectedPagamento)
 
   return (
     <div className="space-y-6">

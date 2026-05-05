@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
-import { planos } from "@/lib/mock-data"
+import { planos } from "@/lib/services/mock-data.service"
 import { Plus, Edit, Trash2, Wifi, DollarSign, Gift, Package } from "lucide-react"
 import { StatCard } from "@/components/ui/stat-card"
 import type { Plano } from "@/types"

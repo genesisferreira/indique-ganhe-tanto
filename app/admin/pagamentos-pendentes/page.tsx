@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
-import { pagamentos } from "@/lib/mock-data"
+import { pagamentos } from "@/lib/services/mock-data.service"
 import type { Pagamento } from "@/types"
 import { Search, CheckCircle, XCircle, Clock, DollarSign, AlertTriangle, Upload } from "lucide-react"
 import { StatCard } from "@/components/ui/stat-card"
@@ -51,12 +51,7 @@ export default function AdminPagamentosPendentesPage() {
   const columns = [
     {
       key: "select",
-      header: () => (
-        <Checkbox
-          checked={selectedIds.length === filteredPagamentos.length && filteredPagamentos.length > 0}
-          onCheckedChange={toggleSelectAll}
-        />
-      ),
+      header: "Selecionar",
       cell: (pagamento: Pagamento) => (
         <Checkbox
           checked={selectedIds.includes(pagamento.id)}
