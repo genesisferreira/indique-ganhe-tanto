@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { PageHeader } from "@/components/ui/page-header"
@@ -17,7 +18,10 @@ import {
   leads,
   currentComercial,
 } from "@/lib/services/mock-data.service"
-import { loadComercialLeadsFromSupabase } from "@/lib/services/supabase-data.service"
+import {
+  claimComercialLead,
+  loadComercialLeadsFromSupabase,
+} from "@/lib/services/supabase-data.service"
 import type { Lead } from "@/types/lead"
 import { Search, Filter, Eye, Phone, Clock } from "lucide-react"
 
@@ -34,6 +38,7 @@ const statusOptions = [
 export default function LeadsPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
+  const [claimingLeadId, setClaimingLeadId] = useState<string | null>(null)
 
   const mockLeads = useMemo(
     () => leads.filter((l) => l.comercialId === currentComercial.id),
@@ -48,6 +53,30 @@ export default function LeadsPage() {
       if (remote !== null) setListaLeads(remote)
     })()
   }, [])
+
+  const reloadLeadsFromSupabase = async () => {
+    const remote = await loadComercialLeadsFromSupabase()
+    if (remote !== null) {
+      setListaLeads(remote)
+    }
+  }
+
+  const handleClaimLead = async (lead: Lead) => {
+    if (claimingLeadId) return
+
+    setClaimingLeadId(lead.id)
+    const result = await claimComercialLead(lead.id)
+
+    if (result.ok) {
+      toast.success("Lead assumido com sucesso!")
+      await reloadLeadsFromSupabase()
+      setClaimingLeadId(null)
+      return
+    }
+
+    toast.error(result.message)
+    setClaimingLeadId(null)
+  }
 
   const filteredLeads = listaLeads.filter((lead) => {
     if (!lead.indicacao) return false
@@ -172,6 +201,20 @@ export default function LeadsPage() {
                   <p className="text-xs text-muted-foreground flex-1">
                     Indicado por: {indicacao.indicador?.nome || "—"}
                   </p>
+                  {!lead.comercialId && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        void handleClaimLead(lead)
+                      }}
+                      disabled={claimingLeadId === lead.id}
+                    >
+                      {claimingLeadId === lead.id
+                        ? "Assumindo..."
+                        : "Assumir Lead"}
+                    </Button>
+                  )}
                   <Button variant="ghost" size="sm" asChild>
                     <Link href={`/comercial/leads/${lead.id}`}>
                       <Eye className="w-4 h-4 mr-1" />

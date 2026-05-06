@@ -1133,3 +1133,123 @@ export async function loadComercialLeadsFromSupabase(): Promise<Lead[] | null> {
     return null
   }
 }
+
+// --- Ação Comercial: Assumir lead -------------------------------------------------
+
+type ClaimLeadResult = { ok: true } | { ok: false; message: string }
+
+export async function claimComercialLead(
+  referralId: string
+): Promise<ClaimLeadResult> {
+  try {
+    devLogComercialLeads("claim: início", { referralId })
+
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+
+    devLogComercialLeads("claim: auth.getUser", {
+      hasUser: Boolean(user && !userError),
+      userId: user?.id ?? null,
+      authError: userError?.message ?? null,
+    })
+
+    if (userError || !user) {
+      if (isDev()) {
+        console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: sessão inválida", {
+          message: userError?.message ?? "usuário ausente",
+        })
+      }
+      return {
+        ok: false,
+        message: "Sessão não encontrada. Faça login novamente.",
+      }
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    devLogComercialLeads("claim: profile", {
+      hasProfile: Boolean(profile && !profileError),
+      role,
+      error: profileError?.message ?? null,
+      code: profileError?.code ?? null,
+    })
+
+    if (profileError || !profile) {
+      if (isDev()) {
+        console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: profile inválido", {
+          message: profileError?.message ?? "perfil ausente",
+          code: profileError?.code ?? null,
+        })
+      }
+      return {
+        ok: false,
+        message: "Não foi possível validar seu perfil.",
+      }
+    }
+
+    if (role !== "comercial") {
+      if (isDev()) {
+        console.warn(
+          COMERCIAL_LEADS_LOG_PREFIX,
+          `claim: role inválida "${role}" (esperado "comercial")`
+        )
+      }
+      return {
+        ok: false,
+        message: "Apenas usuários com perfil comercial podem assumir leads.",
+      }
+    }
+
+    const { error: updateError } = await db
+      .from("referrals")
+      .update({
+        commercial_profile_id: user.id,
+        status: "em_atendimento",
+      })
+      .eq("id", referralId)
+      .is("commercial_profile_id", null)
+
+    devLogComercialLeads("claim: update referrals", {
+      error: updateError?.message ?? null,
+      code: updateError?.code ?? null,
+    })
+
+    if (updateError) {
+      if (isDev()) {
+        console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: falha no update", {
+          message: updateError.message,
+          code: updateError.code ?? null,
+          details: (updateError as { details?: string }).details ?? null,
+          hint: (updateError as { hint?: string }).hint ?? null,
+        })
+      }
+      return {
+        ok: false,
+        message: "Não foi possível assumir este lead.",
+      }
+    }
+
+    return { ok: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (isDev()) {
+      console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: exceção", { message: msg })
+    }
+    return {
+      ok: false,
+      message: "Erro inesperado ao assumir lead.",
+    }
+  }
+}
