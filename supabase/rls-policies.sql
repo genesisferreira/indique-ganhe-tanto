@@ -130,6 +130,18 @@ to authenticated
 using (
   id = auth.uid()
   or public.is_admin_read_any()
+  or (
+    public.is_comercial()
+    and exists (
+      select 1
+      from public.referrals r
+      where r.indicator_profile_id = profiles.id
+        and (
+          r.commercial_profile_id = auth.uid()
+          or r.commercial_profile_id is null
+        )
+    )
+  )
 );
 
 drop policy if exists profiles_update_policy on public.profiles;
@@ -244,7 +256,11 @@ for select
 to authenticated
 using (
   indicator_profile_id = auth.uid() -- indicador vê suas indicações
-  or commercial_profile_id = auth.uid() -- comercial vê apenas as atribuídas a ele
+  or commercial_profile_id = auth.uid() -- comercial vê as atribuídas a ele
+  or (
+    public.is_comercial()
+    and commercial_profile_id is null
+  ) -- pool até distribuição automática
   or public.is_admin_read_any() -- admins leitura global
 );
 

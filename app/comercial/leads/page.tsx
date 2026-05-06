@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -13,7 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { leads, currentComercial } from "@/lib/services/mock-data.service"
+import {
+  leads,
+  currentComercial,
+} from "@/lib/services/mock-data.service"
+import { loadComercialLeadsFromSupabase } from "@/lib/services/supabase-data.service"
+import type { Lead } from "@/types/lead"
 import { Search, Filter, Eye, Phone, Clock } from "lucide-react"
 
 const statusOptions = [
@@ -30,9 +35,21 @@ export default function LeadsPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
 
-  const meusLeads = leads.filter((l) => l.comercialId === currentComercial.id)
+  const mockLeads = useMemo(
+    () => leads.filter((l) => l.comercialId === currentComercial.id),
+    []
+  )
 
-  const filteredLeads = meusLeads.filter((lead) => {
+  const [listaLeads, setListaLeads] = useState<Lead[]>(() => mockLeads)
+
+  useEffect(() => {
+    void (async () => {
+      const remote = await loadComercialLeadsFromSupabase()
+      if (remote !== null) setListaLeads(remote)
+    })()
+  }, [])
+
+  const filteredLeads = listaLeads.filter((lead) => {
     if (!lead.indicacao) return false
     const matchesSearch = lead.indicacao.nomeIndicado
       .toLowerCase()
@@ -87,7 +104,7 @@ export default function LeadsPage() {
           filteredLeads.map((lead) => {
             const indicacao = lead.indicacao
             if (!indicacao) return null
-            
+
             return (
               <div
                 key={lead.id}
@@ -117,6 +134,25 @@ export default function LeadsPage() {
                       {indicacao.telefoneIndicado}
                     </span>
                   </div>
+                  <div className="flex items-center justify-between text-sm gap-2">
+                    <span className="text-muted-foreground shrink-0">
+                      Recompensa
+                    </span>
+                    <span className="font-medium text-foreground text-right">
+                      R${" "}
+                      {indicacao.valorRecompensa.toLocaleString("pt-BR", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Cadastro:{" "}
+                    {lead.createdAt.toLocaleDateString("pt-BR", {
+                      day: "2-digit",
+                      month: "short",
+                      year: "numeric",
+                    })}
+                  </p>
                   {lead.retornoAgendado && (
                     <div className="flex items-center gap-2 text-sm">
                       <Clock className="w-4 h-4 text-warning" />
@@ -134,7 +170,7 @@ export default function LeadsPage() {
 
                 <div className="flex items-center gap-2 pt-4 border-t border-border">
                   <p className="text-xs text-muted-foreground flex-1">
-                    Indicado por: {indicacao.indicador?.nome || "Desconhecido"}
+                    Indicado por: {indicacao.indicador?.nome || "—"}
                   </p>
                   <Button variant="ghost" size="sm" asChild>
                     <Link href={`/comercial/leads/${lead.id}`}>

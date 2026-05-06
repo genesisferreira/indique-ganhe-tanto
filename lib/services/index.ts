@@ -11,6 +11,7 @@ export {
   fetchActivePlansForIndicador,
   getCurrentUserProfile,
   insertIndicadorReferral,
+  loadComercialLeadsFromSupabase,
   loadIndicadorHomeFromSupabase,
   loadIndicadorReferralDetailFromSupabase,
   loadIndicadorReferralsListFromSupabase,

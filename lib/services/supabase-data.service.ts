@@ -1,5 +1,6 @@
 import { getSupabaseClient } from "@/lib/supabase/client"
 import type { DashboardIndicador } from "@/types/dashboard"
+import type { Lead, LeadStatus } from "@/types/lead"
 import type { Indicador } from "@/types/profile"
 import type { Indicacao, IndicacaoStatus, RecompensaTipo } from "@/types/referral"
 import type { Plano } from "@/types/plan"
@@ -830,5 +831,305 @@ export async function loadIndicadorReferralDetailFromSupabase(
     const msg = e instanceof Error ? e.message : String(e)
     devWarnIndicacaoDetailMock(`exceção: ${msg}`)
     return { kind: "error" }
+  }
+}
+
+// --- Comercial /comercial/leads ---------------------------------------------------
+
+const COMERCIAL_LEADS_LOG_PREFIX = "[comercial-leads:supabase]"
+
+function devLogComercialLeads(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(COMERCIAL_LEADS_LOG_PREFIX, ...args)
+}
+
+function devWarnComercialLeadsMock(reason: string): void {
+  if (isDev()) {
+    console.warn(COMERCIAL_LEADS_LOG_PREFIX, "fallback mock →", reason)
+  }
+}
+
+function referralStatusToLeadStatus(status: string): LeadStatus {
+  switch (status) {
+    case "em_atendimento":
+      return "em_atendimento"
+    case "em_negociacao":
+      return "em_negociacao"
+    case "aprovada":
+    case "paga":
+      return "vendido"
+    case "recusada":
+      return "perdido"
+    case "em_andamento":
+      return "em_atendimento"
+    case "pendente":
+    default:
+      return "novo"
+  }
+}
+
+function stubIndicadorProfile(id: string, nome: string): Indicador {
+  return {
+    id,
+    nome,
+    email: "",
+    telefone: "",
+    role: "indicador",
+    ativo: true,
+    createdAt: new Date(0),
+    totalIndicacoes: 0,
+    indicacoesAprovadas: 0,
+    totalRecebido: 0,
+    saldoDisponivel: 0,
+    saldoDesconto: 0,
+  }
+}
+
+function buildLeadFromReferralRow(
+  row: ReferralRow,
+  planoById: Map<string, Plano>,
+  indicadorNomeById: Map<string, string>
+): Lead {
+  const indicacaoBase = referralRowToIndicacaoMerged(
+    row,
+    row.indicator_profile_id,
+    planoById
+  )
+  const nomeIndicador = indicadorNomeById.get(row.indicator_profile_id)
+  const indicacao: Indicacao = nomeIndicador
+    ? {
+        ...indicacaoBase,
+        indicador: stubIndicadorProfile(row.indicator_profile_id, nomeIndicador),
+      }
+    : indicacaoBase
+
+  return {
+    id: row.id,
+    indicacaoId: row.id,
+    indicacao,
+    comercialId: row.commercial_profile_id ?? "",
+    status: referralStatusToLeadStatus(row.status),
+    observacoes: row.notes ? [row.notes] : [],
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  }
+}
+
+const ADMIN_ROLES_FOR_DEV_LEADS = new Set([
+  "admin_master",
+  "admin_financeiro",
+  "admin_consulta",
+])
+
+/**
+ * Leads do comercial logado: referrals atribuídos ou pool (commercial_profile_id nulo).
+ * Em development: admin_* pode listar sem filtro (RLS); indicador pode usar OR próprio+pool
+ * se `supabase/rls-policies.dev-local.sql` estiver aplicado no projeto local.
+ * Retorna null se não for comercial (nem tester dev) ou em caso de erro (UI mantém mock).
+ */
+export async function loadComercialLeadsFromSupabase(): Promise<Lead[] | null> {
+  try {
+    devLogComercialLeads("início loadComercialLeadsFromSupabase")
+
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+
+    const sessaoEncontrada = Boolean(user && !userError)
+    devLogComercialLeads("sessão", {
+      encontrada: sessaoEncontrada,
+      userId: user?.id ?? null,
+      authError: userError?.message ?? null,
+    })
+
+    if (userError || !user) {
+      devWarnComercialLeadsMock(
+        userError
+          ? `sem sessão válida: ${userError.message}`
+          : "sem usuário (sessão ausente)"
+      )
+      return null
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const profileEncontrado = profile != null && !profileError
+    const role = (profile as { role?: string } | null)?.role ?? null
+
+    devLogComercialLeads("profile", {
+      encontrado: profileEncontrado,
+      erro: profileError?.message ?? null,
+      code: profileError?.code ?? null,
+      role,
+    })
+
+    if (profileError || !profile) {
+      devWarnComercialLeadsMock(
+        profileError
+          ? `query profiles falhou: ${profileError.message} (${profileError.code ?? "sem código"})`
+          : "perfil não encontrado para user.id"
+      )
+      return null
+    }
+
+    const roleStr = (profile as { role: string }).role
+    const isComercial = roleStr === "comercial"
+    const isDevAdminTester = isDev() && ADMIN_ROLES_FOR_DEV_LEADS.has(roleStr)
+    const isDevIndicadorPoolTester = isDev() && roleStr === "indicador"
+
+    if (!isComercial && !isDevAdminTester && !isDevIndicadorPoolTester) {
+      const msg =
+        `/comercial/leads: carregamento Supabase só roda com profile.role=comercial. ` +
+        `Role atual: "${roleStr}". ` +
+        `Em produção o mock é esperado para não-comercial. ` +
+        `Em development, use comercial, ou admin_* (lista sem filtro, RLS admin), ou indicador + pool (aplique supabase/rls-policies.dev-local.sql no banco local).`
+      devLogComercialLeads("bloqueio por role", { role: roleStr, NODE_ENV: process.env.NODE_ENV })
+      if (isDev()) {
+        console.info(COMERCIAL_LEADS_LOG_PREFIX, msg)
+      }
+      devWarnComercialLeadsMock(
+        `role não autorizada para loader: "${roleStr}" (esperado comercial)`
+      )
+      return null
+    }
+
+    if (isDevAdminTester) {
+      devLogComercialLeads(
+        "modo DEV: admin — query referrals sem filtro de comercial (visibilidade = RLS)"
+      )
+    }
+    if (isDevIndicadorPoolTester) {
+      devLogComercialLeads(
+        "modo DEV: indicador — OR indicator_profile_id + pool null (pool exige política dev-local no Supabase)"
+      )
+    }
+
+    const refSelect = `
+        id,
+        indicator_profile_id,
+        referred_name,
+        referred_phone,
+        referred_email,
+        referred_address,
+        plan_id,
+        reward_type,
+        reward_amount,
+        status,
+        commercial_profile_id,
+        notes,
+        first_invoice_paid,
+        approved_at,
+        rejected_at,
+        rejection_reason,
+        created_at,
+        updated_at
+      `
+
+    let refBuilder = db.from("referrals").select(refSelect)
+
+    if (isComercial) {
+      const orFilter = `commercial_profile_id.eq.${user.id},commercial_profile_id.is.null`
+      devLogComercialLeads("filtro referrals", { tipo: "comercial", orFilter })
+      refBuilder = refBuilder.or(orFilter)
+    } else if (isDevAdminTester) {
+      devLogComercialLeads("filtro referrals", { tipo: "admin_dev", filtro: "nenhum (só RLS)" })
+    } else if (isDevIndicadorPoolTester) {
+      const orDev = `indicator_profile_id.eq.${user.id},commercial_profile_id.is.null`
+      devLogComercialLeads("filtro referrals", { tipo: "indicador_dev", orFilter: orDev })
+      refBuilder = refBuilder.or(orDev)
+    }
+
+    const { data: refData, error: refError } = await refBuilder.order(
+      "created_at",
+      { ascending: false }
+    )
+
+    devLogComercialLeads("resultado query referrals", {
+      erro: refError?.message ?? null,
+      code: refError?.code ?? null,
+      details: (refError as { details?: string } | null)?.details ?? null,
+      hint: (refError as { hint?: string } | null)?.hint ?? null,
+      rowCount: refData?.length ?? 0,
+    })
+
+    if (refError) {
+      devWarnComercialLeadsMock(
+        `referrals falhou: ${refError.message} (${refError.code ?? "sem código"})`
+      )
+      return null
+    }
+
+    const referrals = (refData ?? []) as ReferralRow[]
+    const planIds = [...new Set(referrals.map((r) => r.plan_id))]
+
+    const planoById = new Map<string, Plano>()
+    if (planIds.length > 0) {
+      const { data: plansData, error: plansError } = await db
+        .from("plans")
+        .select(
+          "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+        )
+        .in("id", planIds)
+
+      devLogComercialLeads("resultado query plans", {
+        erro: plansError?.message ?? null,
+        code: plansError?.code ?? null,
+        rowCount: plansData?.length ?? 0,
+      })
+
+      if (plansError) {
+        devWarnComercialLeadsMock(
+          `plans falhou: ${plansError.message} (${plansError.code ?? "sem código"})`
+        )
+        return null
+      }
+
+      for (const pr of plansData ?? []) {
+        const p = mapPlanRowToPlano(pr as PlanCatalogRow)
+        planoById.set(p.id, p)
+      }
+    }
+
+    const indicatorIds = [...new Set(referrals.map((r) => r.indicator_profile_id))]
+    const indicadorNomeById = new Map<string, string>()
+    if (indicatorIds.length > 0) {
+      const { data: indProfiles, error: indErr } = await db
+        .from("profiles")
+        .select("id, full_name")
+        .in("id", indicatorIds)
+
+      devLogComercialLeads("query profiles indicadores", {
+        error: indErr?.message ?? null,
+        rowCount: indProfiles?.length ?? 0,
+      })
+
+      if (!indErr) {
+        for (const p of indProfiles ?? []) {
+          const row = p as { id: string; full_name: string }
+          indicadorNomeById.set(row.id, row.full_name)
+        }
+      }
+    }
+
+    const result = referrals.map((r) =>
+      buildLeadFromReferralRow(r, planoById, indicadorNomeById)
+    )
+
+    devLogComercialLeads("sucesso", { total: result.length, roleUsada: roleStr })
+    return result
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    devWarnComercialLeadsMock(`exceção: ${msg}`)
+    return null
   }
 }
