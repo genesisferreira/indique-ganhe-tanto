@@ -1,6 +1,6 @@
 "use client"
 
-import { use, useState } from "react"
+import { use, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,6 +16,7 @@ import {
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { leads, historicos } from "@/lib/services/mock-data.service"
+import { loadComercialLeadDetailsFromSupabase } from "@/lib/services/supabase-data.service"
 import {
   ArrowLeft,
   User,
@@ -43,9 +44,30 @@ export default function DetalheLeadPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = use(params)
-  const lead = leads.find((l) => l.id === id)
+  const mockLead = useMemo(() => leads.find((l) => l.id === id), [id])
+  const [lead, setLead] = useState(mockLead)
   const [novaObservacao, setNovaObservacao] = useState("")
-  const [status, setStatus] = useState<LeadStatus>(lead?.status || "novo")
+  const [status, setStatus] = useState<LeadStatus>(mockLead?.status || "novo")
+  const [leadHistorico, setLeadHistorico] = useState(() =>
+    historicos.filter((h) => h.leadId === id)
+  )
+
+  useEffect(() => {
+    setLead(mockLead)
+    setStatus(mockLead?.status || "novo")
+    setLeadHistorico(historicos.filter((h) => h.leadId === id))
+  }, [id, mockLead])
+
+  useEffect(() => {
+    void (async () => {
+      const remote = await loadComercialLeadDetailsFromSupabase(id)
+      if (remote.kind !== "ok") return
+
+      setLead(remote.lead)
+      setStatus(remote.lead.status)
+      setLeadHistorico(remote.historico)
+    })()
+  }, [id])
 
   if (!lead || !lead.indicacao) {
     return (
@@ -58,7 +80,6 @@ export default function DetalheLeadPage({
     )
   }
 
-  const leadHistorico = historicos.filter((h) => h.leadId === lead.id)
   const indicacao = lead.indicacao
   const plano = indicacao.plano
   const indicador = indicacao.indicador

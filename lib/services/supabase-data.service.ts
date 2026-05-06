@@ -1,6 +1,6 @@
 import { getSupabaseClient } from "@/lib/supabase/client"
 import type { DashboardIndicador } from "@/types/dashboard"
-import type { Lead, LeadStatus } from "@/types/lead"
+import type { Historico, Lead, LeadStatus } from "@/types/lead"
 import type { Indicador } from "@/types/profile"
 import type { Indicacao, IndicacaoStatus, RecompensaTipo } from "@/types/referral"
 import type { Plano } from "@/types/plan"
@@ -915,6 +915,23 @@ function buildLeadFromReferralRow(
   }
 }
 
+function stubComercialProfile(id: string, nome: string, telefone = "") {
+  return {
+    id,
+    nome,
+    email: "",
+    telefone,
+    role: "comercial" as const,
+    disponibilidade: "disponivel" as const,
+    leadsAtivos: 0,
+    vendasRealizadas: 0,
+    tempoMedioPrimeiroContato: 0,
+    ativo: true,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  }
+}
+
 const ADMIN_ROLES_FOR_DEV_LEADS = new Set([
   "admin_master",
   "admin_financeiro",
@@ -1134,6 +1151,325 @@ export async function loadComercialLeadsFromSupabase(): Promise<Lead[] | null> {
   }
 }
 
+// --- Comercial /comercial/leads/[id] ---------------------------------------------
+
+const COMERCIAL_LEAD_DETAIL_LOG_PREFIX = "[comercial-lead-detail:supabase]"
+
+function devLogComercialLeadDetail(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(COMERCIAL_LEAD_DETAIL_LOG_PREFIX, ...args)
+}
+
+function devWarnComercialLeadDetailMock(reason: string): void {
+  if (isDev()) {
+    console.warn(COMERCIAL_LEAD_DETAIL_LOG_PREFIX, "fallback mock →", reason)
+  }
+}
+
+type ReferralHistoryRow = {
+  id: string
+  referral_id: string
+  actor_profile_id: string | null
+  old_status: string | null
+  new_status: string
+  action_note: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
+export type ComercialLeadDetailsResult =
+  | { kind: "ok"; lead: Lead; historico: Historico[] }
+  | { kind: "not-found" }
+  | { kind: "error" }
+
+export async function loadComercialLeadDetailsFromSupabase(
+  referralId: string
+): Promise<ComercialLeadDetailsResult> {
+  try {
+    devLogComercialLeadDetail("início", { referralId })
+
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    devLogComercialLeadDetail("auth.getUser", {
+      hasUser: Boolean(user && !authError),
+      userId: user?.id ?? null,
+      authError: authError?.message ?? null,
+    })
+
+    if (authError || !user) {
+      devWarnComercialLeadDetailMock(
+        authError
+          ? `sem sessão válida: ${authError.message}`
+          : "sem usuário autenticado"
+      )
+      return { kind: "error" }
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    devLogComercialLeadDetail("profile do auth user", {
+      hasProfile: Boolean(profile && !profileError),
+      role,
+      error: profileError?.message ?? null,
+      code: profileError?.code ?? null,
+    })
+
+    if (profileError || !profile || role !== "comercial") {
+      devWarnComercialLeadDetailMock(
+        profileError
+          ? `profiles falhou: ${profileError.message} (${profileError.code ?? "sem código"})`
+          : `role não autorizada: "${role}"`
+      )
+      return { kind: "error" }
+    }
+
+    const { data: refRow, error: refError } = await db
+      .from("referrals")
+      .select(
+        `
+        id,
+        indicator_profile_id,
+        referred_name,
+        referred_phone,
+        referred_email,
+        referred_address,
+        plan_id,
+        reward_type,
+        reward_amount,
+        status,
+        commercial_profile_id,
+        notes,
+        first_invoice_paid,
+        approved_at,
+        rejected_at,
+        rejection_reason,
+        created_at,
+        updated_at
+      `
+      )
+      .eq("id", referralId)
+      .maybeSingle()
+
+    devLogComercialLeadDetail("query referral", {
+      hasRow: Boolean(refRow),
+      error: refError?.message ?? null,
+      code: refError?.code ?? null,
+      details: (refError as { details?: string } | null)?.details ?? null,
+      hint: (refError as { hint?: string } | null)?.hint ?? null,
+    })
+
+    if (refError) {
+      devWarnComercialLeadDetailMock(
+        `referrals falhou: ${refError.message} (${refError.code ?? "sem código"})`
+      )
+      return { kind: "error" }
+    }
+
+    if (!refRow) {
+      devLogComercialLeadDetail("referral não encontrado (id inexistente ou RLS)")
+      return { kind: "not-found" }
+    }
+
+    const referral = refRow as ReferralRow
+
+    const { data: planRow, error: planError } = await db
+      .from("plans")
+      .select(
+        "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+      )
+      .eq("id", referral.plan_id)
+      .maybeSingle()
+
+    devLogComercialLeadDetail("query plan", {
+      hasRow: Boolean(planRow),
+      error: planError?.message ?? null,
+      code: planError?.code ?? null,
+    })
+
+    if (planError) {
+      devWarnComercialLeadDetailMock(
+        `plans falhou: ${planError.message} (${planError.code ?? "sem código"})`
+      )
+      return { kind: "error" }
+    }
+
+    const planoById = new Map<string, Plano>()
+    if (planRow) {
+      const plano = mapPlanRowToPlano(planRow as PlanCatalogRow)
+      planoById.set(plano.id, plano)
+    }
+
+    const profileIds = [
+      ...new Set(
+        [referral.indicator_profile_id, referral.commercial_profile_id].filter(
+          (id): id is string => Boolean(id)
+        )
+      ),
+    ]
+    let profilesById = new Map<
+      string,
+      { id: string; full_name: string; phone: string | null }
+    >()
+
+    if (profileIds.length > 0) {
+      const { data: profRows, error: profError } = await db
+        .from("profiles")
+        .select("id, full_name, phone")
+        .in("id", profileIds)
+
+      devLogComercialLeadDetail("query profiles relacionados", {
+        error: profError?.message ?? null,
+        code: profError?.code ?? null,
+        rowCount: profRows?.length ?? 0,
+      })
+
+      if (profError) {
+        devWarnComercialLeadDetailMock(
+          `profiles relacionados falhou: ${profError.message} (${profError.code ?? "sem código"})`
+        )
+        return { kind: "error" }
+      }
+
+      profilesById = new Map(
+        (profRows ?? []).map((row: unknown) => {
+          const p = row as { id: string; full_name: string; phone: string | null }
+          return [p.id, p]
+        })
+      )
+    }
+
+    const indicatorName =
+      profilesById.get(referral.indicator_profile_id)?.full_name ?? "Indicador"
+    const lead = buildLeadFromReferralRow(
+      referral,
+      planoById,
+      new Map([[referral.indicator_profile_id, indicatorName]])
+    )
+
+    const indicatorProfile = profilesById.get(referral.indicator_profile_id)
+    if (lead.indicacao) {
+      lead.indicacao.indicador = stubIndicadorProfile(
+        referral.indicator_profile_id,
+        indicatorProfile?.full_name ?? "Indicador"
+      )
+      if (indicatorProfile?.phone) {
+        lead.indicacao.indicador.telefone = indicatorProfile.phone
+      }
+    }
+
+    const { data: historyRows, error: historyError } = await db
+      .from("referral_history")
+      .select(
+        "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
+      )
+      .eq("referral_id", referralId)
+      .order("created_at", { ascending: false })
+
+    devLogComercialLeadDetail("query referral_history", {
+      error: historyError?.message ?? null,
+      code: historyError?.code ?? null,
+      rowCount: historyRows?.length ?? 0,
+    })
+
+    if (historyError) {
+      devWarnComercialLeadDetailMock(
+        `referral_history falhou: ${historyError.message} (${historyError.code ?? "sem código"})`
+      )
+      return { kind: "error" }
+    }
+
+    const actorIds = [
+      ...new Set(
+        (historyRows ?? [])
+          .map((h: unknown) => (h as ReferralHistoryRow).actor_profile_id)
+          .filter((id: string | null): id is string => Boolean(id))
+      ),
+    ]
+
+    const actorById = new Map<string, { full_name: string; phone: string | null }>()
+    if (actorIds.length > 0) {
+      const { data: actorRows, error: actorError } = await db
+        .from("profiles")
+        .select("id, full_name, phone")
+        .in("id", actorIds)
+
+      devLogComercialLeadDetail("query actors history", {
+        error: actorError?.message ?? null,
+        code: actorError?.code ?? null,
+        rowCount: actorRows?.length ?? 0,
+      })
+
+      if (actorError) {
+        devWarnComercialLeadDetailMock(
+          `profiles actors falhou: ${actorError.message} (${actorError.code ?? "sem código"})`
+        )
+        return { kind: "error" }
+      }
+
+      for (const row of actorRows ?? []) {
+        const actor = row as { id: string; full_name: string; phone: string | null }
+        actorById.set(actor.id, {
+          full_name: actor.full_name,
+          phone: actor.phone,
+        })
+      }
+    }
+
+    const historico: Historico[] = (historyRows ?? []).map((raw: unknown) => {
+      const h = raw as ReferralHistoryRow
+      const actor = h.actor_profile_id ? actorById.get(h.actor_profile_id) : null
+      const acaoBase = h.action_note?.trim() || "Atualização de lead"
+      const descricaoStatus =
+        h.old_status && h.old_status !== h.new_status
+          ? `Status: ${h.old_status} -> ${h.new_status}`
+          : `Status: ${h.new_status}`
+      const metadataAction =
+        h.metadata && typeof h.metadata.action === "string"
+          ? `Ação: ${h.metadata.action}`
+          : null
+
+      return {
+        id: h.id,
+        leadId: referralId,
+        comercialId: h.actor_profile_id ?? "",
+        comercial: h.actor_profile_id
+          ? stubComercialProfile(
+              h.actor_profile_id,
+              actor?.full_name ?? "Comercial",
+              actor?.phone ?? ""
+            )
+          : undefined,
+        acao: acaoBase,
+        descricao: [descricaoStatus, metadataAction].filter(Boolean).join(" • "),
+        createdAt: new Date(h.created_at),
+      }
+    })
+
+    devLogComercialLeadDetail("sucesso", {
+      leadId: lead.id,
+      historyCount: historico.length,
+    })
+    return { kind: "ok", lead, historico }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    devWarnComercialLeadDetailMock(`exceção: ${msg}`)
+    return { kind: "error" }
+  }
+}
+
 // --- Ação Comercial: Assumir lead -------------------------------------------------
 
 type ClaimLeadResult = { ok: true } | { ok: false; message: string }
@@ -1212,18 +1548,70 @@ export async function claimComercialLead(
       }
     }
 
-    const { error: updateError } = await db
+    const { data: referralBefore, error: beforeError } = await db
+      .from("referrals")
+      .select("id, commercial_profile_id, status, updated_at")
+      .eq("id", referralId)
+      .maybeSingle()
+
+    devLogComercialLeads("claim: row antes do update", {
+      error: beforeError?.message ?? null,
+      code: beforeError?.code ?? null,
+      row: referralBefore ?? null,
+    })
+
+    if (beforeError || !referralBefore) {
+      if (isDev()) {
+        console.warn(
+          COMERCIAL_LEADS_LOG_PREFIX,
+          "claim: não encontrou referral antes do update",
+          {
+            message: beforeError?.message ?? "referral ausente",
+            code: beforeError?.code ?? null,
+          }
+        )
+      }
+      return {
+        ok: false,
+        message: "Lead não encontrado para assumir.",
+      }
+    }
+
+    const beforeCommercialId = (
+      referralBefore as { commercial_profile_id: string | null }
+    ).commercial_profile_id
+    const oldStatus = (referralBefore as { status: string }).status
+    if (beforeCommercialId !== null) {
+      if (isDev()) {
+        console.warn(
+          COMERCIAL_LEADS_LOG_PREFIX,
+          "claim: lead já possui comercial atribuído",
+          {
+            referralId,
+            commercial_profile_id: beforeCommercialId,
+          }
+        )
+      }
+      return {
+        ok: false,
+        message: "Este lead já foi assumido por outro comercial.",
+      }
+    }
+
+    const { data: updateRows, error: updateError } = await db
       .from("referrals")
       .update({
         commercial_profile_id: user.id,
         status: "em_atendimento",
       })
       .eq("id", referralId)
-      .is("commercial_profile_id", null)
+      .select("id, commercial_profile_id, status, updated_at")
 
-    devLogComercialLeads("claim: update referrals", {
+    devLogComercialLeads("claim: resultado do update", {
       error: updateError?.message ?? null,
       code: updateError?.code ?? null,
+      rowCount: updateRows?.length ?? 0,
+      rows: updateRows ?? [],
     })
 
     if (updateError) {
@@ -1238,6 +1626,103 @@ export async function claimComercialLead(
       return {
         ok: false,
         message: "Não foi possível assumir este lead.",
+      }
+    }
+
+    const { data: historyRows, error: historyError } = await db
+      .from("referral_history")
+      .insert({
+        referral_id: referralId,
+        actor_profile_id: user.id,
+        old_status: oldStatus,
+        new_status: "em_atendimento",
+        action_note: "Lead assumido pelo comercial",
+        metadata: { action: "claim_lead" },
+      })
+      .select(
+        "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
+      )
+
+    devLogComercialLeads("claim: insert referral_history", {
+      error: historyError?.message ?? null,
+      code: historyError?.code ?? null,
+      rowCount: historyRows?.length ?? 0,
+      rows: historyRows ?? [],
+    })
+
+    if (historyError) {
+      if (isDev()) {
+        console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: falha ao inserir histórico", {
+          message: historyError.message,
+          code: historyError.code ?? null,
+          details: (historyError as { details?: string }).details ?? null,
+          hint: (historyError as { hint?: string }).hint ?? null,
+          payload: {
+            referral_id: referralId,
+            actor_profile_id: user.id,
+            old_status: oldStatus,
+            new_status: "em_atendimento",
+            action_note: "Lead assumido pelo comercial",
+            metadata: { action: "claim_lead" },
+          },
+        })
+      }
+      return {
+        ok: false,
+        message: "Lead atualizado, mas não foi possível registrar o histórico.",
+      }
+    }
+
+    const { data: referralAfter, error: afterError } = await db
+      .from("referrals")
+      .select("id, commercial_profile_id, status, updated_at")
+      .eq("id", referralId)
+      .maybeSingle()
+
+    devLogComercialLeads("claim: row depois do update", {
+      error: afterError?.message ?? null,
+      code: afterError?.code ?? null,
+      row: referralAfter ?? null,
+    })
+
+    if (afterError || !referralAfter) {
+      if (isDev()) {
+        console.warn(
+          COMERCIAL_LEADS_LOG_PREFIX,
+          "claim: falha ao confirmar persistência após update",
+          {
+            message: afterError?.message ?? "row não retornada no pós-update",
+            code: afterError?.code ?? null,
+          }
+        )
+      }
+      return {
+        ok: false,
+        message: "Não foi possível confirmar a atualização do lead.",
+      }
+    }
+
+    const after = referralAfter as {
+      commercial_profile_id: string | null
+      status: string
+    }
+    if (after.commercial_profile_id !== user.id || after.status !== "em_atendimento") {
+      if (isDev()) {
+        console.warn(
+          COMERCIAL_LEADS_LOG_PREFIX,
+          "claim: persistência divergente após update",
+          {
+            esperado: { commercial_profile_id: user.id, status: "em_atendimento" },
+            atual: {
+              commercial_profile_id: after.commercial_profile_id,
+              status: after.status,
+            },
+          }
+        )
+      }
+      return {
+        ok: false,
+        message: "Lead não foi atualizado como esperado.",
       }
     }
 
