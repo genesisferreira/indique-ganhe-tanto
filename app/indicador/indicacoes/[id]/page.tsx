@@ -1,11 +1,13 @@
 "use client"
 
-import { use } from "react"
+import { use, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { indicacoes } from "@/lib/services/mock-data.service"
+import { loadIndicadorReferralDetailFromSupabase } from "@/lib/services/supabase-data.service"
+import type { Indicacao } from "@/types/referral"
 import {
   ArrowLeft,
   User,
@@ -19,13 +21,58 @@ import {
   Clock,
 } from "lucide-react"
 
+function statusEmFluxo(s: Indicacao["status"]) {
+  return (
+    s === "em_andamento" ||
+    s === "em_atendimento" ||
+    s === "em_negociacao"
+  )
+}
+
 export default function DetalheIndicacaoPage({
   params,
 }: {
   params: Promise<{ id: string }>
 }) {
   const { id } = use(params)
-  const indicacao = indicacoes.find((i) => i.id === id)
+
+  const mockIndicacao = useMemo(
+    () => indicacoes.find((i) => i.id === id),
+    [id]
+  )
+
+  const [indicacao, setIndicacao] = useState<Indicacao | undefined>(
+    () => mockIndicacao
+  )
+  const [ready, setReady] = useState(() => Boolean(mockIndicacao))
+
+  useEffect(() => {
+    setIndicacao(mockIndicacao)
+    setReady(Boolean(mockIndicacao))
+  }, [id, mockIndicacao])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const r = await loadIndicadorReferralDetailFromSupabase(id)
+      if (cancelled) return
+      if (r.kind === "ok") setIndicacao(r.indicacao)
+      else if (r.kind === "not-found") setIndicacao(undefined)
+      else setIndicacao(mockIndicacao)
+      setReady(true)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [id, mockIndicacao])
+
+  if (!ready && !indicacao) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <p className="text-muted-foreground">Carregando...</p>
+      </div>
+    )
+  }
 
   if (!indicacao) {
     return (
@@ -53,9 +100,9 @@ export default function DetalheIndicacaoPage({
     },
     {
       title: "Em Negociação",
-      date: indicacao.status === "em_andamento" ? indicacao.updatedAt : null,
+      date: statusEmFluxo(indicacao.status) ? indicacao.updatedAt : null,
       completed:
-        indicacao.status === "em_andamento" ||
+        statusEmFluxo(indicacao.status) ||
         indicacao.status === "aprovada" ||
         indicacao.status === "paga",
       icon: Clock,
@@ -154,6 +201,17 @@ export default function DetalheIndicacaoPage({
             </div>
           </div>
 
+          {indicacao.observacoes ? (
+            <div className="rounded-xl border bg-card p-6">
+              <h2 className="text-lg font-semibold text-foreground mb-2">
+                Observações
+              </h2>
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                {indicacao.observacoes}
+              </p>
+            </div>
+          ) : null}
+
           {/* Plano */}
           <div className="rounded-xl border bg-card p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">
@@ -168,7 +226,8 @@ export default function DetalheIndicacaoPage({
                   {indicacao.plano?.nome || "Plano"}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {indicacao.plano?.velocidade || "-"} - {indicacao.plano?.descricao || "-"}
+                  {indicacao.plano?.velocidade || "-"} -{" "}
+                  {indicacao.plano?.descricao || "-"}
                 </p>
               </div>
               <div className="text-right">
@@ -280,7 +339,7 @@ export default function DetalheIndicacaoPage({
                 Aguardando atribuição a um vendedor.
               </p>
             )}
-            {indicacao.status === "em_andamento" && (
+            {statusEmFluxo(indicacao.status) && (
               <p className="mt-4 p-3 rounded-lg bg-info/10 text-info text-sm">
                 Vendedor em contato com o indicado.
               </p>
@@ -306,9 +365,7 @@ export default function DetalheIndicacaoPage({
                   <p className="font-medium text-foreground">
                     {indicacao.comercial.nome}
                   </p>
-                  <p className="text-sm text-muted-foreground">
-                    Comercial
-                  </p>
+                  <p className="text-sm text-muted-foreground">Comercial</p>
                 </div>
               </div>
             </div>

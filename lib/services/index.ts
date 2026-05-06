@@ -12,9 +12,11 @@ export {
   getCurrentUserProfile,
   insertIndicadorReferral,
   loadIndicadorHomeFromSupabase,
+  loadIndicadorReferralDetailFromSupabase,
   loadIndicadorReferralsListFromSupabase,
 } from './supabase-data.service'
 export type {
   IndicadorHomeFromSupabase,
+  IndicadorReferralDetailResult,
   InsertIndicadorReferralInput,
 } from './supabase-data.service'

@@ -688,3 +688,147 @@ export async function loadIndicadorReferralsListFromSupabase(): Promise<
     return null
   }
 }
+
+// --- Detalhe /indicador/indicacoes/[id] -------------------------------------------
+
+const INDICACAO_DETAIL_LOG_PREFIX = "[indicador-indicacao-detail:supabase]"
+
+function devLogIndicacaoDetail(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(INDICACAO_DETAIL_LOG_PREFIX, ...args)
+}
+
+function devWarnIndicacaoDetailMock(reason: string): void {
+  if (isDev()) {
+    console.warn(INDICACAO_DETAIL_LOG_PREFIX, "fallback mock →", reason)
+  }
+}
+
+export type IndicadorReferralDetailResult =
+  | { kind: "ok"; indicacao: Indicacao }
+  | { kind: "not-found" }
+  | { kind: "error" }
+
+/**
+ * Uma indicação por id, somente se pertencer ao usuário logado (referral + plan merge).
+ */
+export async function loadIndicadorReferralDetailFromSupabase(
+  referralId: string
+): Promise<IndicadorReferralDetailResult> {
+  try {
+    devLogIndicacaoDetail("início", { referralId })
+
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+
+    devLogIndicacaoDetail("auth.getUser", {
+      hasUser: Boolean(user && !userError),
+      userError: userError?.message ?? null,
+      userId: user?.id ?? null,
+    })
+
+    if (userError || !user) {
+      devWarnIndicacaoDetailMock(
+        userError
+          ? `sem usuário: ${userError.message}`
+          : "user ausente"
+      )
+      return { kind: "error" }
+    }
+
+    const { data: row, error: refError } = await db
+      .from("referrals")
+      .select(
+        `
+        id,
+        indicator_profile_id,
+        referred_name,
+        referred_phone,
+        referred_email,
+        referred_address,
+        plan_id,
+        reward_type,
+        reward_amount,
+        status,
+        commercial_profile_id,
+        notes,
+        first_invoice_paid,
+        approved_at,
+        rejected_at,
+        rejection_reason,
+        created_at,
+        updated_at
+      `
+      )
+      .eq("id", referralId)
+      .maybeSingle()
+
+    devLogIndicacaoDetail("query referral por id", {
+      error: refError?.message ?? null,
+      code: refError?.code ?? null,
+      hasRow: row != null,
+    })
+
+    if (refError) {
+      devWarnIndicacaoDetailMock(
+        `referrals: ${refError.message} (${refError.code ?? "sem código"})`
+      )
+      return { kind: "error" }
+    }
+
+    if (!row) {
+      devLogIndicacaoDetail("sem linha (RLS ou id inexistente)")
+      return { kind: "not-found" }
+    }
+
+    const refRow = row as ReferralRow
+    if (refRow.indicator_profile_id !== user.id) {
+      devLogIndicacaoDetail("indicator_profile_id diferente do usuário")
+      return { kind: "not-found" }
+    }
+
+    const { data: planRow, error: planError } = await db
+      .from("plans")
+      .select(
+        "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+      )
+      .eq("id", refRow.plan_id)
+      .maybeSingle()
+
+    devLogIndicacaoDetail("query plan", {
+      error: planError?.message ?? null,
+      code: planError?.code ?? null,
+      hasRow: planRow != null,
+    })
+
+    if (planError) {
+      devWarnIndicacaoDetailMock(
+        `plans: ${planError.message} (${planError.code ?? "sem código"})`
+      )
+      return { kind: "error" }
+    }
+
+    const planoById = new Map<string, Plano>()
+    if (planRow) {
+      planoById.set(
+        refRow.plan_id,
+        mapPlanRowToPlano(planRow as PlanCatalogRow)
+      )
+    }
+
+    const indicacao = referralRowToIndicacaoMerged(refRow, user.id, planoById)
+    devLogIndicacaoDetail("sucesso", { id: indicacao.id })
+    return { kind: "ok", indicacao }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    devWarnIndicacaoDetailMock(`exceção: ${msg}`)
+    return { kind: "error" }
+  }
+}
