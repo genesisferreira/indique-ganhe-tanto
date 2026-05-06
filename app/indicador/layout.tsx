@@ -1,5 +1,5 @@
-import { DashboardLayout } from "@/components/layout/dashboard-layout"
-import { currentIndicador } from "@/lib/services/mock-data.service"
+import { Toaster } from "sonner"
+import { IndicadorHomeProvider } from "./indicador-home-provider"
 
 export default function IndicadorLayout({
   children,
@@ -7,12 +7,9 @@ export default function IndicadorLayout({
   children: React.ReactNode
 }) {
   return (
-    <DashboardLayout
-      variant="indicador"
-      userName={currentIndicador.nome}
-      userRole="Indicador"
-    >
-      {children}
-    </DashboardLayout>
+    <>
+      <IndicadorHomeProvider>{children}</IndicadorHomeProvider>
+      <Toaster richColors closeButton />
+    </>
   )
 }

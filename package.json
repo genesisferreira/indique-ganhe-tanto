@@ -62,6 +62,8 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@tailwindcss/oxide-wasm32-wasi": "4.2.4",
+    "@tailwindcss/oxide-win32-x64-msvc": "4.2.4",
     "@tailwindcss/postcss": "^4.2.0",
     "@types/node": "^22",
     "@types/react": "^19",

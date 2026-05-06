@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Zap, Eye, EyeOff, ArrowLeft } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { getSupabaseClient } from "@/lib/supabase/client"
+import { getSupabaseAuthNetworkHint, getSupabaseClient } from "@/lib/supabase/client"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -43,8 +43,12 @@ export default function LoginPage() {
       }
 
       router.push("/indicador")
-    } catch {
-      setError("Erro inesperado ao autenticar. Tente novamente.")
+    } catch (err) {
+      if (process.env.NODE_ENV === "development" && err instanceof Error) {
+        console.error("[login] auth:", err.name, err.message)
+      }
+      const hint = getSupabaseAuthNetworkHint(err)
+      setError(hint ?? "Erro inesperado ao autenticar. Tente novamente.")
     } finally {
       setIsLoading(false)
     }

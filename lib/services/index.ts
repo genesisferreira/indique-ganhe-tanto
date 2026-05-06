@@ -7,3 +7,14 @@ export { rewardService } from './reward.service'
 export { paymentService } from './payment.service'
 export { walletService } from './wallet.service'
 export { mockDataService } from './mock-data.service'
+export {
+  fetchActivePlansForIndicador,
+  getCurrentUserProfile,
+  insertIndicadorReferral,
+  loadIndicadorHomeFromSupabase,
+  loadIndicadorReferralsListFromSupabase,
+} from './supabase-data.service'
+export type {
+  IndicadorHomeFromSupabase,
+  InsertIndicadorReferralInput,
+} from './supabase-data.service'

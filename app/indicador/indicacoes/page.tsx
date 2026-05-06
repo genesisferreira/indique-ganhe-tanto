@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -14,8 +14,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { indicacoes, currentIndicador } from "@/lib/services/mock-data.service"
+import { loadIndicadorReferralsListFromSupabase } from "@/lib/services/supabase-data.service"
 import { Plus, Search, Eye, Filter } from "lucide-react"
-import type { IndicacaoStatus } from "@/types"
+import type { Indicacao, IndicacaoStatus } from "@/types"
 
 const statusOptions = [
   { value: "all", label: "Todos os status" },
@@ -30,11 +31,28 @@ export default function MinhasIndicacoesPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
 
-  const minhasIndicacoes = indicacoes.filter(
-    (i) => i.indicadorId === currentIndicador.id
+  const mockIndicacoes = useMemo(
+    () =>
+      indicacoes.filter((i) => i.indicadorId === currentIndicador.id),
+    []
   )
 
-  const filteredIndicacoes = minhasIndicacoes.filter((indicacao) => {
+  const [listaIndicacoes, setListaIndicacoes] =
+    useState<Indicacao[]>(mockIndicacoes)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const remote = await loadIndicadorReferralsListFromSupabase()
+      if (cancelled || remote === null) return
+      setListaIndicacoes(remote)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const filteredIndicacoes = listaIndicacoes.filter((indicacao) => {
     const matchesSearch = indicacao.nomeIndicado
       .toLowerCase()
       .includes(search.toLowerCase())

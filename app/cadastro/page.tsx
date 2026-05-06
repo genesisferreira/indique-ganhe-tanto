@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Zap, Eye, EyeOff, ArrowLeft, CheckCircle2 } from "lucide-react"
-import { getSupabaseClient } from "@/lib/supabase/client"
+import { getSupabaseAuthNetworkHint, getSupabaseClient } from "@/lib/supabase/client"
 
 const pixTypes = [
   { value: "cpf", label: "CPF" },
@@ -70,6 +70,12 @@ export default function CadastroPage() {
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          data: {
+            full_name: nome,
+            phone: telefone,
+          },
+        },
       })
 
       if (signUpError) {
@@ -77,20 +83,47 @@ export default function CadastroPage() {
         return
       }
 
-      const userId = signUpData.user?.id
-      if (!userId) {
+      const newUser = signUpData.user
+      if (!newUser?.id) {
         setError("Conta criada, mas não foi possível obter o usuário autenticado.")
         return
       }
+
+      // RLS de profiles exige role authenticated e id = auth.uid(); sem sessão JWT o insert é bloqueado.
+      if (signUpData.session) {
+        await supabase.auth.setSession({
+          access_token: signUpData.session.access_token,
+          refresh_token: signUpData.session.refresh_token,
+        })
+      }
+
+      const {
+        data: { session: activeSession },
+      } = await supabase.auth.getSession()
+
+      if (!activeSession?.user) {
+        setError(
+          "Confirme o link enviado ao seu e-mail para ativar a conta. Depois faça login para concluir o cadastro de PIX (e perfil, se ainda não existir)."
+        )
+        return
+      }
+
+      const uid = activeSession.user.id
+      if (uid !== newUser.id) {
+        setError("Sessão inconsistente após o cadastro. Tente fazer login.")
+        return
+      }
+
+      const profileEmail = (newUser.email ?? email).trim()
 
       const db = supabase as any
 
       const { error: profileError } = await db.from("profiles").upsert(
         {
-          id: userId,
-          full_name: nome,
-          email,
-          phone: telefone,
+          id: uid,
+          full_name: nome.trim(),
+          email: profileEmail,
+          phone: telefone.trim(),
           role: "indicador",
           is_active: true,
         },
@@ -105,9 +138,9 @@ export default function CadastroPage() {
       if (tipoPix && chavePix) {
         const { error: pixError } = await db.from("pix_keys").upsert(
           {
-            profile_id: userId,
+            profile_id: uid,
             key_type: tipoPix,
-            key_value: chavePix,
+            key_value: chavePix.trim(),
             is_primary: true,
           },
           { onConflict: "key_value" }
@@ -120,8 +153,12 @@ export default function CadastroPage() {
       }
 
       router.push("/indicador")
-    } catch {
-      setError("Erro inesperado ao criar conta. Tente novamente.")
+    } catch (err) {
+      if (process.env.NODE_ENV === "development" && err instanceof Error) {
+        console.error("[cadastro] auth:", err.name, err.message)
+      }
+      const hint = getSupabaseAuthNetworkHint(err)
+      setError(hint ?? "Erro inesperado ao criar conta. Tente novamente.")
     } finally {
       setIsLoading(false)
     }

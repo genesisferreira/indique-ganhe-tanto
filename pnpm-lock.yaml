@@ -162,6 +162,12 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@tailwindcss/oxide-wasm32-wasi':
+        specifier: 4.2.4
+        version: 4.2.4
+      '@tailwindcss/oxide-win32-x64-msvc':
+        specifier: 4.2.4
+        version: 4.2.4
       '@tailwindcss/postcss':
         specifier: ^4.2.0
         version: 4.2.4
@@ -2773,14 +2779,12 @@ snapshots:
   '@tailwindcss/oxide-linux-x64-musl@4.2.4':
     optional: true
 
-  '@tailwindcss/oxide-wasm32-wasi@4.2.4':
-    optional: true
+  '@tailwindcss/oxide-wasm32-wasi@4.2.4': {}
 
   '@tailwindcss/oxide-win32-arm64-msvc@4.2.4':
     optional: true
 
-  '@tailwindcss/oxide-win32-x64-msvc@4.2.4':
-    optional: true
+  '@tailwindcss/oxide-win32-x64-msvc@4.2.4': {}
 
   '@tailwindcss/oxide@4.2.4':
     optionalDependencies:

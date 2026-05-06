@@ -1,7 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -14,22 +15,67 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/ui/page-header"
-import { planos } from "@/lib/services/mock-data.service"
+import { planos as mockPlanosFallback } from "@/lib/services/mock-data.service"
+import {
+  fetchActivePlansForIndicador,
+  insertIndicadorReferral,
+} from "@/lib/services/supabase-data.service"
+import type { Plano } from "@/types/plan"
 import { CheckCircle2, Wallet, Receipt, Info } from "lucide-react"
 
 export default function NovaIndicacaoPage() {
   const router = useRouter()
   const [isLoading, setIsLoading] = useState(false)
+  const [planos, setPlanos] = useState<Plano[]>(() => mockPlanosFallback)
   const [selectedPlano, setSelectedPlano] = useState<string>("")
   const [tipoRecompensa, setTipoRecompensa] = useState<"pix" | "desconto">("pix")
+  const [nome, setNome] = useState("")
+  const [telefone, setTelefone] = useState("")
+  const [email, setEmail] = useState("")
+
+  useEffect(() => {
+    void (async () => {
+      const remote = await fetchActivePlansForIndicador()
+      if (remote?.length) {
+        setPlanos(remote)
+        setSelectedPlano("")
+      }
+    })()
+  }, [])
 
   const planoSelecionado = planos.find((p) => p.id === selectedPlano)
+  const valorRecompensaExibido =
+    planoSelecionado?.valorRecompensa ?? planoSelecionado?.preco ?? 0
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!planoSelecionado) return
+
     setIsLoading(true)
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    router.push("/indicador/indicacoes")
+    const rewardTypeDb =
+      tipoRecompensa === "pix" ? "pix" : "desconto_fatura"
+    const rewardAmount =
+      planoSelecionado.valorRecompensa ?? planoSelecionado.preco
+
+    const result = await insertIndicadorReferral({
+      referred_name: nome,
+      referred_phone: telefone,
+      referred_email: email.trim() || null,
+      referred_address: null,
+      plan_id: planoSelecionado.id,
+      reward_type: rewardTypeDb,
+      reward_amount: rewardAmount,
+    })
+
+    setIsLoading(false)
+
+    if (result.ok) {
+      toast.success("Indicação cadastrada com sucesso!")
+      router.push("/indicador/indicacoes")
+      return
+    }
+
+    toast.error(result.message)
   }
 
   return (
@@ -53,6 +99,8 @@ export default function NovaIndicacaoPage() {
                 type="text"
                 placeholder="Nome do indicado"
                 required
+                value={nome}
+                onChange={(e) => setNome(e.target.value)}
               />
             </div>
 
@@ -63,6 +111,8 @@ export default function NovaIndicacaoPage() {
                 type="tel"
                 placeholder="(11) 99999-9999"
                 required
+                value={telefone}
+                onChange={(e) => setTelefone(e.target.value)}
               />
             </div>
 
@@ -72,6 +122,8 @@ export default function NovaIndicacaoPage() {
                 id="email"
                 type="email"
                 placeholder="email@exemplo.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
               />
             </div>
           </div>
@@ -109,7 +161,7 @@ export default function NovaIndicacaoPage() {
                 <div>
                   <p className="font-medium text-foreground">
                     Sua recompensa será de R${" "}
-                    {planoSelecionado.preco.toLocaleString("pt-BR", {
+                    {valorRecompensaExibido.toLocaleString("pt-BR", {
                       minimumFractionDigits: 2,
                     })}
                   </p>

@@ -16,21 +16,15 @@ import {
   Plus,
   ArrowRight,
 } from "lucide-react"
-import {
-  dashboardIndicador,
-  indicacoes,
-  currentIndicador,
-} from "@/lib/services/mock-data.service"
-
-const recentIndicacoes = indicacoes
-  .filter((i) => i.indicadorId === currentIndicador.id)
-  .slice(0, 5)
+import { useIndicadorHome } from "./indicador-home-provider"
 
 export default function IndicadorDashboard() {
+  const { indicador, dashboard, recentIndicacoes } = useIndicadorHome()
+
   return (
     <div>
       <PageHeader
-        title={`Olá, ${currentIndicador.nome.split(" ")[0]}!`}
+        title={`Olá, ${indicador.nome.split(" ")[0]}!`}
         description="Acompanhe suas indicações e ganhos"
       >
         <Button asChild>
@@ -45,25 +39,25 @@ export default function IndicadorDashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <StatCard
           title="Total de Indicações"
-          value={dashboardIndicador.totalIndicacoes}
+          value={dashboard.totalIndicacoes}
           icon={Users}
           trend={{ value: 12, label: "este mês" }}
         />
         <StatCard
           title="Em Andamento"
-          value={dashboardIndicador.emAndamento}
+          value={dashboard.emAndamento}
           icon={Clock}
           variant="warning"
         />
         <StatCard
           title="Aprovadas"
-          value={dashboardIndicador.aprovadas}
+          value={dashboard.aprovadas}
           icon={CheckCircle2}
           variant="success"
         />
         <StatCard
           title="Recusadas"
-          value={dashboardIndicador.recusadas}
+          value={dashboard.recusadas}
           icon={XCircle}
           variant="destructive"
         />
@@ -73,24 +67,24 @@ export default function IndicadorDashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <StatCard
           title="Total Recebido"
-          value={`R$ ${dashboardIndicador.totalRecebido.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          value={`R$ ${dashboard.totalRecebido.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
           icon={Wallet}
           variant="primary"
         />
         <StatCard
           title="Total a Receber"
-          value={`R$ ${dashboardIndicador.totalAReceber.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          value={`R$ ${dashboard.totalAReceber.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
           icon={TrendingUp}
         />
         <StatCard
           title="Saldo Disponível"
-          value={`R$ ${dashboardIndicador.saldoDisponivel.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          value={`R$ ${dashboard.saldoDisponivel.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
           icon={Receipt}
           variant="success"
         />
         <StatCard
           title="Saldo em Desconto"
-          value={`R$ ${dashboardIndicador.saldoEmDesconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          value={`R$ ${dashboard.saldoEmDesconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
           icon={Receipt}
         />
       </div>
