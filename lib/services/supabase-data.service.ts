@@ -36,6 +36,11 @@ type ReferralRow = {
   rejection_reason: string | null
   created_at: string
   updated_at: string
+  assigned_at?: string | null
+  first_response_at?: string | null
+  last_interaction_at?: string | null
+  redistribution_count?: number
+  admin_alerted?: boolean
   plans?: { name: string } | { name: string }[] | null
 }
 
@@ -652,6 +657,7 @@ export async function insertIndicadorReferral(
       referralStatus,
     })
 
+    const nowIso = new Date().toISOString()
     const insertPayload = {
       indicator_profile_id: user.id,
       referred_name: input.referred_name.trim(),
@@ -663,19 +669,50 @@ export async function insertIndicadorReferral(
       reward_amount: input.reward_amount,
       commercial_profile_id: selectedCommercialId,
       status: referralStatus,
+      assigned_at: selectedCommercialId ? nowIso : null,
+      last_interaction_at: selectedCommercialId ? nowIso : null,
     }
     devLogInsertReferral("payload final do insert", insertPayload)
+    devLogInsertReferral("campos SLA no insert", {
+      assigned_at: insertPayload.assigned_at,
+      first_response_at: null,
+      last_interaction_at: insertPayload.last_interaction_at,
+      redistribution_count: 0,
+      admin_alerted: false,
+    })
 
     const { data: insertedRows, error: insertError } = await db
       .from("referrals")
       .insert(insertPayload)
-      .select("id, commercial_profile_id, status")
+      .select(
+        "id, commercial_profile_id, status, assigned_at, first_response_at, last_interaction_at, redistribution_count, admin_alerted"
+      )
 
     devLogInsertReferral("resultado insert referrals", {
       error: insertError?.message ?? null,
       code: insertError?.code ?? null,
       rowCount: insertedRows?.length ?? 0,
       rows: insertedRows ?? [],
+    })
+    devLogInsertReferral("resultado insert referrals (campos SLA)", {
+      sla: (insertedRows ?? []).map((row: unknown) => {
+        const r = row as {
+          id: string
+          assigned_at?: string | null
+          first_response_at?: string | null
+          last_interaction_at?: string | null
+          redistribution_count?: number
+          admin_alerted?: boolean
+        }
+        return {
+          id: r.id,
+          assigned_at: r.assigned_at ?? null,
+          first_response_at: r.first_response_at ?? null,
+          last_interaction_at: r.last_interaction_at ?? null,
+          redistribution_count: r.redistribution_count ?? null,
+          admin_alerted: r.admin_alerted ?? null,
+        }
+      }),
     })
 
     if (insertError) {
@@ -1753,7 +1790,7 @@ export async function updateComercialLeadStatus(
 
     const { data: referralBefore, error: referralBeforeError } = await db
       .from("referrals")
-      .select("id, status, notes")
+      .select("id, status, notes, first_response_at, last_interaction_at")
       .eq("id", referralId)
       .maybeSingle()
 
@@ -1773,15 +1810,22 @@ export async function updateComercialLeadStatus(
     const before = referralBefore as {
       status: string
       notes: string | null
+      first_response_at: string | null
+      last_interaction_at: string | null
     }
     const oldStatus = before.status
     const nextReferralStatus = mapComercialUpdateStatusToReferralStatus(newStatus)
     const noteTrimmed = note?.trim() ?? ""
+    const nowIso = new Date().toISOString()
     const updatePayload: {
       status: string
       notes?: string
+      last_interaction_at: string
+      first_response_at: string
     } = {
       status: nextReferralStatus,
+      last_interaction_at: nowIso,
+      first_response_at: before.first_response_at ?? nowIso,
     }
     if (noteTrimmed) {
       updatePayload.notes = noteTrimmed
@@ -1791,7 +1835,9 @@ export async function updateComercialLeadStatus(
       .from("referrals")
       .update(updatePayload)
       .eq("id", referralId)
-      .select("id, status, notes, updated_at")
+      .select(
+        "id, status, notes, updated_at, first_response_at, last_interaction_at, assigned_at"
+      )
 
     devLogComercialLeadUpdate("resultado update referrals", {
       error: updateError?.message ?? null,
@@ -1799,6 +1845,22 @@ export async function updateComercialLeadStatus(
       payload: updatePayload,
       rowCount: updateRows?.length ?? 0,
       rows: updateRows ?? [],
+    })
+    devLogComercialLeadUpdate("resultado update referrals (campos SLA)", {
+      sla: (updateRows ?? []).map((row: unknown) => {
+        const r = row as {
+          id: string
+          assigned_at?: string | null
+          first_response_at?: string | null
+          last_interaction_at?: string | null
+        }
+        return {
+          id: r.id,
+          assigned_at: r.assigned_at ?? null,
+          first_response_at: r.first_response_at ?? null,
+          last_interaction_at: r.last_interaction_at ?? null,
+        }
+      }),
     })
 
     if (updateError) {
@@ -1862,7 +1924,9 @@ export async function updateComercialLeadStatus(
 
     const { data: referralAfter, error: referralAfterError } = await db
       .from("referrals")
-      .select("id, status, notes, updated_at")
+      .select(
+        "id, status, notes, updated_at, first_response_at, last_interaction_at, assigned_at"
+      )
       .eq("id", referralId)
       .maybeSingle()
 
@@ -2021,15 +2085,36 @@ export async function claimComercialLead(
       .update({
         commercial_profile_id: user.id,
         status: "em_atendimento",
+        assigned_at: new Date().toISOString(),
+        first_response_at: new Date().toISOString(),
+        last_interaction_at: new Date().toISOString(),
       })
       .eq("id", referralId)
-      .select("id, commercial_profile_id, status, updated_at")
+      .select(
+        "id, commercial_profile_id, status, updated_at, assigned_at, first_response_at, last_interaction_at"
+      )
 
     devLogComercialLeads("claim: resultado do update", {
       error: updateError?.message ?? null,
       code: updateError?.code ?? null,
       rowCount: updateRows?.length ?? 0,
       rows: updateRows ?? [],
+    })
+    devLogComercialLeads("claim: resultado do update (campos SLA)", {
+      sla: (updateRows ?? []).map((row: unknown) => {
+        const r = row as {
+          id: string
+          assigned_at?: string | null
+          first_response_at?: string | null
+          last_interaction_at?: string | null
+        }
+        return {
+          id: r.id,
+          assigned_at: r.assigned_at ?? null,
+          first_response_at: r.first_response_at ?? null,
+          last_interaction_at: r.last_interaction_at ?? null,
+        }
+      }),
     })
 
     if (updateError) {
@@ -2093,7 +2178,9 @@ export async function claimComercialLead(
 
     const { data: referralAfter, error: afterError } = await db
       .from("referrals")
-      .select("id, commercial_profile_id, status, updated_at")
+      .select(
+        "id, commercial_profile_id, status, updated_at, assigned_at, first_response_at, last_interaction_at"
+      )
       .eq("id", referralId)
       .maybeSingle()
 
