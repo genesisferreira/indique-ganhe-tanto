@@ -2,6 +2,7 @@
 
 import { use, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -16,7 +17,11 @@ import {
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { leads, historicos } from "@/lib/services/mock-data.service"
-import { loadComercialLeadDetailsFromSupabase } from "@/lib/services/supabase-data.service"
+import {
+  loadComercialLeadDetailsFromSupabase,
+  updateComercialLeadStatus,
+  type ComercialLeadUpdateStatus,
+} from "@/lib/services/supabase-data.service"
 import {
   ArrowLeft,
   User,
@@ -31,12 +36,29 @@ import {
 import type { LeadStatus } from "@/types"
 
 const statusOptions = [
-  { value: "novo", label: "Novo" },
   { value: "em_atendimento", label: "Em Atendimento" },
-  { value: "em_negociacao", label: "Em Negociação" },
+  { value: "aguardando_instalacao", label: "Aguardando Instalação" },
   { value: "vendido", label: "Vendido" },
-  { value: "perdido", label: "Perdido" },
+  { value: "recusado", label: "Recusado" },
+  { value: "sem_viabilidade", label: "Sem Viabilidade" },
 ]
+
+function mapLeadStatusToUpdateStatus(
+  leadStatus: LeadStatus
+): ComercialLeadUpdateStatus {
+  switch (leadStatus) {
+    case "em_atendimento":
+      return "em_atendimento"
+    case "em_negociacao":
+      return "aguardando_instalacao"
+    case "vendido":
+      return "vendido"
+    case "perdido":
+      return "sem_viabilidade"
+    default:
+      return "em_atendimento"
+  }
+}
 
 export default function DetalheLeadPage({
   params,
@@ -47,25 +69,57 @@ export default function DetalheLeadPage({
   const mockLead = useMemo(() => leads.find((l) => l.id === id), [id])
   const [lead, setLead] = useState(mockLead)
   const [novaObservacao, setNovaObservacao] = useState("")
-  const [status, setStatus] = useState<LeadStatus>(mockLead?.status || "novo")
+  const [status, setStatus] = useState<ComercialLeadUpdateStatus>(() =>
+    mapLeadStatusToUpdateStatus(mockLead?.status || "novo")
+  )
+  const [isSaving, setIsSaving] = useState(false)
   const [leadHistorico, setLeadHistorico] = useState(() =>
     historicos.filter((h) => h.leadId === id)
   )
 
+  const reloadLeadData = async () => {
+    const remote = await loadComercialLeadDetailsFromSupabase(id)
+    if (remote.kind !== "ok") return false
+
+    setLead(remote.lead)
+    setStatus(mapLeadStatusToUpdateStatus(remote.lead.status))
+    setLeadHistorico(remote.historico)
+    return true
+  }
+
+  const handleSaveLeadUpdate = async () => {
+    if (!lead) return
+    if (isSaving) return
+
+    setIsSaving(true)
+    const result = await updateComercialLeadStatus(lead.id, status, novaObservacao)
+    if (!result.ok) {
+      toast.error(result.message)
+      setIsSaving(false)
+      return
+    }
+
+    const reloadOk = await reloadLeadData()
+    if (!reloadOk) {
+      toast.error("Status salvo, mas não foi possível atualizar a visualização.")
+      setIsSaving(false)
+      return
+    }
+
+    setNovaObservacao("")
+    toast.success("Lead atualizado com sucesso!")
+    setIsSaving(false)
+  }
+
   useEffect(() => {
     setLead(mockLead)
-    setStatus(mockLead?.status || "novo")
+    setStatus(mapLeadStatusToUpdateStatus(mockLead?.status || "novo"))
     setLeadHistorico(historicos.filter((h) => h.leadId === id))
   }, [id, mockLead])
 
   useEffect(() => {
     void (async () => {
-      const remote = await loadComercialLeadDetailsFromSupabase(id)
-      if (remote.kind !== "ok") return
-
-      setLead(remote.lead)
-      setStatus(remote.lead.status)
-      setLeadHistorico(remote.historico)
+      await reloadLeadData()
     })()
   }, [id])
 
@@ -206,9 +260,14 @@ export default function DetalheLeadPage({
                   </Label>
                   <Input type="datetime-local" className="w-auto" />
                 </div>
-                <Button disabled={!novaObservacao.trim()}>
+                <Button
+                  disabled={!novaObservacao.trim() || isSaving}
+                  onClick={() => {
+                    void handleSaveLeadUpdate()
+                  }}
+                >
                   <Send className="w-4 h-4 mr-2" />
-                  Salvar
+                  {isSaving ? "Salvando..." : "Salvar"}
                 </Button>
               </div>
             </div>
@@ -264,7 +323,10 @@ export default function DetalheLeadPage({
             <h2 className="text-lg font-semibold text-foreground mb-4">
               Atualizar Status
             </h2>
-            <Select value={status} onValueChange={(v) => setStatus(v as LeadStatus)}>
+            <Select
+              value={status}
+              onValueChange={(v) => setStatus(v as ComercialLeadUpdateStatus)}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -276,7 +338,15 @@ export default function DetalheLeadPage({
                 ))}
               </SelectContent>
             </Select>
-            <Button className="w-full mt-4">Salvar Status</Button>
+            <Button
+              className="w-full mt-4"
+              disabled={isSaving}
+              onClick={() => {
+                void handleSaveLeadUpdate()
+              }}
+            >
+              {isSaving ? "Salvando..." : "Salvar Status"}
+            </Button>
           </div>
 
           {/* Indicador */}

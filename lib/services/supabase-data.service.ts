@@ -497,6 +497,17 @@ export type InsertIndicadorReferralInput = {
   reward_amount: number
 }
 
+const INDICADOR_INSERT_REFERRAL_LOG_PREFIX = "[indicador-insert-referral:supabase]"
+
+function devLogInsertReferral(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(INDICADOR_INSERT_REFERRAL_LOG_PREFIX, ...args)
+}
+
+type ComercialAvailabilityRow = {
+  commercial_profile_id: string
+}
+
 /**
  * Insere uma indicação para o usuário autenticado. Não usa DATA_PROVIDER.
  */
@@ -504,11 +515,20 @@ export async function insertIndicadorReferral(
   input: InsertIndicadorReferralInput
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   try {
+    devLogInsertReferral("início")
+
     const supabase = getSupabaseClient()
     const {
       data: { user },
       error: authErr,
     } = await supabase.auth.getUser()
+
+    devLogInsertReferral("auth.getUser", {
+      hasUser: Boolean(user && !authErr),
+      userId: user?.id ?? null,
+      authError: authErr?.message ?? null,
+    })
+
     if (authErr || !user) {
       return {
         ok: false,
@@ -529,7 +549,41 @@ export async function insertIndicadorReferral(
     const db = supabase as unknown as {
       from: (t: string) => ReturnType<typeof supabase.from>
     }
-    const { error } = await db.from("referrals").insert({
+
+    // No schema local usamos availability_status='disponivel' como equivalente de is_available=true.
+    const { data: comercialRows, error: comercialError } = await db
+      .from("commercial_availability")
+      .select("commercial_profile_id")
+      .eq("availability_status", "disponivel")
+      .order("updated_at", { ascending: false })
+
+    devLogInsertReferral("comerciais disponíveis encontrados", {
+      error: comercialError?.message ?? null,
+      code: comercialError?.code ?? null,
+      rowCount: comercialRows?.length ?? 0,
+      rows: comercialRows ?? [],
+    })
+
+    if (comercialError) {
+      return {
+        ok: false,
+        message: comercialError.message || "Não foi possível selecionar comercial disponível.",
+      }
+    }
+
+    const selectedComercialId =
+      (comercialRows?.[0] as ComercialAvailabilityRow | undefined)
+        ?.commercial_profile_id ?? null
+    const referralStatus = selectedComercialId ? "em_atendimento" : "pendente"
+
+    devLogInsertReferral("comercial selecionado", {
+      selectedComercialId,
+      referralStatus,
+    })
+
+    const { data: insertedRows, error: insertError } = await db
+      .from("referrals")
+      .insert({
       indicator_profile_id: user.id,
       referred_name: input.referred_name.trim(),
       referred_phone: input.referred_phone.trim(),
@@ -538,14 +592,61 @@ export async function insertIndicadorReferral(
       plan_id: input.plan_id,
       reward_type: input.reward_type,
       reward_amount: input.reward_amount,
-      status: "pendente",
+      commercial_profile_id: selectedComercialId,
+      status: referralStatus,
+    })
+      .select("id, commercial_profile_id, status")
+
+    devLogInsertReferral("resultado insert referrals", {
+      error: insertError?.message ?? null,
+      code: insertError?.code ?? null,
+      rowCount: insertedRows?.length ?? 0,
+      rows: insertedRows ?? [],
     })
 
-    if (error) {
+    if (insertError) {
       return {
         ok: false,
-        message: error.message || "Não foi possível cadastrar a indicação.",
+        message: insertError.message || "Não foi possível cadastrar a indicação.",
       }
+    }
+
+    const insertedReferralId =
+      (insertedRows?.[0] as { id: string } | undefined)?.id ?? null
+
+    if (insertedReferralId && selectedComercialId) {
+      const { data: histRows, error: histError } = await db
+        .from("referral_history")
+        .insert({
+          referral_id: insertedReferralId,
+          actor_profile_id: selectedComercialId,
+          old_status: "pendente",
+          new_status: "em_atendimento",
+          action_note: "Lead atribuído automaticamente",
+          metadata: { action: "auto_assign" },
+        })
+        .select("id, referral_id, old_status, new_status, action_note, metadata")
+
+      devLogInsertReferral("resultado insert referral_history", {
+        error: histError?.message ?? null,
+        code: histError?.code ?? null,
+        rowCount: histRows?.length ?? 0,
+        rows: histRows ?? [],
+      })
+
+      if (histError) {
+        return {
+          ok: false,
+          message:
+            histError.message ||
+            "Indicação criada, mas não foi possível registrar o histórico.",
+        }
+      }
+    } else {
+      devLogInsertReferral("sem autoatribuição; histórico não criado", {
+        insertedReferralId,
+        selectedComercialId,
+      })
     }
 
     return { ok: true }
@@ -1473,6 +1574,245 @@ export async function loadComercialLeadDetailsFromSupabase(
 // --- Ação Comercial: Assumir lead -------------------------------------------------
 
 type ClaimLeadResult = { ok: true } | { ok: false; message: string }
+export type ComercialLeadUpdateStatus =
+  | "em_atendimento"
+  | "aguardando_instalacao"
+  | "vendido"
+  | "recusado"
+  | "sem_viabilidade"
+
+type UpdateComercialLeadStatusResult =
+  | { ok: true }
+  | { ok: false; message: string }
+
+const COMERCIAL_LEAD_UPDATE_LOG_PREFIX = "[comercial-lead-update:supabase]"
+
+function devLogComercialLeadUpdate(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(COMERCIAL_LEAD_UPDATE_LOG_PREFIX, ...args)
+}
+
+function mapComercialUpdateStatusToReferralStatus(
+  status: ComercialLeadUpdateStatus
+): string {
+  switch (status) {
+    case "em_atendimento":
+      return "em_atendimento"
+    case "aguardando_instalacao":
+      return "em_negociacao"
+    case "vendido":
+      return "aprovada"
+    case "recusado":
+    case "sem_viabilidade":
+      return "recusada"
+    default:
+      return "em_atendimento"
+  }
+}
+
+export async function updateComercialLeadStatus(
+  referralId: string,
+  newStatus: ComercialLeadUpdateStatus,
+  note?: string
+): Promise<UpdateComercialLeadStatusResult> {
+  try {
+    devLogComercialLeadUpdate("início", {
+      referralId,
+      newStatus,
+      hasNote: Boolean(note?.trim()),
+    })
+
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    devLogComercialLeadUpdate("auth.getUser", {
+      hasUser: Boolean(user && !authError),
+      userId: user?.id ?? null,
+      authError: authError?.message ?? null,
+    })
+
+    if (authError || !user) {
+      return {
+        ok: false,
+        message: "Sessão não encontrada. Faça login novamente.",
+      }
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    devLogComercialLeadUpdate("profile", {
+      hasProfile: Boolean(profile && !profileError),
+      role,
+      error: profileError?.message ?? null,
+      code: profileError?.code ?? null,
+    })
+
+    if (profileError || !profile || role !== "comercial") {
+      if (isDev()) {
+        console.warn(COMERCIAL_LEAD_UPDATE_LOG_PREFIX, "role inválida para update", {
+          role,
+          error: profileError?.message ?? null,
+          code: profileError?.code ?? null,
+        })
+      }
+      return {
+        ok: false,
+        message: "Apenas usuários com perfil comercial podem atualizar o lead.",
+      }
+    }
+
+    const { data: referralBefore, error: referralBeforeError } = await db
+      .from("referrals")
+      .select("id, status, notes")
+      .eq("id", referralId)
+      .maybeSingle()
+
+    devLogComercialLeadUpdate("row antes do update", {
+      error: referralBeforeError?.message ?? null,
+      code: referralBeforeError?.code ?? null,
+      row: referralBefore ?? null,
+    })
+
+    if (referralBeforeError || !referralBefore) {
+      return {
+        ok: false,
+        message: "Lead não encontrado para atualização.",
+      }
+    }
+
+    const before = referralBefore as {
+      status: string
+      notes: string | null
+    }
+    const oldStatus = before.status
+    const nextReferralStatus = mapComercialUpdateStatusToReferralStatus(newStatus)
+    const noteTrimmed = note?.trim() ?? ""
+    const updatePayload: {
+      status: string
+      notes?: string
+    } = {
+      status: nextReferralStatus,
+    }
+    if (noteTrimmed) {
+      updatePayload.notes = noteTrimmed
+    }
+
+    const { data: updateRows, error: updateError } = await db
+      .from("referrals")
+      .update(updatePayload)
+      .eq("id", referralId)
+      .select("id, status, notes, updated_at")
+
+    devLogComercialLeadUpdate("resultado update referrals", {
+      error: updateError?.message ?? null,
+      code: updateError?.code ?? null,
+      payload: updatePayload,
+      rowCount: updateRows?.length ?? 0,
+      rows: updateRows ?? [],
+    })
+
+    if (updateError) {
+      if (isDev()) {
+        console.warn(COMERCIAL_LEAD_UPDATE_LOG_PREFIX, "falha update referrals", {
+          message: updateError.message,
+          code: updateError.code ?? null,
+          details: (updateError as { details?: string }).details ?? null,
+          hint: (updateError as { hint?: string }).hint ?? null,
+        })
+      }
+      return {
+        ok: false,
+        message: "Não foi possível atualizar o status do lead.",
+      }
+    }
+
+    const historyNote = noteTrimmed || `Status alterado para ${newStatus}`
+    const { data: historyRows, error: historyError } = await db
+      .from("referral_history")
+      .insert({
+        referral_id: referralId,
+        actor_profile_id: user.id,
+        old_status: oldStatus,
+        new_status: nextReferralStatus,
+        action_note: historyNote,
+        metadata: {
+          action: "status_change",
+          requested_status: newStatus,
+        },
+      })
+      .select(
+        "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
+      )
+
+    devLogComercialLeadUpdate("resultado insert referral_history", {
+      error: historyError?.message ?? null,
+      code: historyError?.code ?? null,
+      rowCount: historyRows?.length ?? 0,
+      rows: historyRows ?? [],
+    })
+
+    if (historyError) {
+      if (isDev()) {
+        console.warn(
+          COMERCIAL_LEAD_UPDATE_LOG_PREFIX,
+          "falha insert referral_history",
+          {
+            message: historyError.message,
+            code: historyError.code ?? null,
+            details: (historyError as { details?: string }).details ?? null,
+            hint: (historyError as { hint?: string }).hint ?? null,
+          }
+        )
+      }
+      return {
+        ok: false,
+        message: "Status atualizado, mas houve falha ao registrar histórico.",
+      }
+    }
+
+    const { data: referralAfter, error: referralAfterError } = await db
+      .from("referrals")
+      .select("id, status, notes, updated_at")
+      .eq("id", referralId)
+      .maybeSingle()
+
+    devLogComercialLeadUpdate("row depois do update", {
+      error: referralAfterError?.message ?? null,
+      code: referralAfterError?.code ?? null,
+      row: referralAfter ?? null,
+    })
+
+    if (referralAfterError || !referralAfter) {
+      return {
+        ok: false,
+        message: "Não foi possível confirmar a atualização do lead.",
+      }
+    }
+
+    return { ok: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (isDev()) {
+      console.warn(COMERCIAL_LEAD_UPDATE_LOG_PREFIX, "exceção", { message: msg })
+    }
+    return {
+      ok: false,
+      message: "Erro inesperado ao atualizar o lead.",
+    }
+  }
+}
 
 export async function claimComercialLead(
   referralId: string
