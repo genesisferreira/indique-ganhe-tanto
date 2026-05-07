@@ -12,11 +12,17 @@ export {
   getCurrentUserProfile,
   insertIndicadorReferral,
   loadComercialLeadsFromSupabase,
+  loadAdminNotificationsFromSupabase,
   loadIndicadorHomeFromSupabase,
   loadIndicadorReferralDetailFromSupabase,
   loadIndicadorReferralsListFromSupabase,
+  markNotificationAsRead,
+  processExpiredLeadAssignments,
 } from './supabase-data.service'
 export type {
+  AdminNotificationItem,
+  ProcessExpiredLeadAssignmentsError,
+  ProcessExpiredLeadAssignmentsResult,
   IndicadorHomeFromSupabase,
   IndicadorReferralDetailResult,
   InsertIndicadorReferralInput,

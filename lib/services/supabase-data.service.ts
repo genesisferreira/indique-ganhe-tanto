@@ -518,6 +518,530 @@ type ActiveReferralCountRow = {
   commercial_profile_id: string | null
 }
 
+type ExpiredReferralSlaRow = {
+  id: string
+  commercial_profile_id: string | null
+  status: string
+  assigned_at: string | null
+  first_response_at: string | null
+  redistribution_count: number
+  admin_alerted: boolean | null
+}
+
+type NotificationRow = {
+  id: string
+  profile_id: string
+  notification_type: string
+  title: string
+  message: string
+  data: Record<string, unknown> | null
+  is_read: boolean
+  created_at: string
+}
+
+const SLA_REDISTRIBUTION_LOG_PREFIX = "[sla-redistribution:supabase]"
+const ADMIN_NOTIFICATIONS_LOG_PREFIX = "[admin-notifications:supabase]"
+
+function devLogSlaRedistribution(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(SLA_REDISTRIBUTION_LOG_PREFIX, ...args)
+}
+
+function devLogAdminNotifications(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(ADMIN_NOTIFICATIONS_LOG_PREFIX, ...args)
+}
+
+function devWarnAdminNotifications(reason: string): void {
+  if (!isDev()) return
+  console.warn(ADMIN_NOTIFICATIONS_LOG_PREFIX, "fallback mock →", reason)
+}
+
+const ADMIN_ROLES_ALLOWED_NOTIFICATIONS = new Set([
+  "admin_master",
+  "admin_financeiro",
+  "admin_consulta",
+])
+
+export type AdminNotificationItem = {
+  id: string
+  title: string
+  message: string
+  type: string
+  isRead: boolean
+  createdAt: Date
+  referralId?: string
+}
+
+export type ProcessExpiredLeadAssignmentsResult = {
+  ok: true
+  scanned: number
+  redistributed: number
+  alerted: number
+  skipped: number
+}
+export type ProcessExpiredLeadAssignmentsError = {
+  ok: false
+  message: string
+}
+
+export async function processExpiredLeadAssignments(): Promise<
+  ProcessExpiredLeadAssignmentsResult | ProcessExpiredLeadAssignmentsError
+> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    devLogSlaRedistribution("auth.getUser", {
+      hasUser: Boolean(user && !authError),
+      userId: user?.id ?? null,
+      authError: authError?.message ?? null,
+    })
+
+    if (authError || !user) {
+      return {
+        ok: false,
+        message: "Sessão não encontrada para processar redistribuição SLA.",
+      }
+    }
+
+    const cutoffIso = new Date(Date.now() - 15 * 60 * 1000).toISOString()
+    const { data: expiredRows, error: expiredError } = await db
+      .from("referrals")
+      .select(
+        "id, commercial_profile_id, status, assigned_at, first_response_at, redistribution_count, admin_alerted"
+      )
+      .eq("status", "em_atendimento")
+      .is("first_response_at", null)
+      .lt("assigned_at", cutoffIso)
+      .eq("redistribution_count", 0)
+
+    devLogSlaRedistribution("leads vencidos por SLA", {
+      cutoffIso,
+      error: expiredError?.message ?? null,
+      code: expiredError?.code ?? null,
+      rowCount: expiredRows?.length ?? 0,
+      rows: expiredRows ?? [],
+    })
+
+    if (expiredError) {
+      return {
+        ok: false,
+        message:
+          expiredError.message ||
+          "Falha ao consultar leads vencidos por SLA.",
+      }
+    }
+
+    const expired = (expiredRows ?? []) as ExpiredReferralSlaRow[]
+    devLogSlaRedistribution("quantidade de leads vencidos", expired.length)
+
+    let redistributed = 0
+    let alerted = 0
+    let skipped = 0
+
+    for (const lead of expired) {
+      const currentCommercialId = lead.commercial_profile_id
+      const { data: availableRows, error: availableError } = await db
+        .from("commercial_availability")
+        .select("commercial_profile_id, created_at")
+        .eq("availability_status", "disponivel")
+        .order("created_at", { ascending: true })
+
+      devLogSlaRedistribution("comerciais disponíveis para lead", {
+        referralId: lead.id,
+        currentCommercialId,
+        error: availableError?.message ?? null,
+        code: availableError?.code ?? null,
+        rowCount: availableRows?.length ?? 0,
+      })
+
+      if (availableError) {
+        skipped += 1
+        continue
+      }
+
+      const candidates = ((availableRows ?? []) as ComercialAvailabilityRow[]).filter(
+        (row) => row.commercial_profile_id !== currentCommercialId
+      )
+      const newCommercialId = candidates[0]?.commercial_profile_id ?? null
+
+      devLogSlaRedistribution("comercial anterior/novo", {
+        referralId: lead.id,
+        previousCommercialId: currentCommercialId,
+        newCommercialId,
+      })
+
+      if (newCommercialId) {
+        const nowIso = new Date().toISOString()
+        const { data: updateRows, error: updateError } = await db
+          .from("referrals")
+          .update({
+            commercial_profile_id: newCommercialId,
+            assigned_at: nowIso,
+            last_interaction_at: nowIso,
+            redistribution_count: (lead.redistribution_count ?? 0) + 1,
+            status: "em_atendimento",
+          })
+          .eq("id", lead.id)
+          .select(
+            "id, commercial_profile_id, assigned_at, last_interaction_at, redistribution_count, status"
+          )
+
+        devLogSlaRedistribution("resultado update redistribuição", {
+          referralId: lead.id,
+          error: updateError?.message ?? null,
+          code: updateError?.code ?? null,
+          rowCount: updateRows?.length ?? 0,
+          rows: updateRows ?? [],
+        })
+
+        if (updateError) {
+          skipped += 1
+          continue
+        }
+
+        const { data: historyRows, error: historyError } = await db
+          .from("referral_history")
+          .insert({
+            referral_id: lead.id,
+            actor_profile_id: user.id,
+            old_status: "em_atendimento",
+            new_status: "em_atendimento",
+            action_note: "Lead redistribuído automaticamente por SLA",
+            metadata: {
+              action: "sla_redistribution",
+              previous_commercial_id: currentCommercialId,
+              new_commercial_id: newCommercialId,
+              reason: "no_response_15_minutes",
+            },
+          })
+          .select(
+            "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
+          )
+
+        devLogSlaRedistribution("resultado history redistribuição", {
+          referralId: lead.id,
+          error: historyError?.message ?? null,
+          code: historyError?.code ?? null,
+          rowCount: historyRows?.length ?? 0,
+          rows: historyRows ?? [],
+        })
+
+        if (historyError) {
+          skipped += 1
+          continue
+        }
+
+        redistributed += 1
+        continue
+      }
+
+      const { data: adminRows, error: adminsError } = await db
+        .from("profiles")
+        .select("id")
+        .eq("role", "admin_master")
+
+      devLogSlaRedistribution("resultado busca admins para alerta", {
+        referralId: lead.id,
+        error: adminsError?.message ?? null,
+        code: adminsError?.code ?? null,
+        rowCount: adminRows?.length ?? 0,
+      })
+
+      let notificationErrorMessage: string | null = null
+      if (!adminsError && (adminRows?.length ?? 0) > 0) {
+        const notificationsPayload = (adminRows ?? []).map((row: unknown) => {
+          const admin = row as { id: string }
+          return {
+            profile_id: admin.id,
+            notification_type: "sistema",
+            title: "Lead vencido por SLA sem comercial disponível",
+            message:
+              "Um lead está sem resposta há mais de 15 minutos e não há comercial alternativo disponível para redistribuição.",
+            data: {
+              action: "sla_no_commercial_available",
+              referral_id: lead.id,
+              previous_commercial_id: currentCommercialId,
+              reason: "no_response_15_minutes",
+            },
+          }
+        })
+
+        const { data: notificationRows, error: notificationError } = await db
+          .from("notifications")
+          .insert(notificationsPayload)
+          .select("id, profile_id, notification_type, created_at")
+
+        devLogSlaRedistribution("resultado notification/admin alert", {
+          referralId: lead.id,
+          error: notificationError?.message ?? null,
+          code: notificationError?.code ?? null,
+          rowCount: notificationRows?.length ?? 0,
+          rows: notificationRows ?? [],
+        })
+        if (notificationError) {
+          notificationErrorMessage = notificationError.message
+        }
+      }
+
+      const { data: alertRows, error: alertError } = await db
+        .from("referrals")
+        .update({ admin_alerted: true })
+        .eq("id", lead.id)
+        .select("id, admin_alerted")
+
+      devLogSlaRedistribution("resultado update admin_alerted", {
+        referralId: lead.id,
+        error: alertError?.message ?? null,
+        code: alertError?.code ?? null,
+        rowCount: alertRows?.length ?? 0,
+        rows: alertRows ?? [],
+      })
+
+      const historyMetadata: Record<string, unknown> = {
+        action: "sla_no_commercial_available",
+      }
+      if (notificationErrorMessage) {
+        historyMetadata.notification_error = notificationErrorMessage
+      }
+      const { data: noCommercialHistoryRows, error: noCommercialHistoryError } = await db
+        .from("referral_history")
+        .insert({
+          referral_id: lead.id,
+          actor_profile_id: user.id,
+          old_status: "em_atendimento",
+          new_status: "em_atendimento",
+          action_note: "Lead vencido por SLA sem comercial disponível",
+          metadata: historyMetadata,
+        })
+        .select(
+          "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
+        )
+
+      devLogSlaRedistribution("resultado history sem comercial", {
+        referralId: lead.id,
+        error: noCommercialHistoryError?.message ?? null,
+        code: noCommercialHistoryError?.code ?? null,
+        rowCount: noCommercialHistoryRows?.length ?? 0,
+        rows: noCommercialHistoryRows ?? [],
+      })
+
+      if (alertError || noCommercialHistoryError) {
+        skipped += 1
+        continue
+      }
+      alerted += 1
+    }
+
+    devLogSlaRedistribution("resumo processamento", {
+      scanned: expired.length,
+      redistributed,
+      alerted,
+      skipped,
+    })
+
+    return {
+      ok: true,
+      scanned: expired.length,
+      redistributed,
+      alerted,
+      skipped,
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (isDev()) {
+      console.warn(SLA_REDISTRIBUTION_LOG_PREFIX, "exceção", { message: msg })
+    }
+    return {
+      ok: false,
+      message: "Erro inesperado ao processar redistribuição automática por SLA.",
+    }
+  }
+}
+
+export async function loadAdminNotificationsFromSupabase(): Promise<
+  AdminNotificationItem[] | null
+> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    devLogAdminNotifications("auth.getUser", {
+      hasUser: Boolean(user && !authError),
+      userId: user?.id ?? null,
+      authError: authError?.message ?? null,
+    })
+
+    if (authError || !user) {
+      devWarnAdminNotifications(
+        authError
+          ? `sem sessão válida: ${authError.message}`
+          : "sem usuário autenticado"
+      )
+      return null
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    devLogAdminNotifications("profile", {
+      hasProfile: Boolean(profile && !profileError),
+      role,
+      error: profileError?.message ?? null,
+      code: profileError?.code ?? null,
+    })
+
+    if (
+      profileError ||
+      !profile ||
+      !role ||
+      !ADMIN_ROLES_ALLOWED_NOTIFICATIONS.has(role)
+    ) {
+      devWarnAdminNotifications(
+        profileError
+          ? `profiles falhou: ${profileError.message} (${profileError.code ?? "sem código"})`
+          : `role sem permissão para notificações admin: "${role}"`
+      )
+      return null
+    }
+
+    const { data: rows, error: notificationsError } = await db
+      .from("notifications")
+      .select(
+        "id, profile_id, notification_type, title, message, data, is_read, created_at"
+      )
+      .order("created_at", { ascending: false })
+
+    devLogAdminNotifications("query notifications", {
+      error: notificationsError?.message ?? null,
+      code: notificationsError?.code ?? null,
+      rowCount: rows?.length ?? 0,
+    })
+
+    if (notificationsError) {
+      devWarnAdminNotifications(
+        `notifications falhou: ${notificationsError.message} (${notificationsError.code ?? "sem código"})`
+      )
+      return null
+    }
+
+    return (rows ?? []).map((raw: unknown) => {
+      const row = raw as NotificationRow
+      const referralIdRaw = row.data?.referral_id
+      return {
+        id: row.id,
+        title: row.title,
+        message: row.message,
+        type: row.notification_type,
+        isRead: row.is_read,
+        createdAt: new Date(row.created_at),
+        referralId:
+          typeof referralIdRaw === "string" && referralIdRaw.trim() !== ""
+            ? referralIdRaw
+            : undefined,
+      }
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    devWarnAdminNotifications(`exceção: ${msg}`)
+    return null
+  }
+}
+
+export async function markNotificationAsRead(
+  notificationId: string
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    devLogAdminNotifications("markAsRead auth.getUser", {
+      hasUser: Boolean(user && !authError),
+      userId: user?.id ?? null,
+      authError: authError?.message ?? null,
+      notificationId,
+    })
+
+    if (authError || !user) {
+      return { ok: false, message: "Sessão inválida. Faça login novamente." }
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (
+      profileError ||
+      !profile ||
+      !role ||
+      !ADMIN_ROLES_ALLOWED_NOTIFICATIONS.has(role)
+    ) {
+      return {
+        ok: false,
+        message: "Acesso negado para marcar notificação como lida.",
+      }
+    }
+
+    const { data: updatedRows, error: updateError } = await db
+      .from("notifications")
+      .update({
+        is_read: true,
+        read_at: new Date().toISOString(),
+      })
+      .eq("id", notificationId)
+      .select("id, is_read, read_at")
+
+    devLogAdminNotifications("resultado markAsRead", {
+      notificationId,
+      error: updateError?.message ?? null,
+      code: updateError?.code ?? null,
+      rowCount: updatedRows?.length ?? 0,
+      rows: updatedRows ?? [],
+    })
+
+    if (updateError) {
+      return {
+        ok: false,
+        message:
+          updateError.message || "Não foi possível marcar a notificação como lida.",
+      }
+    }
+
+    return { ok: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return { ok: false, message: msg }
+  }
+}
+
 /**
  * Insere uma indicação para o usuário autenticado. Não usa DATA_PROVIDER.
  */
