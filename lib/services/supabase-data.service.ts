@@ -506,6 +506,11 @@ function devLogInsertReferral(...args: unknown[]): void {
 
 type ComercialAvailabilityRow = {
   commercial_profile_id: string
+  created_at: string
+}
+
+type ActiveReferralCountRow = {
+  commercial_profile_id: string | null
 }
 
 /**
@@ -550,18 +555,20 @@ export async function insertIndicadorReferral(
       from: (t: string) => ReturnType<typeof supabase.from>
     }
 
+    const availabilityStatusValue = "disponivel"
     // No schema local usamos availability_status='disponivel' como equivalente de is_available=true.
     const { data: comercialRows, error: comercialError } = await db
       .from("commercial_availability")
-      .select("commercial_profile_id")
-      .eq("availability_status", "disponivel")
-      .order("updated_at", { ascending: false })
+      .select("commercial_profile_id, created_at")
+      .eq("availability_status", availabilityStatusValue)
+      .order("created_at", { ascending: true })
 
-    devLogInsertReferral("comerciais disponíveis encontrados", {
+    devLogInsertReferral("resultado bruto query commercial_availability", {
+      filter: { availability_status: availabilityStatusValue },
       error: comercialError?.message ?? null,
       code: comercialError?.code ?? null,
       rowCount: comercialRows?.length ?? 0,
-      rows: comercialRows ?? [],
+      rawRows: comercialRows ?? [],
     })
 
     if (comercialError) {
@@ -571,19 +578,81 @@ export async function insertIndicadorReferral(
       }
     }
 
-    const selectedComercialId =
-      (comercialRows?.[0] as ComercialAvailabilityRow | undefined)
-        ?.commercial_profile_id ?? null
-    const referralStatus = selectedComercialId ? "em_atendimento" : "pendente"
+    const availableRows = (comercialRows ?? []) as ComercialAvailabilityRow[]
+    devLogInsertReferral("quantidade comerciais disponíveis", {
+      count: availableRows.length,
+    })
+    if (availableRows.length === 0) {
+      devLogInsertReferral(
+        "nenhum comercial disponível visível (possível efeito de RLS para usuário indicador)"
+      )
+    }
+
+    const availableIds = availableRows.map((row) => row.commercial_profile_id)
+
+    const leadCountByComercial = new Map<string, number>()
+    if (availableIds.length > 0) {
+      const { data: activeReferrals, error: activeReferralsError } = await db
+        .from("referrals")
+        .select("commercial_profile_id")
+        .in("commercial_profile_id", availableIds)
+        .in("status", ["em_atendimento", "pendente", "aprovada"])
+
+      devLogInsertReferral("contagem de leads por comercial (linhas ativas)", {
+        error: activeReferralsError?.message ?? null,
+        code: activeReferralsError?.code ?? null,
+        rowCount: activeReferrals?.length ?? 0,
+      })
+
+      if (activeReferralsError) {
+        return {
+          ok: false,
+          message:
+            activeReferralsError.message ||
+            "Não foi possível calcular carga de leads dos comerciais.",
+        }
+      }
+
+      for (const id of availableIds) {
+        leadCountByComercial.set(id, 0)
+      }
+      for (const raw of (activeReferrals ?? []) as ActiveReferralCountRow[]) {
+        if (!raw.commercial_profile_id) continue
+        const current = leadCountByComercial.get(raw.commercial_profile_id) ?? 0
+        leadCountByComercial.set(raw.commercial_profile_id, current + 1)
+      }
+    }
+
+    devLogInsertReferral("contagem consolidada de leads por comercial", {
+      counts: availableRows.map((row) => ({
+        commercial_profile_id: row.commercial_profile_id,
+        active_leads: leadCountByComercial.get(row.commercial_profile_id) ?? 0,
+        created_at: row.created_at,
+      })),
+    })
+
+    const selectedCommercial = [...availableRows].sort((a, b) => {
+      const countA = leadCountByComercial.get(a.commercial_profile_id) ?? 0
+      const countB = leadCountByComercial.get(b.commercial_profile_id) ?? 0
+      if (countA !== countB) return countA - countB
+
+      const createdAtCompare = a.created_at.localeCompare(b.created_at)
+      if (createdAtCompare !== 0) return createdAtCompare
+      return a.commercial_profile_id.localeCompare(b.commercial_profile_id)
+    })[0]
+
+    const selectedCommercialId = selectedCommercial?.commercial_profile_id ?? null
+    const referralStatus = selectedCommercialId ? "em_atendimento" : "pendente"
 
     devLogInsertReferral("comercial selecionado", {
-      selectedComercialId,
+      selectedCommercialId,
+      selectedActiveLeadCount: selectedCommercialId
+        ? (leadCountByComercial.get(selectedCommercialId) ?? 0)
+        : null,
       referralStatus,
     })
 
-    const { data: insertedRows, error: insertError } = await db
-      .from("referrals")
-      .insert({
+    const insertPayload = {
       indicator_profile_id: user.id,
       referred_name: input.referred_name.trim(),
       referred_phone: input.referred_phone.trim(),
@@ -592,9 +661,14 @@ export async function insertIndicadorReferral(
       plan_id: input.plan_id,
       reward_type: input.reward_type,
       reward_amount: input.reward_amount,
-      commercial_profile_id: selectedComercialId,
+      commercial_profile_id: selectedCommercialId,
       status: referralStatus,
-    })
+    }
+    devLogInsertReferral("payload final do insert", insertPayload)
+
+    const { data: insertedRows, error: insertError } = await db
+      .from("referrals")
+      .insert(insertPayload)
       .select("id, commercial_profile_id, status")
 
     devLogInsertReferral("resultado insert referrals", {
@@ -614,16 +688,20 @@ export async function insertIndicadorReferral(
     const insertedReferralId =
       (insertedRows?.[0] as { id: string } | undefined)?.id ?? null
 
-    if (insertedReferralId && selectedComercialId) {
+    if (insertedReferralId && selectedCommercialId) {
       const { data: histRows, error: histError } = await db
         .from("referral_history")
         .insert({
           referral_id: insertedReferralId,
-          actor_profile_id: selectedComercialId,
+          actor_profile_id: selectedCommercialId,
           old_status: "pendente",
           new_status: "em_atendimento",
           action_note: "Lead atribuído automaticamente",
-          metadata: { action: "auto_assign" },
+          metadata: {
+            action: "auto_assign",
+            strategy: "least_active_leads",
+            selected_commercial_id: selectedCommercialId,
+          },
         })
         .select("id, referral_id, old_status, new_status, action_note, metadata")
 
@@ -645,7 +723,7 @@ export async function insertIndicadorReferral(
     } else {
       devLogInsertReferral("sem autoatribuição; histórico não criado", {
         insertedReferralId,
-        selectedComercialId,
+        selectedCommercialId,
       })
     }
 
