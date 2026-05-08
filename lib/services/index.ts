@@ -11,6 +11,7 @@ export {
   fetchActivePlansForIndicador,
   getCurrentUserProfile,
   insertIndicadorReferral,
+  loadAdminDashboardMetricsFromSupabase,
   loadComercialLeadsFromSupabase,
   loadAdminNotificationsFromSupabase,
   loadIndicadorHomeFromSupabase,
@@ -21,6 +22,7 @@ export {
 } from './supabase-data.service'
 export type {
   AdminNotificationItem,
+  AdminDashboardMetrics,
   ProcessExpiredLeadAssignmentsError,
   ProcessExpiredLeadAssignmentsResult,
   IndicadorHomeFromSupabase,

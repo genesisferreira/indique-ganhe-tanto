@@ -1,51 +1,107 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { indicacoes, indicadores, comerciais, pagamentos } from "@/lib/services/mock-data.service"
-import type { Indicacao, Indicador, Comercial, Pagamento } from "@/types"
+import { loadAdminDashboardMetricsFromSupabase, type AdminDashboardMetrics } from "@/lib/services"
 import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts"
 
+function isDev(): boolean {
+  return process.env.NODE_ENV === "development"
+}
+
 export default function AdminDashboard() {
-  const totalIndicadores = indicadores.length
-  const indicadoresAtivos = indicadores.filter((i: Indicador) => i.ativo !== false).length
-  const totalComerciais = comerciais.length
-  const comerciaisDisponiveis = comerciais.filter((c: Comercial) => c.ativo !== false).length
-  
-  const totalIndicacoes = indicacoes.length
-  const indicacoesAprovadas = indicacoes.filter((i: Indicacao) => i.status === "aprovada").length
+  const fallbackMetrics: AdminDashboardMetrics = {
+    totalReferrals: 157,
+    pendingReferrals: 12,
+    inAttendanceReferrals: 19,
+    approvedReferrals: 126,
+    rejectedReferrals: 0,
+    slaExpiredReferrals: 0,
+    unreadNotifications: 0,
+    totalCommercials: 4,
+    availableCommercials: 3,
+    todayReferrals: 7,
+    totalIndicators: 5,
+    activeIndicators: 5,
+    pendingPaymentsValue: 2345.6,
+    pendingPaymentsCount: 15,
+    totalPaidValue: 12590.3,
+    monthlyData: [
+      { mes: "Jan", indicacoes: 45, conversoes: 18 },
+      { mes: "Fev", indicacoes: 52, conversoes: 22 },
+      { mes: "Mar", indicacoes: 61, conversoes: 28 },
+      { mes: "Abr", indicacoes: 58, conversoes: 25 },
+      { mes: "Mai", indicacoes: 72, conversoes: 32 },
+      { mes: "Jun", indicacoes: 68, conversoes: 30 },
+    ],
+    topIndicadores: [
+      { nome: "Ana", conversoes: 58, total: 67 },
+      { nome: "Maria", conversoes: 35, total: 42 },
+      { nome: "Joao", conversoes: 18, total: 25 },
+      { nome: "Lucas", conversoes: 10, total: 15 },
+      { nome: "Carla", conversoes: 5, total: 8 },
+    ],
+  }
+
+  const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>(fallbackMetrics)
+
+  useEffect(() => {
+    let mounted = true
+
+    const loadMetrics = async () => {
+      const metricsFromSupabase = await loadAdminDashboardMetricsFromSupabase()
+      if (!mounted) return
+
+      if (!metricsFromSupabase) {
+        if (isDev()) {
+          console.warn("[admin-dashboard] fallback mock mantido (Supabase indisponível)")
+        }
+        return
+      }
+
+      if (isDev()) {
+        console.log("[admin-dashboard] métricas recebidas do Supabase", metricsFromSupabase)
+      }
+      setDashboardMetrics(metricsFromSupabase)
+    }
+
+    void loadMetrics()
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const totalIndicadores = dashboardMetrics.totalIndicators
+  const indicadoresAtivos = dashboardMetrics.activeIndicators
+  const totalComerciais = dashboardMetrics.totalCommercials
+  const comerciaisDisponiveis = dashboardMetrics.availableCommercials
+  const totalIndicacoes = dashboardMetrics.totalReferrals
+  const indicacoesAprovadas = dashboardMetrics.approvedReferrals
   const taxaConversao = totalIndicacoes > 0 ? ((indicacoesAprovadas / totalIndicacoes) * 100).toFixed(1) : "0"
-  
-  const pagamentosPendentes = pagamentos.filter((p: Pagamento) => p.status === "pendente")
-  const totalPendente = pagamentosPendentes.reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
-  const totalPago = pagamentos.filter((p: Pagamento) => p.status === "pago").reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
+  const pagamentosPendentes = dashboardMetrics.pendingPaymentsCount
+  const totalPendente = dashboardMetrics.pendingPaymentsValue
+  const totalPago = dashboardMetrics.totalPaidValue
 
   const statusData = [
-    { name: "Pendente", value: indicacoes.filter((i: Indicacao) => i.status === "pendente").length, color: "#f59e0b" },
-    { name: "Em Andamento", value: indicacoes.filter((i: Indicacao) => i.status === "em_andamento").length, color: "#3b82f6" },
-    { name: "Aprovada", value: indicacoes.filter((i: Indicacao) => i.status === "aprovada").length, color: "#22c55e" },
-    { name: "Recusada", value: indicacoes.filter((i: Indicacao) => i.status === "recusada").length, color: "#ef4444" },
+    { name: "Pendente", value: dashboardMetrics.pendingReferrals, color: "#f59e0b" },
+    { name: "Em Andamento", value: dashboardMetrics.inAttendanceReferrals, color: "#3b82f6" },
+    { name: "Aprovada", value: dashboardMetrics.approvedReferrals, color: "#22c55e" },
+    { name: "Recusada", value: dashboardMetrics.rejectedReferrals, color: "#ef4444" },
   ]
+  const monthlyData = dashboardMetrics.monthlyData
+  const topIndicadores = dashboardMetrics.topIndicadores
 
-  const monthlyData = [
-    { mes: "Jan", indicacoes: 45, conversoes: 18 },
-    { mes: "Fev", indicacoes: 52, conversoes: 22 },
-    { mes: "Mar", indicacoes: 61, conversoes: 28 },
-    { mes: "Abr", indicacoes: 58, conversoes: 25 },
-    { mes: "Mai", indicacoes: 72, conversoes: 32 },
-    { mes: "Jun", indicacoes: 68, conversoes: 30 },
-  ]
-
-  const topIndicadores = indicadores
-    .sort((a: Indicador, b: Indicador) => b.indicacoesAprovadas - a.indicacoesAprovadas)
-    .slice(0, 5)
-    .map((i: Indicador) => ({
-      nome: i.nome.split(" ")[0],
-      conversoes: i.indicacoesAprovadas,
-      total: i.totalIndicacoes,
-    }))
+  useEffect(() => {
+    if (!isDev()) return
+    console.log("[admin-dashboard] dados finais gráficos", {
+      statusData,
+      monthlyData,
+      topIndicadores,
+    })
+  }, [statusData, monthlyData, topIndicadores])
 
   return (
     <div className="space-y-6">
@@ -72,7 +128,7 @@ export default function AdminDashboard() {
         <StatCard
           title="Pagamentos Pendentes"
           value={`R$ ${totalPendente.toLocaleString("pt-BR")}`}
-          subtitle={`${pagamentosPendentes.length} solicitacoes`}
+          subtitle={`${pagamentosPendentes} solicitacoes`}
           icon={Clock}
           variant="warning"
         />
@@ -229,7 +285,7 @@ export default function AdminDashboard() {
                   <p className="text-sm text-muted-foreground">Meta: 10</p>
                 </div>
               </div>
-              <span className="text-2xl font-bold">7</span>
+              <span className="text-2xl font-bold">{dashboardMetrics.todayReferrals}</span>
             </div>
 
             <div className="flex items-center justify-between rounded-lg bg-muted/30 p-4">
@@ -242,7 +298,7 @@ export default function AdminDashboard() {
                   <p className="text-sm text-muted-foreground">Aguardando atendimento</p>
                 </div>
               </div>
-              <span className="text-2xl font-bold">{indicacoes.filter((i: Indicacao) => i.status === "pendente").length}</span>
+              <span className="text-2xl font-bold">{dashboardMetrics.pendingReferrals}</span>
             </div>
           </CardContent>
         </Card>

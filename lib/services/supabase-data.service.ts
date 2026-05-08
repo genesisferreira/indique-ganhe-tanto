@@ -573,6 +573,34 @@ export type AdminNotificationItem = {
   referralId?: string
 }
 
+export type AdminDashboardMetrics = {
+  totalReferrals: number
+  pendingReferrals: number
+  inAttendanceReferrals: number
+  approvedReferrals: number
+  rejectedReferrals: number
+  slaExpiredReferrals: number
+  unreadNotifications: number
+  totalCommercials: number
+  availableCommercials: number
+  todayReferrals: number
+  totalIndicators: number
+  activeIndicators: number
+  pendingPaymentsValue: number
+  pendingPaymentsCount: number
+  totalPaidValue: number
+  monthlyData: Array<{
+    mes: string
+    indicacoes: number
+    conversoes: number
+  }>
+  topIndicadores: Array<{
+    nome: string
+    conversoes: number
+    total: number
+  }>
+}
+
 export type ProcessExpiredLeadAssignmentsResult = {
   ok: true
   scanned: number
@@ -962,6 +990,388 @@ export async function loadAdminNotificationsFromSupabase(): Promise<
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     devWarnAdminNotifications(`exceção: ${msg}`)
+    return null
+  }
+}
+
+const ADMIN_DASHBOARD_LOG_PREFIX = "[admin-dashboard:supabase]"
+
+function devLogAdminDashboard(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(ADMIN_DASHBOARD_LOG_PREFIX, ...args)
+}
+
+function devWarnAdminDashboard(reason: string): void {
+  if (!isDev()) return
+  console.warn(ADMIN_DASHBOARD_LOG_PREFIX, "fallback mock →", reason)
+}
+
+export async function loadAdminDashboardMetricsFromSupabase(): Promise<AdminDashboardMetrics | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    devLogAdminDashboard("auth.getUser", {
+      hasUser: Boolean(user && !authError),
+      userId: user?.id ?? null,
+      authError: authError?.message ?? null,
+    })
+
+    if (authError || !user) {
+      devWarnAdminDashboard(
+        authError ? `sem sessão válida: ${authError.message}` : "sem usuário autenticado"
+      )
+      return null
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    devLogAdminDashboard("profile", {
+      hasProfile: Boolean(profile && !profileError),
+      role,
+      error: profileError?.message ?? null,
+      code: profileError?.code ?? null,
+    })
+
+    if (
+      profileError ||
+      !profile ||
+      !role ||
+      !ADMIN_ROLES_ALLOWED_NOTIFICATIONS.has(role)
+    ) {
+      devWarnAdminDashboard(
+        profileError
+          ? `profiles falhou: ${profileError.message} (${profileError.code ?? "sem código"})`
+          : `role sem permissão para dashboard admin: "${role}"`
+      )
+      return null
+    }
+
+    const fetchCount = async (
+      metricName: keyof AdminDashboardMetrics,
+      buildQuery: () => ReturnType<typeof db.from>
+    ): Promise<number | null> => {
+      const { count, error } = await buildQuery()
+      devLogAdminDashboard(`métrica ${metricName}`, {
+        value: count ?? 0,
+        error: error?.message ?? null,
+        code: error?.code ?? null,
+      })
+      if (error) {
+        devWarnAdminDashboard(
+          `${metricName} falhou: ${error.message} (${error.code ?? "sem código"})`
+        )
+        return null
+      }
+      return count ?? 0
+    }
+
+    const startOfToday = new Date()
+    startOfToday.setHours(0, 0, 0, 0)
+    const startOfTomorrow = new Date(startOfToday)
+    startOfTomorrow.setDate(startOfTomorrow.getDate() + 1)
+    const slaCutoffIso = new Date(Date.now() - 15 * 60 * 1000).toISOString()
+
+    const totalReferrals = await fetchCount("totalReferrals", () =>
+      db.from("referrals").select("id", { count: "exact", head: true })
+    )
+    if (totalReferrals === null) return null
+
+    const pendingReferrals = await fetchCount("pendingReferrals", () =>
+      db
+        .from("referrals")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "pendente")
+    )
+    if (pendingReferrals === null) return null
+
+    const inAttendanceReferrals = await fetchCount("inAttendanceReferrals", () =>
+      db
+        .from("referrals")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "em_atendimento")
+    )
+    if (inAttendanceReferrals === null) return null
+
+    const approvedReferrals = await fetchCount("approvedReferrals", () =>
+      db
+        .from("referrals")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "aprovada")
+    )
+    if (approvedReferrals === null) return null
+
+    const rejectedReferrals = await fetchCount("rejectedReferrals", () =>
+      db
+        .from("referrals")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "recusada")
+    )
+    if (rejectedReferrals === null) return null
+
+    const slaExpiredReferrals = await fetchCount("slaExpiredReferrals", () =>
+      db
+        .from("referrals")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "em_atendimento")
+        .is("first_response_at", null)
+        .lt("assigned_at", slaCutoffIso)
+    )
+    if (slaExpiredReferrals === null) return null
+
+    const unreadNotifications = await fetchCount("unreadNotifications", () =>
+      db
+        .from("notifications")
+        .select("id", { count: "exact", head: true })
+        .eq("is_read", false)
+    )
+    if (unreadNotifications === null) return null
+
+    const { data: roleRows, error: roleRowsError } = await db
+      .from("profiles")
+      .select("id, role")
+    devLogAdminDashboard("profiles roles (raw)", {
+      rowCount: roleRows?.length ?? 0,
+      error: roleRowsError?.message ?? null,
+      code: roleRowsError?.code ?? null,
+    })
+    if (roleRowsError) {
+      devWarnAdminDashboard(
+        `profiles roles falhou: ${roleRowsError.message} (${roleRowsError.code ?? "sem código"})`
+      )
+      return null
+    }
+    const profileRows = (roleRows ?? []) as Array<{ id: string; role: string }>
+    const roleDistribution = profileRows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.role] = (acc[row.role] ?? 0) + 1
+      return acc
+    }, {})
+    devLogAdminDashboard("profiles role distribution", roleDistribution)
+    const commercialIdsByRole = new Set(
+      profileRows.filter((p) => p.role === "comercial").map((p) => p.id)
+    )
+
+    const { data: availabilityRows, error: availabilityError } = await db
+      .from("commercial_availability")
+      .select("commercial_profile_id, availability_status")
+    devLogAdminDashboard("commercial_availability (raw)", {
+      rowCount: availabilityRows?.length ?? 0,
+      error: availabilityError?.message ?? null,
+      code: availabilityError?.code ?? null,
+    })
+    if (availabilityError) {
+      devWarnAdminDashboard(
+        `commercial_availability falhou: ${availabilityError.message} (${availabilityError.code ?? "sem código"})`
+      )
+      return null
+    }
+    const availabilityList = (availabilityRows ?? []) as Array<{
+      commercial_profile_id: string
+      availability_status: string
+    }>
+    const allAvailabilityCommercialIds = new Set(
+      availabilityList.map((row) => row.commercial_profile_id)
+    )
+    const availableCommercialIds = new Set(
+      availabilityList
+        .filter((row) => row.availability_status === "disponivel")
+        .map((row) => row.commercial_profile_id)
+    )
+
+    const totalCommercialIds = new Set([
+      ...commercialIdsByRole,
+      ...allAvailabilityCommercialIds,
+    ])
+    const totalCommercials = totalCommercialIds.size
+    const availableCommercials = availableCommercialIds.size
+    devLogAdminDashboard("métrica totalCommercials", totalCommercials)
+    devLogAdminDashboard("métrica availableCommercials", availableCommercials)
+
+    const todayReferrals = await fetchCount("todayReferrals", () =>
+      db
+        .from("referrals")
+        .select("id", { count: "exact", head: true })
+        .gte("created_at", startOfToday.toISOString())
+        .lt("created_at", startOfTomorrow.toISOString())
+    )
+    if (todayReferrals === null) return null
+
+    const totalIndicators = await fetchCount("totalIndicators", () =>
+      db
+        .from("profiles")
+        .select("id", { count: "exact", head: true })
+        .eq("role", "indicador")
+    )
+    if (totalIndicators === null) return null
+
+    const activeIndicators = await fetchCount("activeIndicators", () =>
+      db
+        .from("profiles")
+        .select("id", { count: "exact", head: true })
+        .eq("role", "indicador")
+        .eq("is_active", true)
+    )
+    if (activeIndicators === null) return null
+
+    const { data: paymentRows, error: paymentError } = await db
+      .from("payments")
+      .select("amount, status")
+    devLogAdminDashboard("métrica payments (raw)", {
+      rowCount: paymentRows?.length ?? 0,
+      error: paymentError?.message ?? null,
+      code: paymentError?.code ?? null,
+    })
+    if (paymentError) {
+      devWarnAdminDashboard(
+        `payments falhou: ${paymentError.message} (${paymentError.code ?? "sem código"})`
+      )
+      return null
+    }
+    const paymentList = (paymentRows ?? []) as PaymentRow[]
+    const pendingPayments = paymentList.filter((p) => p.status === "pendente")
+    const pendingPaymentsValue = pendingPayments.reduce(
+      (sum, p) => sum + Number(p.amount),
+      0
+    )
+    const pendingPaymentsCount = pendingPayments.length
+    const totalPaidValue = paymentList
+      .filter((p) => p.status === "pago")
+      .reduce((sum, p) => sum + Number(p.amount), 0)
+    devLogAdminDashboard("métrica pendingPaymentsValue", pendingPaymentsValue)
+    devLogAdminDashboard("métrica pendingPaymentsCount", pendingPaymentsCount)
+    devLogAdminDashboard("métrica totalPaidValue", totalPaidValue)
+
+    const { data: referralRows, error: referralError } = await db
+      .from("referrals")
+      .select("created_at, status, indicator_profile_id")
+      .order("created_at", { ascending: false })
+    devLogAdminDashboard("métrica referrals para gráficos", {
+      rowCount: referralRows?.length ?? 0,
+      error: referralError?.message ?? null,
+      code: referralError?.code ?? null,
+    })
+    if (referralError) {
+      devWarnAdminDashboard(
+        `referrals para gráficos falhou: ${referralError.message} (${referralError.code ?? "sem código"})`
+      )
+      return null
+    }
+
+    const now = new Date()
+    const monthLabels = Array.from({ length: 6 }).map((_, index) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1)
+      return {
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+        mes: d.toLocaleDateString("pt-BR", { month: "short" }).replace(".", ""),
+      }
+    })
+    const monthlyAccumulator = new Map(
+      monthLabels.map((m) => [m.key, { mes: m.mes, indicacoes: 0, conversoes: 0 }])
+    )
+
+    const indicatorAgg = new Map<string, { total: number; conversoes: number }>()
+    for (const row of (referralRows ?? []) as Array<{
+      created_at: string
+      status: string
+      indicator_profile_id: string
+    }>) {
+      const created = new Date(row.created_at)
+      const monthKey = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, "0")}`
+      const monthEntry = monthlyAccumulator.get(monthKey)
+      if (monthEntry) {
+        monthEntry.indicacoes += 1
+        if (row.status === "aprovada") {
+          monthEntry.conversoes += 1
+        }
+      }
+
+      const current = indicatorAgg.get(row.indicator_profile_id) ?? { total: 0, conversoes: 0 }
+      current.total += 1
+      if (row.status === "aprovada") {
+        current.conversoes += 1
+      }
+      indicatorAgg.set(row.indicator_profile_id, current)
+    }
+
+    const indicatorIds = [...indicatorAgg.keys()]
+    let indicatorNameById = new Map<string, string>()
+    if (indicatorIds.length > 0) {
+      const { data: indicatorProfiles, error: indicatorProfilesError } = await db
+        .from("profiles")
+        .select("id, full_name")
+        .in("id", indicatorIds)
+
+      devLogAdminDashboard("métrica topIndicadores/profile names", {
+        rowCount: indicatorProfiles?.length ?? 0,
+        error: indicatorProfilesError?.message ?? null,
+        code: indicatorProfilesError?.code ?? null,
+      })
+      if (indicatorProfilesError) {
+        devWarnAdminDashboard(
+          `profiles para topIndicadores falhou: ${indicatorProfilesError.message} (${indicatorProfilesError.code ?? "sem código"})`
+        )
+        return null
+      }
+
+      indicatorNameById = new Map(
+        (indicatorProfiles ?? []).map((p: unknown) => {
+          const row = p as { id: string; full_name: string }
+          return [row.id, row.full_name]
+        })
+      )
+    }
+
+    const monthlyData = monthLabels.map(
+      (m) => monthlyAccumulator.get(m.key) ?? { mes: m.mes, indicacoes: 0, conversoes: 0 }
+    )
+    const topIndicadores = [...indicatorAgg.entries()]
+      .sort((a, b) => b[1].conversoes - a[1].conversoes || b[1].total - a[1].total)
+      .slice(0, 5)
+      .map(([id, agg]) => {
+        const nomeCompleto = indicatorNameById.get(id) ?? "Indicador"
+        return {
+          nome: nomeCompleto.split(" ")[0] ?? "Indicador",
+          conversoes: agg.conversoes,
+          total: agg.total,
+        }
+      })
+
+    devLogAdminDashboard("métrica monthlyData", monthlyData)
+    devLogAdminDashboard("métrica topIndicadores", topIndicadores)
+
+    return {
+      totalReferrals,
+      pendingReferrals,
+      inAttendanceReferrals,
+      approvedReferrals,
+      rejectedReferrals,
+      slaExpiredReferrals,
+      unreadNotifications,
+      totalCommercials,
+      availableCommercials,
+      todayReferrals,
+      totalIndicators,
+      activeIndicators,
+      pendingPaymentsValue,
+      pendingPaymentsCount,
+      totalPaidValue,
+      monthlyData,
+      topIndicadores,
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    devWarnAdminDashboard(`exceção: ${msg}`)
     return null
   }
 }
