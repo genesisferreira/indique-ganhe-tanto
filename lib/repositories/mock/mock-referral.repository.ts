@@ -1,4 +1,5 @@
 import type { ReferralRepository } from "@/lib/repositories/contracts/referral.repository"
+import type { MarkFirstInvoicePaidResult } from "@/types"
 import { mockDataService } from "@/lib/services/mock-data.service"
 
 export const mockReferralRepository: ReferralRepository = {
@@ -86,6 +87,40 @@ export const mockReferralRepository: ReferralRepository = {
   async assignToComercial() {
     await new Promise((resolve) => setTimeout(resolve, 200))
     return true
+  },
+
+  async markFirstInvoiceAsPaid(referralId): Promise<MarkFirstInvoicePaidResult> {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    const { indicacoes } = mockDataService.getSnapshot()
+    const indicacao = indicacoes.find((i) => i.id === referralId)
+    if (!indicacao) {
+      return {
+        ok: false,
+        code: "referral_not_found",
+        message: "Indicação não encontrada (mock).",
+      }
+    }
+    if (indicacao.primeiraFaturaPaga) {
+      return {
+        ok: false,
+        code: "already_paid",
+        message: "A primeira mensalidade deste cliente já foi confirmada.",
+      }
+    }
+    if (indicacao.status !== "aprovada" && indicacao.status !== "paga") {
+      return {
+        ok: false,
+        code: "reward_not_found",
+        message:
+          "Não há recompensa liberável: no mock a indicação precisa estar aprovada/vendida.",
+      }
+    }
+    return {
+      ok: true,
+      rewardId: `mock-reward-${referralId}`,
+      transactionId: `mock-wt-${Date.now()}`,
+      balanceAfter: indicacao.valorRecompensa,
+    }
   },
 
   async getStats(indicadorId) {

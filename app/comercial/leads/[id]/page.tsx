@@ -18,7 +18,9 @@ import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { leads, historicos } from "@/lib/services/mock-data.service"
 import {
+  getAuthProfileRoleFromSupabase,
   loadComercialLeadDetailsFromSupabase,
+  markFirstInvoiceAsPaidFromSupabase,
   updateComercialLeadStatus,
   type ComercialLeadUpdateStatus,
 } from "@/lib/services/supabase-data.service"
@@ -34,6 +36,7 @@ import {
   Send,
 } from "lucide-react"
 import type { LeadStatus } from "@/types"
+import type { UserRole } from "@/types/user"
 
 const statusOptions = [
   { value: "em_atendimento", label: "Em Atendimento" },
@@ -73,9 +76,14 @@ export default function DetalheLeadPage({
     mapLeadStatusToUpdateStatus(mockLead?.status || "novo")
   )
   const [isSaving, setIsSaving] = useState(false)
+  const [isConfirmingFirstInvoice, setIsConfirmingFirstInvoice] = useState(false)
+  const [authRole, setAuthRole] = useState<UserRole | null>(null)
   const [leadHistorico, setLeadHistorico] = useState(() =>
     historicos.filter((h) => h.leadId === id)
   )
+
+  const podeConfirmarPrimeiraMensalidade =
+    authRole === "admin_financeiro" || authRole === "admin_master"
 
   const reloadLeadData = async () => {
     const remote = await loadComercialLeadDetailsFromSupabase(id)
@@ -85,6 +93,25 @@ export default function DetalheLeadPage({
     setStatus(mapLeadStatusToUpdateStatus(remote.lead.status))
     setLeadHistorico(remote.historico)
     return true
+  }
+
+  const handleConfirmFirstInvoice = async () => {
+    if (!lead || isConfirmingFirstInvoice) return
+    setIsConfirmingFirstInvoice(true)
+    const result = await markFirstInvoiceAsPaidFromSupabase(lead.indicacaoId)
+    if (!result.ok) {
+      toast.error(result.message)
+      setIsConfirmingFirstInvoice(false)
+      return
+    }
+    const reloadOk = await reloadLeadData()
+    if (!reloadOk) {
+      toast.error("Operação concluída, mas não foi possível atualizar a visualização.")
+      setIsConfirmingFirstInvoice(false)
+      return
+    }
+    toast.success("Primeira mensalidade confirmada e recompensa liberada.")
+    setIsConfirmingFirstInvoice(false)
   }
 
   const handleSaveLeadUpdate = async () => {
@@ -122,6 +149,16 @@ export default function DetalheLeadPage({
       await reloadLeadData()
     })()
   }, [id])
+
+  useEffect(() => {
+    void (async () => {
+      const role = await getAuthProfileRoleFromSupabase()
+      setAuthRole(role)
+      if (process.env.NODE_ENV === "development") {
+        console.debug("[lead-detail] role do usuário autenticado", role)
+      }
+    })()
+  }, [])
 
   if (!lead || !lead.indicacao) {
     return (
@@ -370,6 +407,36 @@ export default function DetalheLeadPage({
               </div>
             </div>
           )}
+
+          {/* Primeira mensalidade */}
+          <div className="rounded-xl border bg-card p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">
+              Primeira mensalidade
+            </h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              {indicacao.primeiraFaturaPaga && indicacao.dataPrimeiraFaturaPaga
+                ? `Paga em ${indicacao.dataPrimeiraFaturaPaga.toLocaleDateString("pt-BR")}`
+                : indicacao.primeiraFaturaPaga
+                  ? "Paga (data não registrada)"
+                  : "Pendente"}
+            </p>
+            {podeConfirmarPrimeiraMensalidade &&
+              lead.status === "vendido" &&
+              !indicacao.primeiraFaturaPaga && (
+                <Button
+                  className="w-full"
+                  variant="secondary"
+                  disabled={isConfirmingFirstInvoice}
+                  onClick={() => {
+                    void handleConfirmFirstInvoice()
+                  }}
+                >
+                  {isConfirmingFirstInvoice
+                    ? "Confirmando..."
+                    : "Confirmar primeira mensalidade paga"}
+                </Button>
+              )}
+          </div>
 
           {/* Timing */}
           <div className="rounded-xl border bg-card p-6">

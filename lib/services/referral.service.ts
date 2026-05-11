@@ -1,9 +1,10 @@
-import type { 
-  Indicacao, 
-  IndicacaoCreateData, 
-  IndicacaoUpdateData, 
+import type {
+  Indicacao,
+  IndicacaoCreateData,
+  IndicacaoUpdateData,
   IndicacaoFilters,
-  IndicacaoStatus 
+  IndicacaoStatus,
+  MarkFirstInvoicePaidResult,
 } from '@/types'
 // import { createClient } from '@/lib/supabase/client'
 import { referralRepository } from '@/lib/repositories'
@@ -74,5 +75,12 @@ export const referralService = {
    */
   async getStats(indicadorId?: string): Promise<ReferralStats> {
     return referralRepository.getStats(indicadorId)
+  },
+
+  /**
+   * Confirma pagamento da primeira mensalidade do cliente indicado (libera recompensa + carteira).
+   */
+  async markFirstInvoiceAsPaid(referralId: string): Promise<MarkFirstInvoicePaidResult> {
+    return referralRepository.markFirstInvoiceAsPaid(referralId)
   },
 }

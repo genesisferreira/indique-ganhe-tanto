@@ -4,6 +4,7 @@ import type {
   IndicacaoFilters,
   IndicacaoStatus,
   IndicacaoUpdateData,
+  MarkFirstInvoicePaidResult,
 } from "@/types"
 import type { PaginatedResponse } from "./user.repository"
 
@@ -29,4 +30,5 @@ export interface ReferralRepository {
   updateStatus(id: string, status: IndicacaoStatus, comercialId?: string): Promise<boolean>
   assignToComercial(indicacaoId: string, comercialId: string): Promise<boolean>
   getStats(indicadorId?: string): Promise<ReferralStats>
+  markFirstInvoiceAsPaid(referralId: string): Promise<MarkFirstInvoicePaidResult>
 }

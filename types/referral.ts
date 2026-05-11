@@ -22,6 +22,8 @@ export interface Indicacao {
   comercial?: Comercial
   observacoes?: string
   primeiraFaturaPaga?: boolean
+  /** Data em que o financeiro confirmou o pagamento da 1ª mensalidade do cliente indicado */
+  dataPrimeiraFaturaPaga?: Date
   dataAprovacao?: Date
   dataRecusa?: Date
   motivoRecusa?: string
@@ -57,3 +59,17 @@ export interface IndicacaoFilters {
   dataFim?: Date
   search?: string
 }
+
+export type MarkFirstInvoicePaidErrorCode =
+  | "forbidden"
+  | "referral_not_found"
+  | "already_paid"
+  | "reward_not_found"
+  | "reward_not_pending"
+  | "already_released"
+  | "rpc_error"
+  | "unknown"
+
+export type MarkFirstInvoicePaidResult =
+  | { ok: true; rewardId: string; transactionId: string; balanceAfter: number }
+  | { ok: false; code: MarkFirstInvoicePaidErrorCode; message: string }

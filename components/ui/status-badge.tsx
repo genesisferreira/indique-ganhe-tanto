@@ -19,6 +19,7 @@ type StatusType =
   | "aprovado"
   | "pago"
   | "cancelado"
+  | "rejeitado"
 
 interface StatusBadgeProps {
   status: StatusType
@@ -99,6 +100,10 @@ const statusConfig: Record<
   },
   cancelado: {
     label: "Cancelado",
+    className: "bg-destructive/20 text-destructive border-destructive/30",
+  },
+  rejeitado: {
+    label: "Rejeitado",
     className: "bg-destructive/20 text-destructive border-destructive/30",
   },
 }

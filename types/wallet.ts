@@ -20,6 +20,7 @@ export interface Transacao {
   saldoPosterior: number
   descricao: string
   referencia?: string // ID da indicação ou pagamento
+  rewardId?: string
   createdAt: Date
 }
 

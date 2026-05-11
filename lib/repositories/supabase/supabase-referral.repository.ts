@@ -1,4 +1,5 @@
 import type { ReferralRepository } from "@/lib/repositories/contracts/referral.repository"
+import { markFirstInvoiceAsPaidFromSupabase } from "@/lib/services/supabase-data.service"
 
 export const supabaseReferralRepository: ReferralRepository = {
   async create() {
@@ -24,5 +25,8 @@ export const supabaseReferralRepository: ReferralRepository = {
   },
   async getStats() {
     throw new Error("supabaseReferralRepository.getStats not implemented")
+  },
+  async markFirstInvoiceAsPaid(referralId) {
+    return markFirstInvoiceAsPaidFromSupabase(referralId)
   },
 }

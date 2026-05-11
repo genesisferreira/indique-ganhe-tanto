@@ -82,6 +82,7 @@ function buildIndicacoes(
     plano: planosMap.get(indicacao.planoId),
     dataAprovacao: toDate(indicacao.dataAprovacao),
     dataRecusa: toDate(indicacao.dataRecusa),
+    dataPrimeiraFaturaPaga: toDate(indicacao.dataPrimeiraFaturaPaga),
     createdAt: toDate(indicacao.createdAt) as Date,
     updatedAt: toDate(indicacao.updatedAt) as Date,
   }))
@@ -95,7 +96,9 @@ function buildPagamentos(
   return pagamentosRaw.map((pagamento) => ({
     ...pagamento,
     indicador: indicadoresMap.get(pagamento.indicadorId),
-    indicacao: indicacoesMap.get(pagamento.indicacaoId),
+    indicacao: pagamento.indicacaoId
+      ? indicacoesMap.get(pagamento.indicacaoId)
+      : undefined,
     dataVencimento: toDate(pagamento.dataVencimento) as Date,
     dataPagamento: toDate(pagamento.dataPagamento),
     createdAt: toDate(pagamento.createdAt) as Date,

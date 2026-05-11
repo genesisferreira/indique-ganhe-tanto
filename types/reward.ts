@@ -6,7 +6,7 @@ export interface Recompensa {
   indicadorId: string
   tipo: RecompensaTipo
   valor: number
-  status: 'pendente' | 'disponivel' | 'solicitado' | 'pago'
+  status: 'pendente' | 'disponivel' | 'solicitado' | 'pago' | 'cancelado'
   dataDisponivel?: Date
   dataSolicitacao?: Date
   dataPagamento?: Date

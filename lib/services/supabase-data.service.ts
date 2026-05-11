@@ -1,8 +1,17 @@
 import { getSupabaseClient } from "@/lib/supabase/client"
+import { PAYMENT_RECEIPTS_BUCKET } from "@/lib/supabase/upload-payment-receipt"
 import type { DashboardIndicador } from "@/types/dashboard"
 import type { Historico, Lead, LeadStatus } from "@/types/lead"
 import type { Indicador } from "@/types/profile"
-import type { Indicacao, IndicacaoStatus, RecompensaTipo } from "@/types/referral"
+import type {
+  Indicacao,
+  IndicacaoStatus,
+  MarkFirstInvoicePaidErrorCode,
+  MarkFirstInvoicePaidResult,
+  RecompensaTipo,
+} from "@/types/referral"
+import type { UserRole } from "@/types/user"
+import type { Pagamento, PagamentoKind, PagamentoStatus } from "@/types/payment"
 import type { Plano } from "@/types/plan"
 
 type ProfileRow = {
@@ -31,6 +40,7 @@ type ReferralRow = {
   commercial_profile_id: string | null
   notes: string | null
   first_invoice_paid: boolean
+  first_invoice_paid_at: string | null
   approved_at: string | null
   rejected_at: string | null
   rejection_reason: string | null
@@ -110,6 +120,9 @@ function referralToIndicacao(row: ReferralRow, indicadorId: string): Indicacao {
     comercialId: row.commercial_profile_id ?? undefined,
     observacoes: row.notes ?? undefined,
     primeiraFaturaPaga: row.first_invoice_paid,
+    dataPrimeiraFaturaPaga: row.first_invoice_paid_at
+      ? new Date(row.first_invoice_paid_at)
+      : undefined,
     dataAprovacao: row.approved_at ? new Date(row.approved_at) : undefined,
     dataRecusa: row.rejected_at ? new Date(row.rejected_at) : undefined,
     motivoRecusa: row.rejection_reason ?? undefined,
@@ -149,6 +162,9 @@ function referralRowToIndicacaoMerged(
     comercialId: row.commercial_profile_id ?? undefined,
     observacoes: row.notes ?? undefined,
     primeiraFaturaPaga: row.first_invoice_paid,
+    dataPrimeiraFaturaPaga: row.first_invoice_paid_at
+      ? new Date(row.first_invoice_paid_at)
+      : undefined,
     dataAprovacao: row.approved_at ? new Date(row.approved_at) : undefined,
     dataRecusa: row.rejected_at ? new Date(row.rejected_at) : undefined,
     motivoRecusa: row.rejection_reason ?? undefined,
@@ -160,7 +176,8 @@ function referralRowToIndicacaoMerged(
 function buildDashboardFromRows(
   referrals: ReferralRow[],
   payments: PaymentRow[],
-  rewards: RewardRow[]
+  rewards: RewardRow[],
+  options?: { latestWalletBalance: number | null }
 ): DashboardIndicador {
   const totalIndicacoes = referrals.length
   let emAndamento = 0
@@ -181,13 +198,43 @@ function buildDashboardFromRows(
     else if (p.status === "pendente" || p.status === "aprovado") totalAReceber += amt
   }
 
+  let recompensasPendentesCount = 0
+  let recompensasDisponiveisCount = 0
+  let valorRecompensasPendentes = 0
+  let valorRecompensasDisponiveis = 0
+  for (const rw of rewards) {
+    const amt = Number(rw.amount)
+    if (rw.status === "pendente") {
+      recompensasPendentesCount += 1
+      valorRecompensasPendentes += amt
+    }
+    if (rw.status === "disponivel" || rw.status === "solicitado") {
+      recompensasDisponiveisCount += 1
+      valorRecompensasDisponiveis += amt
+    }
+  }
+
   let saldoDisponivel = 0
   let saldoEmDesconto = 0
-  for (const rw of rewards) {
-    if (rw.status !== "disponivel" && rw.status !== "solicitado") continue
-    const amt = Number(rw.amount)
-    if (rw.reward_type === "desconto_fatura") saldoEmDesconto += amt
-    else saldoDisponivel += amt
+  const walletSaldo =
+    options?.latestWalletBalance !== undefined && options.latestWalletBalance !== null
+      ? options.latestWalletBalance
+      : null
+
+  if (walletSaldo !== null) {
+    saldoDisponivel = walletSaldo
+    for (const rw of rewards) {
+      if (rw.status !== "disponivel" && rw.status !== "solicitado") continue
+      const amt = Number(rw.amount)
+      if (rw.reward_type === "desconto_fatura") saldoEmDesconto += amt
+    }
+  } else {
+    for (const rw of rewards) {
+      if (rw.status !== "disponivel" && rw.status !== "solicitado") continue
+      const amt = Number(rw.amount)
+      if (rw.reward_type === "desconto_fatura") saldoEmDesconto += amt
+      else saldoDisponivel += amt
+    }
   }
 
   return {
@@ -199,6 +246,10 @@ function buildDashboardFromRows(
     totalAReceber,
     saldoDisponivel,
     saldoEmDesconto,
+    recompensasPendentesCount,
+    recompensasDisponiveisCount,
+    valorRecompensasPendentes,
+    valorRecompensasDisponiveis,
   }
 }
 
@@ -355,6 +406,7 @@ export async function loadIndicadorHomeFromSupabase(): Promise<IndicadorHomeFrom
         commercial_profile_id,
         notes,
         first_invoice_paid,
+        first_invoice_paid_at,
         approved_at,
         rejected_at,
         rejection_reason,
@@ -414,10 +466,38 @@ export async function loadIndicadorHomeFromSupabase(): Promise<IndicadorHomeFrom
       )
     }
 
+    const { data: wtLatest, error: wtLatestError } = await supabase
+      .from("wallet_transactions")
+      .select("balance_after")
+      .eq("indicator_profile_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    devLog("query wallet_transactions (último saldo)", {
+      error: wtLatestError?.message ?? null,
+      code: wtLatestError?.code ?? null,
+      hasRow: wtLatest != null,
+    })
+
     const payments = (payData ?? []) as PaymentRow[]
     const rewards = (rewData ?? []) as RewardRow[]
 
-    const dashboard = buildDashboardFromRows(referrals, payments, rewards)
+    let latestWalletBalance: number | undefined
+    if (!wtLatestError && wtLatest) {
+      latestWalletBalance = Number(
+        (wtLatest as { balance_after: number | string }).balance_after
+      )
+    }
+
+    const dashboard = buildDashboardFromRows(
+      referrals,
+      payments,
+      rewards,
+      latestWalletBalance !== undefined
+        ? { latestWalletBalance }
+        : undefined
+    )
     const indicador = buildIndicadorFromProfile(row, referrals, dashboard)
     const recentIndicacoes = referrals
       .slice(0, 5)
@@ -1772,6 +1852,7 @@ export async function loadIndicadorReferralsListFromSupabase(): Promise<
         commercial_profile_id,
         notes,
         first_invoice_paid,
+        first_invoice_paid_at,
         approved_at,
         rejected_at,
         rejection_reason,
@@ -1911,6 +1992,7 @@ export async function loadIndicadorReferralDetailFromSupabase(
         commercial_profile_id,
         notes,
         first_invoice_paid,
+        first_invoice_paid_at,
         approved_at,
         rejected_at,
         rejection_reason,
@@ -2195,6 +2277,7 @@ export async function loadComercialLeadsFromSupabase(): Promise<Lead[] | null> {
         commercial_profile_id,
         notes,
         first_invoice_paid,
+        first_invoice_paid_at,
         approved_at,
         rejected_at,
         rejection_reason,
@@ -2377,11 +2460,16 @@ export async function loadComercialLeadDetailsFromSupabase(
       code: profileError?.code ?? null,
     })
 
-    if (profileError || !profile || role !== "comercial") {
+    const podeVerDetalheComercialLead =
+      role === "comercial" ||
+      role === "admin_financeiro" ||
+      role === "admin_master"
+
+    if (profileError || !profile || !podeVerDetalheComercialLead) {
       devWarnComercialLeadDetailMock(
         profileError
           ? `profiles falhou: ${profileError.message} (${profileError.code ?? "sem código"})`
-          : `role não autorizada: "${role}"`
+          : `role não autorizada para detalhe de lead: "${role}"`
       )
       return { kind: "error" }
     }
@@ -2403,6 +2491,7 @@ export async function loadComercialLeadDetailsFromSupabase(
         commercial_profile_id,
         notes,
         first_invoice_paid,
+        first_invoice_paid_at,
         approved_at,
         rejected_at,
         rejection_reason,
@@ -2620,6 +2709,146 @@ export async function loadComercialLeadDetailsFromSupabase(
   }
 }
 
+// --- Primeira mensalidade (financeiro) --------------------------------------------
+
+const FIRST_INVOICE_PAID_LOG_PREFIX = "[first-invoice-paid:supabase]"
+
+function devLogFirstInvoicePaid(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(FIRST_INVOICE_PAID_LOG_PREFIX, ...args)
+}
+
+/**
+ * Role do perfil autenticado (para UI condicional no cliente).
+ */
+export async function getAuthProfileRoleFromSupabase(): Promise<UserRole | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return null
+    const { data: row, error } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    if (error || !row) return null
+    return (row as { role: UserRole }).role
+  } catch {
+    return null
+  }
+}
+
+const MARK_FIRST_INVOICE_ERROR_CODES: MarkFirstInvoicePaidErrorCode[] = [
+  "forbidden",
+  "referral_not_found",
+  "already_paid",
+  "reward_not_found",
+  "reward_not_pending",
+  "already_released",
+  "rpc_error",
+  "unknown",
+]
+
+function parseMarkFirstInvoiceRpcPayload(
+  raw: unknown
+): MarkFirstInvoicePaidResult {
+  if (!raw || typeof raw !== "object") {
+    return {
+      ok: false,
+      code: "unknown",
+      message: "Resposta inesperada do servidor.",
+    }
+  }
+  const payload = raw as Record<string, unknown>
+  if (payload.ok === false) {
+    const codeRaw = payload.code
+    const messageRaw = payload.message
+    const code =
+      typeof codeRaw === "string" &&
+      MARK_FIRST_INVOICE_ERROR_CODES.includes(codeRaw as MarkFirstInvoicePaidErrorCode)
+        ? (codeRaw as MarkFirstInvoicePaidErrorCode)
+        : "unknown"
+    return {
+      ok: false,
+      code,
+      message:
+        typeof messageRaw === "string"
+          ? messageRaw
+          : "Não foi possível concluir a operação.",
+    }
+  }
+  if (payload.ok === true) {
+    const rewardId = String(payload.reward_id ?? "")
+    const transactionId = String(payload.transaction_id ?? "")
+    const balanceAfter = Number(payload.balance_after ?? 0)
+    if (!rewardId || !transactionId) {
+      return {
+        ok: false,
+        code: "unknown",
+        message: "Resposta incompleta do servidor.",
+      }
+    }
+    return { ok: true, rewardId, transactionId, balanceAfter }
+  }
+  return {
+    ok: false,
+    code: "unknown",
+    message: "Resposta inesperada do servidor.",
+  }
+}
+
+/**
+ * Confirma pagamento da 1ª mensalidade (RPC transacional no Postgres).
+ */
+export async function markFirstInvoiceAsPaidFromSupabase(
+  referralId: string
+): Promise<MarkFirstInvoicePaidResult> {
+  try {
+    devLogFirstInvoicePaid("início markFirstInvoiceAsPaidFromSupabase", {
+      referralId,
+    })
+    const supabase = getSupabaseClient()
+    const dbRpc = supabase as unknown as {
+      rpc: (
+        fn: string,
+        args: { p_referral_id: string }
+      ) => ReturnType<typeof supabase.rpc>
+    }
+    const { data, error } = await dbRpc.rpc("mark_first_invoice_paid", {
+      p_referral_id: referralId,
+    })
+
+    devLogFirstInvoicePaid("rpc mark_first_invoice_paid", {
+      referralId,
+      error: error?.message ?? null,
+      code: error?.code ?? null,
+      data,
+    })
+
+    if (error) {
+      return {
+        ok: false,
+        code: "rpc_error",
+        message:
+          error.message ||
+          "Falha ao confirmar primeira mensalidade. Verifique se a função SQL foi aplicada no projeto.",
+      }
+    }
+
+    return parseMarkFirstInvoiceRpcPayload(data)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    devLogFirstInvoicePaid("exceção", msg)
+    return { ok: false, code: "unknown", message: msg }
+  }
+}
+
 // --- Ação Comercial: Assumir lead -------------------------------------------------
 
 type ClaimLeadResult = { ok: true } | { ok: false; message: string }
@@ -2724,7 +2953,9 @@ export async function updateComercialLeadStatus(
 
     const { data: referralBefore, error: referralBeforeError } = await db
       .from("referrals")
-      .select("id, status, notes, first_response_at, last_interaction_at")
+      .select(
+        "id, status, notes, first_response_at, last_interaction_at, indicator_profile_id, reward_amount, reward_type"
+      )
       .eq("id", referralId)
       .maybeSingle()
 
@@ -2746,9 +2977,23 @@ export async function updateComercialLeadStatus(
       notes: string | null
       first_response_at: string | null
       last_interaction_at: string | null
+      indicator_profile_id: string
+      reward_amount: number | string
+      reward_type: "pix" | "desconto_fatura" | string
     }
     const oldStatus = before.status
-    const nextReferralStatus = mapComercialUpdateStatusToReferralStatus(newStatus)
+    const finalStatus = mapComercialUpdateStatusToReferralStatus(newStatus)
+    const nextReferralStatus = finalStatus
+    devLogComercialLeadUpdate("decisão criação de recompensa", {
+      requestedStatus: newStatus,
+      finalStatus,
+      shouldCreateReward:
+        finalStatus === "aprovada" && (referralBefore as { status?: string } | null)?.status !== "aprovada",
+      referralId,
+      indicator_profile_id: before.indicator_profile_id,
+      reward_amount: before.reward_amount,
+      reward_type: before.reward_type,
+    })
     const noteTrimmed = note?.trim() ?? ""
     const nowIso = new Date().toISOString()
     const updatePayload: {
@@ -2853,6 +3098,112 @@ export async function updateComercialLeadStatus(
       return {
         ok: false,
         message: "Status atualizado, mas houve falha ao registrar histórico.",
+      }
+    }
+
+    devLogComercialLeadUpdate("fluxo recompensa (venda → reward pendente)", {
+      oldStatus: (referralBefore as { status?: string } | null)?.status,
+      finalStatus,
+      referralId,
+    })
+
+    if (
+      finalStatus === "aprovada" &&
+      (referralBefore as { status?: string } | null)?.status !== "aprovada"
+    ) {
+      const { data: existingReward, error: existingRewardError } = await db
+        .from("rewards")
+        .select("id, referral_id, status")
+        .eq("referral_id", referralId)
+        .maybeSingle()
+
+      devLogComercialLeadUpdate("verificação reward existente", {
+        referralId,
+        hasReward: Boolean(existingReward),
+        error: existingRewardError?.message ?? null,
+        code: existingRewardError?.code ?? null,
+      })
+
+      if (existingRewardError) {
+        return {
+          ok: false,
+          message: `Status atualizado, mas falhou ao verificar recompensa existente: ${existingRewardError.message}`,
+        }
+      }
+
+      if (!existingReward) {
+        const rewardPayload = {
+          referral_id: referralId,
+          indicator_profile_id: before.indicator_profile_id,
+          amount: Number(before.reward_amount),
+          reward_type:
+            before.reward_type === "desconto_fatura" ? "desconto_fatura" : "pix",
+          status: "pendente",
+          available_at: null,
+          paid_at: null,
+        }
+
+        const { data: rewardRows, error: rewardError } = await db
+          .from("rewards")
+          .insert(rewardPayload)
+          .select(
+            "id, referral_id, indicator_profile_id, amount, reward_type, status, available_at, paid_at"
+          )
+
+        devLogComercialLeadUpdate("resultado insert rewards", {
+          referralId,
+          payload: rewardPayload,
+          error: rewardError?.message ?? null,
+          code: rewardError?.code ?? null,
+          details: (rewardError as { details?: string } | null)?.details ?? null,
+          rowCount: rewardRows?.length ?? 0,
+        })
+
+        if (rewardError) {
+          return {
+            ok: false,
+            message:
+              `Falha ao criar recompensa automática: ${rewardError.message} ` +
+              `(code: ${rewardError.code ?? "sem código"}) ` +
+              `(details: ${(rewardError as { details?: string }).details ?? "sem detalhes"})`,
+          }
+        }
+
+        const { data: rewardHistoryRows, error: rewardHistoryError } = await db
+          .from("referral_history")
+          .insert({
+            referral_id: referralId,
+            actor_profile_id: user.id,
+            old_status: nextReferralStatus,
+            new_status: nextReferralStatus,
+            action_note: "Recompensa gerada automaticamente",
+            metadata: { action: "reward_created" },
+          })
+          .select(
+            "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
+          )
+
+        devLogComercialLeadUpdate("resultado insert referral_history reward_created", {
+          referralId,
+          error: rewardHistoryError?.message ?? null,
+          code: rewardHistoryError?.code ?? null,
+          details:
+            (rewardHistoryError as { details?: string } | null)?.details ?? null,
+          rowCount: rewardHistoryRows?.length ?? 0,
+        })
+
+        if (rewardHistoryError) {
+          return {
+            ok: false,
+            message:
+              "Recompensa criada, mas falhou ao registrar histórico de criação da recompensa.",
+          }
+        }
+      } else {
+        devLogComercialLeadUpdate("reward já existe; não duplica", {
+          referralId,
+          existingRewardId: (existingReward as { id?: string } | null)?.id ?? null,
+        })
       }
     }
 
@@ -3175,5 +3526,552 @@ export async function claimComercialLead(
       ok: false,
       message: "Erro inesperado ao assumir lead.",
     }
+  }
+}
+
+// --- Pagamentos / saque Pix -------------------------------------------------------
+
+const PIX_WITHDRAWAL_LOG_PREFIX = "[pix-withdrawal:supabase]"
+
+function devLogPixWithdrawal(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(PIX_WITHDRAWAL_LOG_PREFIX, ...args)
+}
+
+function devWarnPixWithdrawal(reason: string): void {
+  if (!isDev()) return
+  console.warn(PIX_WITHDRAWAL_LOG_PREFIX, "fallback / aviso →", reason)
+}
+
+type PaymentRowDb = {
+  id: string
+  indicator_profile_id: string
+  referral_id: string | null
+  reward_id: string | null
+  amount: number | string
+  reward_type: string
+  status: string
+  due_date: string
+  paid_at: string | null
+  receipt_url: string | null
+  notes: string | null
+  approved_by_profile_id: string | null
+  created_at: string
+  updated_at: string
+  payment_kind?: string | null
+  rejection_reason?: string | null
+  pix_key_snapshot?: string | null
+  pix_key_type?: string | null
+  wallet_debit_transaction_id?: string | null
+  referrals?: {
+    referred_name: string
+    plan_id: string
+  } | null
+}
+
+function mapPaymentStatusDb(s: string): PagamentoStatus {
+  const allowed: PagamentoStatus[] = [
+    "pendente",
+    "aprovado",
+    "pago",
+    "cancelado",
+    "rejeitado",
+  ]
+  return (allowed.includes(s as PagamentoStatus) ? s : "pendente") as PagamentoStatus
+}
+
+function mapPaymentKindDb(k: string | null | undefined): PagamentoKind {
+  return k === "pix_withdrawal" ? "pix_withdrawal" : "referral_reward"
+}
+
+function mapTipoChavePix(t: string | null | undefined): import("@/types/profile").TipoChavePix | undefined {
+  if (!t) return undefined
+  const v = ["cpf", "cnpj", "email", "telefone", "aleatoria"] as const
+  return v.includes(t as (typeof v)[number]) ? (t as (typeof v)[number]) : undefined
+}
+
+function paymentRowToPagamento(row: PaymentRowDb): Pagamento {
+  const kind = mapPaymentKindDb(row.payment_kind)
+  const ref = row.referrals
+  const indicacaoStub: import("@/types/referral").Indicacao | undefined =
+    row.referral_id && ref
+      ? {
+          id: row.referral_id,
+          indicadorId: row.indicator_profile_id,
+          nomeIndicado: ref.referred_name,
+          telefoneIndicado: "",
+          planoId: ref.plan_id,
+          tipoRecompensa: row.reward_type === "desconto_fatura" ? "desconto_fatura" : "pix",
+          valorRecompensa: Number(row.amount),
+          status: "aprovada",
+          createdAt: new Date(row.created_at),
+          updatedAt: new Date(row.updated_at),
+        }
+      : undefined
+
+  return {
+    id: row.id,
+    indicadorId: row.indicator_profile_id,
+    indicacaoId: row.referral_id ?? undefined,
+    indicacao: indicacaoStub,
+    valor: Number(row.amount),
+    tipo: row.reward_type === "desconto_fatura" ? "desconto_fatura" : "pix",
+    status: mapPaymentStatusDb(row.status),
+    dataVencimento: new Date(row.due_date),
+    dataPagamento: row.paid_at ? new Date(row.paid_at) : undefined,
+    comprovanteUrl: row.receipt_url ?? undefined,
+    observacoes: row.notes ?? undefined,
+    aprovadoPor: row.approved_by_profile_id ?? undefined,
+    kind,
+    motivoRejeicao: row.rejection_reason ?? undefined,
+    pixChaveSnapshot: row.pix_key_snapshot ?? undefined,
+    pixTipoChave: mapTipoChavePix(row.pix_key_type),
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  }
+}
+
+/**
+ * `receipt_url` no formato `payment-receipts/pix-withdrawals/...` vira URL assinada (bucket privado)
+ * ou URL pública (fallback) para uso em links da UI.
+ */
+async function expandPaymentReceiptUrlsInPagamentos(
+  list: Pagamento[]
+): Promise<Pagamento[]> {
+  const supabase = getSupabaseClient()
+  return Promise.all(
+    list.map(async (p) => {
+      const raw = p.comprovanteUrl
+      if (!raw) return p
+      if (/^https?:\/\//i.test(raw)) return p
+      const prefix = `${PAYMENT_RECEIPTS_BUCKET}/`
+      if (!raw.startsWith(prefix)) return p
+      const objectPath = raw.slice(prefix.length)
+      const { data: signed, error } = await supabase.storage
+        .from(PAYMENT_RECEIPTS_BUCKET)
+        .createSignedUrl(objectPath, 3600)
+      if (!error && signed?.signedUrl) {
+        return { ...p, comprovanteUrl: signed.signedUrl }
+      }
+      const pub = supabase.storage.from(PAYMENT_RECEIPTS_BUCKET).getPublicUrl(objectPath).data
+        .publicUrl
+      return { ...p, comprovanteUrl: pub || p.comprovanteUrl }
+    })
+  )
+}
+
+function parsePixWithdrawalRpc(raw: unknown): import("@/types/payment").PixWithdrawalRpcResult {
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, code: "invalid_response", message: "Resposta inválida do servidor." }
+  }
+  const o = raw as Record<string, unknown>
+  if (o.ok === false) {
+    return {
+      ok: false,
+      code: String(o.code ?? "error"),
+      message: String(o.message ?? "Operação não concluída."),
+    }
+  }
+  if (o.ok === true) {
+    return {
+      ok: true,
+      paymentId: o.payment_id != null ? String(o.payment_id) : undefined,
+      status: o.status != null ? String(o.status) : undefined,
+      balanceAfter:
+        o.balance_after != null && typeof o.balance_after === "number"
+          ? o.balance_after
+          : o.balance_after != null
+            ? Number(o.balance_after)
+            : undefined,
+      walletTransactionId:
+        o.wallet_transaction_id != null ? String(o.wallet_transaction_id) : undefined,
+    }
+  }
+  return { ok: false, code: "invalid_response", message: "Resposta inválida do servidor." }
+}
+
+async function rpcPixWithdrawal(
+  fn: string,
+  args: Record<string, string | number>
+): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
+  try {
+    const supabase = getSupabaseClient()
+    const dbRpc = supabase as unknown as {
+      rpc: (name: string, params: Record<string, string | number>) => ReturnType<typeof supabase.rpc>
+    }
+    devLogPixWithdrawal("rpc", fn, args)
+    const { data, error } = await dbRpc.rpc(fn, args)
+    devLogPixWithdrawal("rpc resultado", fn, { error: error?.message ?? null, data })
+    if (error) {
+      const err = error as { message?: string; details?: string; hint?: string }
+      const parts = [err.message, err.details, err.hint].filter(
+        (s): s is string => typeof s === "string" && s.length > 0
+      )
+      return {
+        ok: false,
+        code: "rpc_error",
+        message: parts.join(" · ") || `Falha ao executar ${fn}.`,
+      }
+    }
+    return parsePixWithdrawalRpc(data)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return { ok: false, code: "exception", message: msg }
+  }
+}
+
+export async function requestPixWithdrawalFromSupabase(
+  amount: number
+): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
+  return rpcPixWithdrawal("request_pix_withdrawal", { p_amount: amount })
+}
+
+export async function approvePixWithdrawalFromSupabase(
+  paymentId: string
+): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
+  return rpcPixWithdrawal("approve_pix_withdrawal", { p_payment_id: paymentId })
+}
+
+export async function rejectPixWithdrawalFromSupabase(
+  paymentId: string,
+  reason: string
+): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
+  return rpcPixWithdrawal("reject_pix_withdrawal", {
+    p_payment_id: paymentId,
+    p_reason: reason,
+  })
+}
+
+export async function completePixWithdrawalFromSupabase(
+  paymentId: string,
+  receiptUrl: string
+): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
+  return rpcPixWithdrawal("complete_pix_withdrawal", {
+    p_payment_id: paymentId,
+    p_receipt_url: receiptUrl,
+  })
+}
+
+/**
+ * Saldo atual (último balance_after) do indicador logado.
+ */
+export async function loadIndicadorWalletBalanceFromSupabase(): Promise<number | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+    const { data, error } = await db
+      .from("wallet_transactions")
+      .select("balance_after")
+      .eq("indicator_profile_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) {
+      devWarnPixWithdrawal(`wallet_transactions: ${error.message}`)
+      return null
+    }
+    if (!data) return 0
+    return Number((data as { balance_after: number | string }).balance_after)
+  } catch (e) {
+    devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    return null
+  }
+}
+
+export type WalletTransactionListItem = {
+  id: string
+  tipo: string
+  valor: number
+  descricao: string
+  saldoApos: number
+  createdAt: Date
+}
+
+/**
+ * Últimas movimentações da carteira do indicador logado.
+ */
+export async function loadIndicadorWalletTransactionsFromSupabase(
+  limit = 25
+): Promise<WalletTransactionListItem[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+    const { data, error } = await db
+      .from("wallet_transactions")
+      .select("id, transaction_type, amount, description, balance_after, created_at")
+      .eq("indicator_profile_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(limit)
+    if (error) {
+      devWarnPixWithdrawal(`wallet list: ${error.message}`)
+      return null
+    }
+    return (data ?? []).map((raw: unknown) => {
+      const row = raw as {
+        id: string
+        transaction_type: string
+        amount: number | string
+        description: string
+        balance_after: number | string
+        created_at: string
+      }
+      return {
+        id: row.id,
+        tipo: row.transaction_type,
+        valor: Number(row.amount),
+        descricao: row.description,
+        saldoApos: Number(row.balance_after),
+        createdAt: new Date(row.created_at),
+      }
+    })
+  } catch (e) {
+    devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    return null
+  }
+}
+
+const PAYMENTS_SELECT = `
+  id,
+  indicator_profile_id,
+  referral_id,
+  reward_id,
+  amount,
+  reward_type,
+  status,
+  due_date,
+  paid_at,
+  receipt_url,
+  notes,
+  approved_by_profile_id,
+  created_at,
+  updated_at,
+  payment_kind,
+  rejection_reason,
+  pix_key_snapshot,
+  pix_key_type,
+  wallet_debit_transaction_id,
+  referrals ( referred_name, plan_id )
+`
+
+/**
+ * Pagamentos do indicador logado (inclui saques Pix).
+ */
+export async function loadIndicadorPagamentosFromSupabase(): Promise<Pagamento[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) {
+      devWarnPixWithdrawal("sem sessão para listar pagamentos")
+      return null
+    }
+    const { data, error } = await db
+      .from("payments")
+      .select(PAYMENTS_SELECT)
+      .eq("indicator_profile_id", user.id)
+      .order("created_at", { ascending: false })
+    if (error) {
+      devWarnPixWithdrawal(`payments: ${error.message}`)
+      return null
+    }
+    const mapped = ((data ?? []) as PaymentRowDb[]).map(paymentRowToPagamento)
+    return await expandPaymentReceiptUrlsInPagamentos(mapped)
+  } catch (e) {
+    devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    return null
+  }
+}
+
+const ADMIN_PAYMENT_ROLES = new Set(["admin_master", "admin_financeiro", "admin_consulta"])
+
+/**
+ * Lista saques Pix (admin). Filtro por status opcional.
+ */
+export async function loadAdminPixWithdrawalsFromSupabase(
+  status?: "pendente" | "aprovado" | "pago" | "rejeitado" | "todos"
+): Promise<Pagamento[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || !ADMIN_PAYMENT_ROLES.has(role)) {
+      devWarnPixWithdrawal(`role sem acesso à lista admin: ${role}`)
+      return null
+    }
+
+    let q = db
+      .from("payments")
+      .select(PAYMENTS_SELECT)
+      .eq("payment_kind", "pix_withdrawal")
+      .order("created_at", { ascending: false })
+
+    if (status && status !== "todos") {
+      q = q.eq("status", status)
+    }
+
+    const { data, error } = await q
+    if (error) {
+      devWarnPixWithdrawal(`admin payments: ${error.message}`)
+      return null
+    }
+    const mapped = ((data ?? []) as PaymentRowDb[]).map(paymentRowToPagamento)
+    return await expandPaymentReceiptUrlsInPagamentos(mapped)
+  } catch (e) {
+    devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    return null
+  }
+}
+
+/**
+ * Todos os pagamentos (admin): indicações e saques Pix.
+ */
+export async function loadAdminAllPaymentsFromSupabase(): Promise<Pagamento[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || !ADMIN_PAYMENT_ROLES.has(role)) {
+      devWarnPixWithdrawal(`role sem acesso à lista admin pagamentos: ${role}`)
+      return null
+    }
+
+    const { data, error } = await db
+      .from("payments")
+      .select(PAYMENTS_SELECT)
+      .order("created_at", { ascending: false })
+      .limit(500)
+
+    if (error) {
+      devWarnPixWithdrawal(`admin all payments: ${error.message}`)
+      return null
+    }
+    const mapped = ((data ?? []) as PaymentRowDb[]).map(paymentRowToPagamento)
+    return await expandPaymentReceiptUrlsInPagamentos(mapped)
+  } catch (e) {
+    devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    return null
+  }
+}
+
+/**
+ * Histórico de auditoria de um pagamento (admin).
+ */
+export async function loadPaymentAuditTrailFromSupabase(
+  paymentId: string
+): Promise<import("@/types/payment").AuditoriaPagamentoItem[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || !ADMIN_PAYMENT_ROLES.has(role)) return null
+
+    const { data, error } = await db
+      .from("audit_logs")
+      .select("id, actor_profile_id, action, old_data, new_data, metadata, created_at")
+      .eq("entity_name", "payment")
+      .eq("entity_id", paymentId)
+      .order("created_at", { ascending: true })
+
+    if (error) {
+      devWarnPixWithdrawal(`audit_logs: ${error.message}`)
+      return null
+    }
+
+    const mapAction = (a: string): import("@/types/payment").AuditoriaPagamentoAcao => {
+      const allowed: import("@/types/payment").AuditoriaPagamentoAcao[] = [
+        "create",
+        "update",
+        "delete",
+        "approve",
+        "reject",
+        "login",
+        "logout",
+      ]
+      return (allowed.includes(a as import("@/types/payment").AuditoriaPagamentoAcao)
+        ? a
+        : "update") as import("@/types/payment").AuditoriaPagamentoAcao
+    }
+
+    return (data ?? []).map((raw: unknown) => {
+      const row = raw as {
+        id: string
+        actor_profile_id: string | null
+        action: string
+        old_data: Record<string, unknown> | null
+        new_data: Record<string, unknown> | null
+        metadata: Record<string, unknown> | null
+        created_at: string
+      }
+      return {
+        id: row.id,
+        acao: mapAction(row.action),
+        actorProfileId: row.actor_profile_id,
+        createdAt: new Date(row.created_at),
+        dadosAnteriores: row.old_data,
+        dadosNovos: row.new_data,
+        metadata: row.metadata ?? {},
+      }
+    })
+  } catch (e) {
+    devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    return null
   }
 }

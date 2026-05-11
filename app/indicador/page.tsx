@@ -89,6 +89,32 @@ export default function IndicadorDashboard() {
         />
       </div>
 
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+        <StatCard
+          title="Recompensas pendentes"
+          value={dashboard.recompensasPendentesCount}
+          icon={Clock}
+          variant="warning"
+        />
+        <StatCard
+          title="Recompensas disponíveis"
+          value={dashboard.recompensasDisponiveisCount}
+          icon={CheckCircle2}
+          variant="success"
+        />
+        <StatCard
+          title="Valor pendente (recompensas)"
+          value={`R$ ${dashboard.valorRecompensasPendentes.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          icon={TrendingUp}
+        />
+        <StatCard
+          title="Valor disponível (recompensas)"
+          value={`R$ ${dashboard.valorRecompensasDisponiveis.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          icon={Receipt}
+          variant="success"
+        />
+      </div>
+
       {/* Recent Indicacoes */}
       <div className="rounded-xl border bg-card p-6">
         <div className="flex items-center justify-between mb-4">

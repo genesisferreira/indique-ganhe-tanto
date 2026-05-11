@@ -204,6 +204,7 @@ create table if not exists public.referrals (
   commercial_profile_id uuid references public.profiles(id) on delete set null,
   notes text,
   first_invoice_paid boolean not null default false,
+  first_invoice_paid_at timestamptz,
   approved_at timestamptz,
   rejected_at timestamptz,
   rejection_reason text,
@@ -299,7 +300,7 @@ create index if not exists wallet_transactions_reward_idx
 create table if not exists public.payments (
   id uuid primary key default gen_random_uuid(),
   indicator_profile_id uuid not null references public.profiles(id) on delete restrict,
-  referral_id uuid not null references public.referrals(id) on delete restrict,
+  referral_id uuid references public.referrals(id) on delete restrict,
   reward_id uuid references public.rewards(id) on delete set null,
   amount numeric(10,2) not null check (amount >= 0),
   reward_type public.reward_type not null,
@@ -309,8 +310,18 @@ create table if not exists public.payments (
   receipt_url text,
   notes text,
   approved_by_profile_id uuid references public.profiles(id) on delete set null,
+  payment_kind text not null default 'referral_reward',
+  rejection_reason text,
+  pix_key_snapshot text,
+  pix_key_type public.pix_key_type,
+  wallet_debit_transaction_id uuid references public.wallet_transactions(id) on delete set null,
   created_at timestamptz not null default timezone('utc', now()),
-  updated_at timestamptz not null default timezone('utc', now())
+  updated_at timestamptz not null default timezone('utc', now()),
+  constraint payments_payment_kind_chk check (payment_kind in ('referral_reward', 'pix_withdrawal')),
+  constraint payments_referral_kind_consistency_chk check (
+    (payment_kind = 'referral_reward' and referral_id is not null)
+    or (payment_kind = 'pix_withdrawal' and referral_id is null)
+  )
 );
 
 create index if not exists payments_indicator_idx on public.payments(indicator_profile_id);
@@ -319,6 +330,9 @@ create index if not exists payments_reward_idx on public.payments(reward_id);
 create index if not exists payments_status_idx on public.payments(status);
 create index if not exists payments_due_date_idx on public.payments(due_date);
 create index if not exists payments_approved_by_idx on public.payments(approved_by_profile_id);
+create index if not exists payments_pix_withdrawal_status_idx
+  on public.payments (payment_kind, status)
+  where payment_kind = 'pix_withdrawal';
 
 create table if not exists public.notifications (
   id uuid primary key default gen_random_uuid(),

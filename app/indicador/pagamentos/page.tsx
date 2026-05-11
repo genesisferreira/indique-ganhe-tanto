@@ -1,38 +1,74 @@
 "use client"
 
+import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
+import { Button } from "@/components/ui/button"
 import { pagamentos, currentIndicador } from "@/lib/services/mock-data.service"
-import { Wallet, Receipt, Calendar, ArrowUpRight } from "lucide-react"
+import { loadIndicadorPagamentosFromSupabase } from "@/lib/services/supabase-data.service"
+import type { Pagamento, PagamentoStatus } from "@/types"
+import { Wallet, Receipt, Calendar, ArrowUpRight, ExternalLink } from "lucide-react"
+
+function tituloReferencia(p: Pagamento): string {
+  if (p.kind === "pix_withdrawal") return "Saque Pix"
+  return p.indicacao?.nomeIndicado ?? "Indicação"
+}
+
+function subtituloReferencia(p: Pagamento): string {
+  if (p.kind === "pix_withdrawal") {
+    const ch = p.pixChaveSnapshot ? `Chave: ${p.pixChaveSnapshot}` : "Resgate na carteira"
+    return ch
+  }
+  return p.indicacao?.plano?.nome ?? "Plano"
+}
 
 export default function PagamentosPage() {
-  const meusPagamentos = pagamentos.filter(
-    (p) => p.indicadorId === currentIndicador.id
-  )
+  const [remotos, setRemotos] = useState<Pagamento[] | null>(null)
+
+  useEffect(() => {
+    void (async () => {
+      const lista = await loadIndicadorPagamentosFromSupabase()
+      if (lista !== null) setRemotos(lista)
+    })()
+  }, [])
+
+  const meusPagamentos = useMemo(() => {
+    const base = remotos ?? pagamentos.filter((p) => p.indicadorId === currentIndicador.id)
+    return [...base].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )
+  }, [remotos])
 
   const totalPago = meusPagamentos
     .filter((p) => p.status === "pago")
     .reduce((acc, p) => acc + p.valor, 0)
 
   const totalPendente = meusPagamentos
-    .filter((p) => p.status === "pendente")
+    .filter((p) => p.status === "pendente" || p.status === "aprovado")
     .reduce((acc, p) => acc + p.valor, 0)
 
   return (
     <div>
       <PageHeader
-        title="Meus Pagamentos"
-        description="Histórico de pagamentos recebidos"
-      />
+        title="Meus pagamentos"
+        description="Histórico de pagamentos e saques Pix"
+      >
+        <Button variant="outline" asChild>
+          <Link href="/indicador/carteira">
+            <ArrowUpRight className="w-4 h-4 mr-2" />
+            Carteira
+          </Link>
+        </Button>
+      </PageHeader>
 
-      {/* Summary Cards */}
       <div className="grid gap-4 sm:grid-cols-3 mb-8">
         <div className="rounded-xl border bg-card p-5">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 rounded-lg bg-success/10 flex items-center justify-center">
               <Wallet className="w-5 h-5 text-success" />
             </div>
-            <span className="text-sm text-muted-foreground">Total Pago</span>
+            <span className="text-sm text-muted-foreground">Total pago</span>
           </div>
           <p className="text-2xl font-bold text-foreground">
             R${" "}
@@ -45,7 +81,7 @@ export default function PagamentosPage() {
             <div className="w-10 h-10 rounded-lg bg-warning/10 flex items-center justify-center">
               <Calendar className="w-5 h-5 text-warning" />
             </div>
-            <span className="text-sm text-muted-foreground">Pendente</span>
+            <span className="text-sm text-muted-foreground">Em análise / aprovado</span>
           </div>
           <p className="text-2xl font-bold text-foreground">
             R${" "}
@@ -58,26 +94,21 @@ export default function PagamentosPage() {
         <div className="rounded-xl border bg-card p-5">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-              <ArrowUpRight className="w-5 h-5 text-primary" />
+              <Receipt className="w-5 h-5 text-primary" />
             </div>
-            <span className="text-sm text-muted-foreground">
-              Total Pagamentos
-            </span>
+            <span className="text-sm text-muted-foreground">Registros</span>
           </div>
-          <p className="text-2xl font-bold text-foreground">
-            {meusPagamentos.length}
-          </p>
+          <p className="text-2xl font-bold text-foreground">{meusPagamentos.length}</p>
         </div>
       </div>
 
-      {/* Payments List */}
       <div className="rounded-xl border bg-card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="border-b bg-muted/30">
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Indicação
+                  Referência
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Valor
@@ -94,13 +125,16 @@ export default function PagamentosPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Status
                 </th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Detalhes
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {meusPagamentos.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     className="px-4 py-8 text-center text-sm text-muted-foreground"
                   >
                     Nenhum pagamento encontrado
@@ -114,11 +148,16 @@ export default function PagamentosPage() {
                   >
                     <td className="px-4 py-3">
                       <p className="font-medium text-foreground">
-                        {pagamento.indicacao?.nomeIndicado || "Indicação"}
+                        {tituloReferencia(pagamento)}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {pagamento.indicacao?.plano?.nome || "Plano"}
+                        {subtituloReferencia(pagamento)}
                       </p>
+                      {pagamento.status === "rejeitado" && pagamento.motivoRejeicao && (
+                        <p className="text-xs text-destructive mt-1">
+                          Motivo: {pagamento.motivoRejeicao}
+                        </p>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm font-semibold text-foreground">
                       R${" "}
@@ -127,17 +166,10 @@ export default function PagamentosPage() {
                       })}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2 text-sm">
-                        {pagamento.tipo === "pix" ? (
-                          <>
-                            <Wallet className="w-4 h-4 text-primary" />
-                            <span className="text-foreground">Pix</span>
-                          </>
-                        ) : (
-                          <>
-                            <Receipt className="w-4 h-4 text-primary" />
-                            <span className="text-foreground">Desconto</span>
-                          </>
+                      <div className="flex flex-col gap-0.5 text-sm">
+                        <span className="text-foreground capitalize">{pagamento.tipo}</span>
+                        {pagamento.kind === "pix_withdrawal" && (
+                          <span className="text-xs text-muted-foreground">Saque Pix</span>
                         )}
                       </div>
                     </td>
@@ -147,10 +179,25 @@ export default function PagamentosPage() {
                     <td className="px-4 py-3 text-sm text-muted-foreground">
                       {pagamento.dataPagamento
                         ? pagamento.dataPagamento.toLocaleDateString("pt-BR")
-                        : "-"}
+                        : "—"}
                     </td>
                     <td className="px-4 py-3">
-                      <StatusBadge status={pagamento.status} />
+                      <StatusBadge status={pagamento.status as PagamentoStatus} />
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      {pagamento.comprovanteUrl ? (
+                        <a
+                          href={pagamento.comprovanteUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-primary hover:underline"
+                        >
+                          Comprovante
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </td>
                   </tr>
                 ))

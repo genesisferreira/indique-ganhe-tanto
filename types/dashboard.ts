@@ -9,6 +9,12 @@ export interface DashboardIndicador {
   totalAReceber: number
   saldoDisponivel: number
   saldoEmDesconto: number
+  /** Quantidade de linhas em rewards com status pendente */
+  recompensasPendentesCount: number
+  /** Rewards já liberadas ou em fluxo (disponivel + solicitado) */
+  recompensasDisponiveisCount: number
+  valorRecompensasPendentes: number
+  valorRecompensasDisponiveis: number
 }
 
 export interface DashboardComercial {

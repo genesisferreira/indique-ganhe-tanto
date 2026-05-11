@@ -10,6 +10,10 @@ export const dashboardIndicador: DashboardIndicador = {
   totalAReceber: 329.70,
   saldoDisponivel: 299.70,
   saldoEmDesconto: 99.90,
+  recompensasPendentesCount: 2,
+  recompensasDisponiveisCount: 3,
+  valorRecompensasPendentes: 329.7,
+  valorRecompensasDisponiveis: 399.6,
 }
 
 export const dashboardComercial: DashboardComercial = {

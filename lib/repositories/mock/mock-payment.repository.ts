@@ -16,6 +16,9 @@ export const mockPaymentRepository: PaymentRepository = {
     if (filters.tipo) {
       data = data.filter((item) => item.tipo === filters.tipo)
     }
+    if (filters.kind && filters.kind !== "todos") {
+      data = data.filter((item) => (item.kind ?? "referral_reward") === filters.kind)
+    }
 
     const total = data.length
     const start = (page - 1) * pageSize
@@ -45,6 +48,7 @@ export const mockPaymentRepository: PaymentRepository = {
     return {
       id: `pag-${Date.now()}`,
       ...data,
+      kind: "referral_reward",
       status: "pendente",
       dataVencimento: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
       createdAt: new Date(),
