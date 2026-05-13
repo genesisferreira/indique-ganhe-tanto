@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -79,17 +80,20 @@ export default function AdminAdminsPage() {
   const [search, setSearch] = useState("")
   const [roleFilter, setRoleFilter] = useState<string>("todos")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [admins] = useState<Admin[]>(() =>
+    isDataProviderMock() ? mockAdmins : []
+  )
 
-  const filteredAdmins = mockAdmins.filter((admin) => {
+  const filteredAdmins = admins.filter((admin) => {
     const matchesSearch = admin.nome.toLowerCase().includes(search.toLowerCase()) ||
                          admin.email.toLowerCase().includes(search.toLowerCase())
     const matchesRole = roleFilter === "todos" || admin.role === roleFilter
     return matchesSearch && matchesRole
   })
 
-  const totalAdmins = mockAdmins.length
-  const adminsAtivos = mockAdmins.filter(a => a.ativo).length
-  const superAdmins = mockAdmins.filter(a => a.role === "super_admin").length
+  const totalAdmins = admins.length
+  const adminsAtivos = admins.filter((a) => a.ativo).length
+  const superAdmins = admins.filter((a) => a.role === "super_admin").length
 
   const columns = [
     {

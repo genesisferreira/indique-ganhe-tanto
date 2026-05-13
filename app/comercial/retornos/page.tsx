@@ -1,15 +1,48 @@
 "use client"
 
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { leads, currentComercial } from "@/lib/services/mock-data.service"
+import {
+  getAuthProfileBasicsFromSupabase,
+  loadComercialLeadsFromSupabase,
+} from "@/lib/services/supabase-data.service"
+import type { Lead } from "@/types"
 import { Clock, Phone, Eye, Calendar, AlertTriangle } from "lucide-react"
 
 export default function RetornosPage() {
-  const meusLeads = leads.filter((l) => l.comercialId === currentComercial.id)
-  const retornos = meusLeads
+  const mockLeads = useMemo(
+    () =>
+      isDataProviderMock()
+        ? leads.filter((l) => l.comercialId === currentComercial.id)
+        : [],
+    []
+  )
+
+  const [listaLeads, setListaLeads] = useState<Lead[]>(mockLeads)
+
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      setListaLeads(mockLeads)
+      return
+    }
+    void (async () => {
+      const [all, basics] = await Promise.all([
+        loadComercialLeadsFromSupabase(),
+        getAuthProfileBasicsFromSupabase(),
+      ])
+      const uid = basics?.id ?? null
+      const assigned =
+        uid && all ? all.filter((l) => l.comercialId === uid) : []
+      setListaLeads(assigned)
+    })()
+  }, [mockLeads])
+
+  const retornos = listaLeads
     .filter((l) => l.retornoAgendado)
     .sort((a, b) => {
       if (!a.retornoAgendado || !b.retornoAgendado) return 0

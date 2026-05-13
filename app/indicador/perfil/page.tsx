@@ -1,30 +1,109 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
-import { currentIndicador } from "@/lib/services/mock-data.service"
 import { User, Mail, Phone, Calendar, Eye, EyeOff, Lock, Save } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { useIndicadorHome } from "@/app/indicador/indicador-home-provider"
+import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
+import { mockDataService } from "@/lib/services/mock-data.service"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import { formatUserRoleLabel } from "@/lib/auth/format-user-role-label"
+import type { AuthProfileBasics } from "@/types/auth-profile"
 
-export default function PerfilIndicadorPage() {
-  const [isLoading, setIsLoading] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-  const [showNewPassword, setShowNewPassword] = useState(false)
-
-  const initials = currentIndicador.nome
+function initialsFromName(name: string): string {
+  return name
     .split(" ")
     .map((n) => n[0])
     .join("")
     .slice(0, 2)
     .toUpperCase()
+}
+
+export default function PerfilIndicadorPage() {
+  const { indicador, source } = useIndicadorHome()
+  const [isLoading, setIsLoading] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [showNewPassword, setShowNewPassword] = useState(false)
+  const [profile, setProfile] = useState<AuthProfileBasics | null>(null)
+  const [noSession, setNoSession] = useState(false)
+
+  useEffect(() => {
+    void (async () => {
+      if (isDataProviderMock()) {
+        const snap = mockDataService.getSnapshot()
+        const ind = snap.currentIndicador
+        setProfile({
+          id: ind.id,
+          fullName: ind.nome,
+          email: ind.email,
+          phone: ind.telefone,
+          role: "indicador",
+          avatarUrl: null,
+          createdAt: ind.createdAt.toISOString(),
+        })
+        return
+      }
+      const b = await getAuthProfileBasicsFromSupabase()
+      if (!b) {
+        setNoSession(true)
+        return
+      }
+      setProfile(b)
+    })()
+  }, [])
+
+  const displayName = profile?.fullName ?? ""
+  const displayEmail = profile?.email ?? ""
+  const displayPhone = profile?.phone ?? ""
+  const initials = useMemo(
+    () => (displayName ? initialsFromName(displayName) : "—"),
+    [displayName]
+  )
+
+  const memberSince =
+    profile?.createdAt != null
+      ? new Date(profile.createdAt).toLocaleDateString("pt-BR", {
+          month: "long",
+          year: "numeric",
+        })
+      : "—"
+
+  const statsReady = Boolean(indicador.id) && source === "supabase"
+  const totalInd = statsReady ? indicador.totalIndicacoes : "—"
+  const aprovadas = statsReady ? indicador.indicacoesAprovadas : "—"
 
   const handleSaveProfile = async () => {
     setIsLoading(true)
     await new Promise((resolve) => setTimeout(resolve, 1500))
     setIsLoading(false)
+  }
+
+  if (!isDataProviderMock() && noSession) {
+    return (
+      <div className="flex min-h-[40vh] flex-col items-center justify-center gap-4 text-center text-muted-foreground">
+        <p>Sessão não encontrada ou perfil indisponível.</p>
+        <Button asChild variant="default">
+          <Link href="/login">Ir para o login</Link>
+        </Button>
+      </div>
+    )
+  }
+
+  if (!profile && !isDataProviderMock() && !noSession) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center text-muted-foreground">
+        Carregando perfil…
+      </div>
+    )
+  }
+
+  if (!profile) {
+    return null
   }
 
   return (
@@ -34,8 +113,7 @@ export default function PerfilIndicadorPage() {
         description="Gerencie suas informações pessoais"
       />
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Profile Card */}
+      <div className="grid gap-6 lg:grid-cols-3" key={profile.id}>
         <div className="lg:col-span-1">
           <div className="rounded-xl border bg-card p-6 text-center">
             <Avatar className="w-24 h-24 mx-auto mb-4">
@@ -44,9 +122,11 @@ export default function PerfilIndicadorPage() {
               </AvatarFallback>
             </Avatar>
             <h2 className="text-xl font-semibold text-foreground">
-              {currentIndicador.nome}
+              {displayName || "—"}
             </h2>
-            <p className="text-sm text-muted-foreground">Indicador</p>
+            <p className="text-sm text-muted-foreground">
+              {formatUserRoleLabel(profile.role)}
+            </p>
 
             <div className="mt-6 pt-6 border-t border-border space-y-4 text-left">
               <div className="flex items-center gap-3">
@@ -55,12 +135,7 @@ export default function PerfilIndicadorPage() {
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Membro desde</p>
-                  <p className="text-sm font-medium text-foreground">
-                    {currentIndicador.createdAt.toLocaleDateString("pt-BR", {
-                      month: "long",
-                      year: "numeric",
-                    })}
-                  </p>
+                  <p className="text-sm font-medium text-foreground">{memberSince}</p>
                 </div>
               </div>
 
@@ -73,8 +148,7 @@ export default function PerfilIndicadorPage() {
                     Indicações Aprovadas
                   </p>
                   <p className="text-sm font-medium text-foreground">
-                    {currentIndicador.indicacoesAprovadas} de{" "}
-                    {currentIndicador.totalIndicacoes}
+                    {aprovadas} de {totalInd}
                   </p>
                 </div>
               </div>
@@ -82,9 +156,7 @@ export default function PerfilIndicadorPage() {
           </div>
         </div>
 
-        {/* Forms */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Personal Info */}
           <div className="rounded-xl border bg-card p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">
               Informações Pessoais
@@ -97,7 +169,7 @@ export default function PerfilIndicadorPage() {
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     id="nome"
-                    defaultValue={currentIndicador.nome}
+                    defaultValue={displayName}
                     className="pl-9"
                   />
                 </div>
@@ -110,7 +182,7 @@ export default function PerfilIndicadorPage() {
                   <Input
                     id="email"
                     type="email"
-                    defaultValue={currentIndicador.email}
+                    defaultValue={displayEmail}
                     className="pl-9"
                   />
                 </div>
@@ -123,7 +195,7 @@ export default function PerfilIndicadorPage() {
                   <Input
                     id="telefone"
                     type="tel"
-                    defaultValue={currentIndicador.telefone}
+                    defaultValue={displayPhone}
                     className="pl-9"
                   />
                 </div>
@@ -138,7 +210,6 @@ export default function PerfilIndicadorPage() {
             </div>
           </div>
 
-          {/* Change Password */}
           <div className="rounded-xl border bg-card p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
               <Lock className="w-5 h-5" />

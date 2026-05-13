@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -11,8 +11,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { comerciais } from "@/lib/services/mock-data.service"
-import { Plus, Search, Eye, Edit, MoreHorizontal, CheckCircle, XCircle } from "lucide-react"
+import { loadAdminComerciaisFromSupabase } from "@/lib/services/supabase-data.service"
+import { Plus, Search, Eye, Edit, MoreHorizontal } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import Link from "next/link"
 import type { Comercial } from "@/types"
@@ -21,11 +23,43 @@ export default function AdminComerciaisPage() {
   const [search, setSearch] = useState("")
   const [disponibilidadeFilter, setDisponibilidadeFilter] = useState<string>("todos")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [lista, setLista] = useState<Comercial[]>([])
+  const [carregando, setCarregando] = useState(true)
 
-  const filteredComerciais = comerciais.filter((comercial: Comercial) => {
+  const recarregar = useCallback(async () => {
+    setCarregando(true)
+    if (isDataProviderMock()) {
+      setLista(comerciais)
+      if (process.env.NODE_ENV === "development") {
+        console.log("[page-data:debug]", {
+          page: "/admin/comerciais",
+          source: "mock",
+          total: comerciais.length,
+        })
+      }
+      setCarregando(false)
+      return
+    }
+    const remote = await loadAdminComerciaisFromSupabase()
+    if (process.env.NODE_ENV === "development") {
+      console.log("[page-data:debug]", {
+        page: "/admin/comerciais",
+        source: "supabase",
+        total: remote?.length ?? 0,
+      })
+    }
+    setLista(remote ?? [])
+    setCarregando(false)
+  }, [])
+
+  useEffect(() => {
+    void recarregar()
+  }, [recarregar])
+
+  const filteredComerciais = lista.filter((comercial: Comercial) => {
     const matchesSearch = comercial.nome.toLowerCase().includes(search.toLowerCase()) ||
                          comercial.email.toLowerCase().includes(search.toLowerCase())
-    const matchesDisponibilidade = disponibilidadeFilter === "todos" || 
+    const matchesDisponibilidade = disponibilidadeFilter === "todos" ||
                                    comercial.disponibilidade === disponibilidadeFilter
     return matchesSearch && matchesDisponibilidade
   })
@@ -105,7 +139,11 @@ export default function AdminComerciaisPage() {
     <div className="space-y-6">
       <PageHeader
         title="Gerenciar Comerciais"
-        description="Visualize e gerencie a equipe comercial"
+        description={
+          isDataProviderMock()
+            ? "Dados de demonstração (modo mock)."
+            : "Dados do Supabase."
+        }
       >
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
@@ -181,11 +219,15 @@ export default function AdminComerciaisPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <DataTable
-            data={filteredComerciais}
-            columns={columns}
-            emptyMessage="Nenhum comercial encontrado"
-          />
+          {carregando ? (
+            <p className="text-sm text-muted-foreground">Carregando…</p>
+          ) : (
+            <DataTable
+              data={filteredComerciais}
+              columns={columns}
+              emptyMessage="Nenhum comercial encontrado"
+            />
+          )}
         </CardContent>
       </Card>
     </div>

@@ -1,18 +1,32 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { indicadores } from "@/lib/services/mock-data.service"
+import { loadAdminIndicatorsFromSupabase } from "@/lib/services/supabase-data.service"
 import { Plus, Search, Eye, Edit, Ban, CheckCircle, MoreHorizontal } from "lucide-react"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import Link from "next/link"
 import type { Indicador } from "@/types"
 
@@ -20,14 +34,48 @@ export default function AdminIndicadoresPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("todos")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [lista, setLista] = useState<Indicador[]>([])
+  const [carregando, setCarregando] = useState(true)
 
-  const filteredIndicadores = indicadores.filter((indicador: Indicador) => {
-    const matchesSearch = indicador.nome.toLowerCase().includes(search.toLowerCase()) ||
-                         indicador.email.toLowerCase().includes(search.toLowerCase()) ||
-                         (indicador.cpf?.includes(search) ?? false)
-    const matchesStatus = statusFilter === "todos" || 
-                          (statusFilter === "ativo" && indicador.ativo !== false) ||
-                          (statusFilter === "inativo" && indicador.ativo === false)
+  const recarregar = useCallback(async () => {
+    setCarregando(true)
+    if (isDataProviderMock()) {
+      setLista(indicadores)
+      if (process.env.NODE_ENV === "development") {
+        console.log("[page-data:debug]", {
+          page: "/admin/indicadores",
+          source: "mock",
+          total: indicadores.length,
+        })
+      }
+      setCarregando(false)
+      return
+    }
+    const remote = await loadAdminIndicatorsFromSupabase()
+    if (process.env.NODE_ENV === "development") {
+      console.log("[page-data:debug]", {
+        page: "/admin/indicadores",
+        source: "supabase",
+        total: remote?.length ?? 0,
+      })
+    }
+    setLista(remote ?? [])
+    setCarregando(false)
+  }, [])
+
+  useEffect(() => {
+    void recarregar()
+  }, [recarregar])
+
+  const filteredIndicadores = lista.filter((indicador: Indicador) => {
+    const matchesSearch =
+      indicador.nome.toLowerCase().includes(search.toLowerCase()) ||
+      indicador.email.toLowerCase().includes(search.toLowerCase()) ||
+      (indicador.cpf?.includes(search) ?? false)
+    const matchesStatus =
+      statusFilter === "todos" ||
+      (statusFilter === "ativo" && indicador.ativo !== false) ||
+      (statusFilter === "inativo" && indicador.ativo === false)
     return matchesSearch && matchesStatus
   })
 
@@ -126,7 +174,11 @@ export default function AdminIndicadoresPage() {
     <div className="space-y-6">
       <PageHeader
         title="Gerenciar Indicadores"
-        description="Visualize e gerencie todos os indicadores cadastrados"
+        description={
+          isDataProviderMock()
+            ? "Dados de demonstração (modo mock)."
+            : "Dados do Supabase."
+        }
       >
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
@@ -167,9 +219,7 @@ export default function AdminIndicadoresPage() {
               <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
                 Cancelar
               </Button>
-              <Button onClick={() => setIsDialogOpen(false)}>
-                Cadastrar
-              </Button>
+              <Button onClick={() => setIsDialogOpen(false)}>Cadastrar</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -203,11 +253,15 @@ export default function AdminIndicadoresPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <DataTable
-            data={filteredIndicadores}
-            columns={columns}
-            emptyMessage="Nenhum indicador encontrado"
-          />
+          {carregando ? (
+            <p className="text-sm text-muted-foreground">Carregando…</p>
+          ) : (
+            <DataTable
+              data={filteredIndicadores}
+              columns={columns}
+              emptyMessage="Nenhum indicador encontrado"
+            />
+          )}
         </CardContent>
       </Card>
     </div>

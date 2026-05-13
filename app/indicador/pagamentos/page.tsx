@@ -5,6 +5,7 @@ import Link from "next/link"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { Button } from "@/components/ui/button"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { pagamentos, currentIndicador } from "@/lib/services/mock-data.service"
 import { loadIndicadorPagamentosFromSupabase } from "@/lib/services/supabase-data.service"
 import type { Pagamento, PagamentoStatus } from "@/types"
@@ -27,14 +28,31 @@ export default function PagamentosPage() {
   const [remotos, setRemotos] = useState<Pagamento[] | null>(null)
 
   useEffect(() => {
+    if (isDataProviderMock()) {
+      if (process.env.NODE_ENV === "development") {
+        const total = pagamentos.filter((p) => p.indicadorId === currentIndicador.id).length
+        console.log("[page-data:debug]", { page: "/indicador/pagamentos", source: "mock", total })
+      }
+      setRemotos(null)
+      return
+    }
     void (async () => {
       const lista = await loadIndicadorPagamentosFromSupabase()
-      if (lista !== null) setRemotos(lista)
+      if (process.env.NODE_ENV === "development") {
+        console.log("[page-data:debug]", {
+          page: "/indicador/pagamentos",
+          source: "supabase",
+          total: lista?.length ?? 0,
+        })
+      }
+      setRemotos(lista ?? [])
     })()
   }, [])
 
   const meusPagamentos = useMemo(() => {
-    const base = remotos ?? pagamentos.filter((p) => p.indicadorId === currentIndicador.id)
+    const base = isDataProviderMock()
+      ? pagamentos.filter((p) => p.indicadorId === currentIndicador.id)
+      : (remotos ?? [])
     return [...base].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     )

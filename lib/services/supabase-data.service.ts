@@ -2,7 +2,12 @@ import { getSupabaseClient } from "@/lib/supabase/client"
 import { PAYMENT_RECEIPTS_BUCKET } from "@/lib/supabase/upload-payment-receipt"
 import type { DashboardIndicador } from "@/types/dashboard"
 import type { Historico, Lead, LeadStatus } from "@/types/lead"
-import type { Indicador } from "@/types/profile"
+import type {
+  Comercial,
+  ComercialDisponibilidade,
+  Indicador,
+  TipoChavePix,
+} from "@/types/profile"
 import type {
   Indicacao,
   IndicacaoStatus,
@@ -13,6 +18,8 @@ import type {
 import type { UserRole } from "@/types/user"
 import type { Pagamento, PagamentoKind, PagamentoStatus } from "@/types/payment"
 import type { Plano } from "@/types/plan"
+import type { NotificationItem } from "@/types/notification"
+import type { AuthProfileBasics } from "@/types/auth-profile"
 
 type ProfileRow = {
   id: string
@@ -173,11 +180,64 @@ function referralRowToIndicacaoMerged(
   }
 }
 
+/** Perfil mínimo para tabelas admin (lista de indicações). */
+function stubIndicadorFromAdminProfile(
+  id: string,
+  p: {
+    full_name: string
+    email: string
+    phone: string
+    cpf?: string | null
+    is_active: boolean
+    created_at: string
+  }
+): Indicador {
+  return {
+    id,
+    nome: p.full_name,
+    email: p.email,
+    telefone: p.phone ?? "",
+    role: "indicador",
+    cpf: p.cpf ?? undefined,
+    ativo: p.is_active,
+    createdAt: new Date(p.created_at),
+    totalIndicacoes: 0,
+    indicacoesAprovadas: 0,
+    totalRecebido: 0,
+    saldoDisponivel: 0,
+    saldoDesconto: 0,
+  }
+}
+
+function stubComercialFromAdminProfile(
+  id: string,
+  p: {
+    full_name: string
+    email: string
+    phone: string
+    is_active: boolean
+    created_at: string
+  }
+): Comercial {
+  return {
+    id,
+    nome: p.full_name,
+    email: p.email,
+    telefone: p.phone ?? "",
+    role: "comercial",
+    ativo: p.is_active,
+    createdAt: new Date(p.created_at),
+    disponibilidade: "disponivel",
+    leadsAtivos: 0,
+    vendasRealizadas: 0,
+    tempoMedioPrimeiroContato: 0,
+  }
+}
+
 function buildDashboardFromRows(
   referrals: ReferralRow[],
-  payments: PaymentRow[],
   rewards: RewardRow[],
-  options?: { latestWalletBalance: number | null }
+  wallet: { saldoDisponivelFromLedger: number; totalCreditosWallet: number }
 ): DashboardIndicador {
   const totalIndicacoes = referrals.length
   let emAndamento = 0
@@ -190,52 +250,29 @@ function buildDashboardFromRows(
     else if (r.status === "recusada") recusadas += 1
   }
 
-  let totalRecebido = 0
-  let totalAReceber = 0
-  for (const p of payments) {
-    const amt = Number(p.amount)
-    if (p.status === "pago") totalRecebido += amt
-    else if (p.status === "pendente" || p.status === "aprovado") totalAReceber += amt
-  }
+  const totalRecebido = wallet.totalCreditosWallet
 
+  let totalAReceber = 0
   let recompensasPendentesCount = 0
   let recompensasDisponiveisCount = 0
   let valorRecompensasPendentes = 0
   let valorRecompensasDisponiveis = 0
+  let saldoEmDesconto = 0
   for (const rw of rewards) {
     const amt = Number(rw.amount)
     if (rw.status === "pendente") {
       recompensasPendentesCount += 1
       valorRecompensasPendentes += amt
+      totalAReceber += amt
     }
     if (rw.status === "disponivel" || rw.status === "solicitado") {
       recompensasDisponiveisCount += 1
       valorRecompensasDisponiveis += amt
+      if (rw.reward_type === "desconto_fatura") saldoEmDesconto += amt
     }
   }
 
-  let saldoDisponivel = 0
-  let saldoEmDesconto = 0
-  const walletSaldo =
-    options?.latestWalletBalance !== undefined && options.latestWalletBalance !== null
-      ? options.latestWalletBalance
-      : null
-
-  if (walletSaldo !== null) {
-    saldoDisponivel = walletSaldo
-    for (const rw of rewards) {
-      if (rw.status !== "disponivel" && rw.status !== "solicitado") continue
-      const amt = Number(rw.amount)
-      if (rw.reward_type === "desconto_fatura") saldoEmDesconto += amt
-    }
-  } else {
-    for (const rw of rewards) {
-      if (rw.status !== "disponivel" && rw.status !== "solicitado") continue
-      const amt = Number(rw.amount)
-      if (rw.reward_type === "desconto_fatura") saldoEmDesconto += amt
-      else saldoDisponivel += amt
-    }
-  }
+  const saldoDisponivel = wallet.saldoDisponivelFromLedger
 
   return {
     totalIndicacoes,
@@ -432,23 +469,6 @@ export async function loadIndicadorHomeFromSupabase(): Promise<IndicadorHomeFrom
 
     const referrals = (refData ?? []) as ReferralRow[]
 
-    const { data: payData, error: payError } = await supabase
-      .from("payments")
-      .select("amount, status")
-      .eq("indicator_profile_id", user.id)
-
-    devLog("query payments", {
-      error: payError?.message ?? null,
-      code: payError?.code ?? null,
-      rowCount: payData?.length ?? 0,
-    })
-
-    if (payError) {
-      return devFail(
-        `payments falhou: ${payError.message} (${payError.code ?? "sem código"})`
-      )
-    }
-
     const { data: rewData, error: rewError } = await supabase
       .from("rewards")
       .select("amount, status, reward_type")
@@ -480,24 +500,45 @@ export async function loadIndicadorHomeFromSupabase(): Promise<IndicadorHomeFrom
       hasRow: wtLatest != null,
     })
 
-    const payments = (payData ?? []) as PaymentRow[]
-    const rewards = (rewData ?? []) as RewardRow[]
-
-    let latestWalletBalance: number | undefined
-    if (!wtLatestError && wtLatest) {
-      latestWalletBalance = Number(
-        (wtLatest as { balance_after: number | string }).balance_after
+    if (wtLatestError) {
+      return devFail(
+        `wallet_transactions (saldo) falhou: ${wtLatestError.message} (${wtLatestError.code ?? "sem código"})`
       )
     }
 
-    const dashboard = buildDashboardFromRows(
-      referrals,
-      payments,
-      rewards,
-      latestWalletBalance !== undefined
-        ? { latestWalletBalance }
-        : undefined
-    )
+    const { data: wtCredits, error: wtCreditsError } = await supabase
+      .from("wallet_transactions")
+      .select("amount")
+      .eq("indicator_profile_id", user.id)
+      .eq("transaction_type", "credito")
+
+    devLog("query wallet_transactions (créditos)", {
+      error: wtCreditsError?.message ?? null,
+      code: wtCreditsError?.code ?? null,
+      rowCount: wtCredits?.length ?? 0,
+    })
+
+    if (wtCreditsError) {
+      return devFail(
+        `wallet_transactions (créditos) falhou: ${wtCreditsError.message} (${wtCreditsError.code ?? "sem código"})`
+      )
+    }
+
+    const rewards = (rewData ?? []) as RewardRow[]
+
+    const saldoDisponivelFromLedger = wtLatest
+      ? Number((wtLatest as { balance_after: number | string }).balance_after)
+      : 0
+
+    let totalCreditosWallet = 0
+    for (const row of wtCredits ?? []) {
+      totalCreditosWallet += Number((row as { amount: number | string }).amount)
+    }
+
+    const dashboard = buildDashboardFromRows(referrals, rewards, {
+      saldoDisponivelFromLedger,
+      totalCreditosWallet,
+    })
     const indicador = buildIndicadorFromProfile(row, referrals, dashboard)
     const recentIndicacoes = referrals
       .slice(0, 5)
@@ -508,7 +549,6 @@ export async function loadIndicadorHomeFromSupabase(): Promise<IndicadorHomeFrom
       devLog("sucesso: dados Supabase aplicados", {
         indicadorId: indicador.id,
         referrals: referrals.length,
-        payments: payments.length,
         rewards: rewards.length,
       })
     }
@@ -547,7 +587,8 @@ function mapPlanRowToPlano(row: PlanCatalogRow): Plano {
 }
 
 /**
- * Planos ativos do catálogo Supabase. Retorna null em falha (UI mantém mock).
+ * Planos ativos do catálogo Supabase. Retorna `[]` quando a consulta ok e não há linhas;
+ * `null` apenas em erro de rede/RLS/consulta.
  */
 export async function fetchActivePlansForIndicador(): Promise<Plano[] | null> {
   try {
@@ -564,9 +605,31 @@ export async function fetchActivePlansForIndicador(): Promise<Plano[] | null> {
       .eq("is_active", true)
       .order("sort_order", { ascending: true })
 
-    if (error || !data?.length) return null
+    if (error) return null
+    return ((data ?? []) as PlanCatalogRow[]).map(mapPlanRowToPlano)
+  } catch {
+    return null
+  }
+}
 
-    return (data as PlanCatalogRow[]).map(mapPlanRowToPlano)
+/** Catálogo completo de planos (admin). Mesma tabela `plans`, inclui inativos. */
+export async function loadAdminPlansCatalogFromSupabase(): Promise<
+  Plano[] | null
+> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const { data, error } = await db
+      .from("plans")
+      .select(
+        "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+      )
+      .order("sort_order", { ascending: true })
+
+    if (error) return null
+    return ((data ?? []) as PlanCatalogRow[]).map(mapPlanRowToPlano)
   } catch {
     return null
   }
@@ -1921,6 +1984,587 @@ export async function loadIndicadorReferralsListFromSupabase(): Promise<
   }
 }
 
+// --- Admin: indicações e indicadores (lista global) -------------------------------
+
+const ADMIN_PORTAL_READ_ROLES = new Set([
+  "admin_master",
+  "admin_financeiro",
+  "admin_consulta",
+])
+
+type AdminProfileShortRow = {
+  id: string
+  full_name: string
+  email: string
+  phone: string
+  cpf: string | null
+  is_active: boolean
+  created_at: string
+}
+
+type ReferralHistoryRow = {
+  id: string
+  referral_id: string
+  actor_profile_id: string | null
+  old_status: string | null
+  new_status: string
+  action_note: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
+/**
+ * Todas as indicações (admin). Dados reais do Supabase; `null` só em erro / sem permissão.
+ */
+export async function loadAdminReferralsFromSupabase(): Promise<Indicacao[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
+      return null
+    }
+
+    const { data: refData, error: refError } = await db
+      .from("referrals")
+      .select(
+        `
+        id,
+        indicator_profile_id,
+        referred_name,
+        referred_phone,
+        referred_email,
+        referred_address,
+        plan_id,
+        reward_type,
+        reward_amount,
+        status,
+        commercial_profile_id,
+        notes,
+        first_invoice_paid,
+        first_invoice_paid_at,
+        approved_at,
+        rejected_at,
+        rejection_reason,
+        created_at,
+        updated_at
+      `
+      )
+      .order("created_at", { ascending: false })
+      .limit(2000)
+
+    if (isDev()) {
+      console.log("[admin-indicacoes:supabase] raw", { data: refData, error: refError })
+    }
+
+    if (refError) {
+      return null
+    }
+
+    const referrals = (refData ?? []) as ReferralRow[]
+    const planIds = [...new Set(referrals.map((r) => r.plan_id))]
+
+    const planoById = new Map<string, Plano>()
+    if (planIds.length > 0) {
+      const { data: plansData, error: plansError } = await db
+        .from("plans")
+        .select(
+          "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+        )
+        .in("id", planIds)
+
+      if (plansError) {
+        return null
+      }
+      for (const pr of plansData ?? []) {
+        const p = mapPlanRowToPlano(pr as PlanCatalogRow)
+        planoById.set(p.id, p)
+      }
+    }
+
+    const profileIds = new Set<string>()
+    for (const r of referrals) {
+      profileIds.add(r.indicator_profile_id)
+      if (r.commercial_profile_id) profileIds.add(r.commercial_profile_id)
+    }
+    const profileList = [...profileIds]
+
+    const profileMap = new Map<string, AdminProfileShortRow>()
+    if (profileList.length > 0) {
+      const { data: profData, error: profError } = await db
+        .from("profiles")
+        .select("id, full_name, email, phone, cpf, is_active, created_at")
+        .in("id", profileList)
+
+      if (profError) {
+        return null
+      }
+      for (const pr of (profData ?? []) as AdminProfileShortRow[]) {
+        profileMap.set(pr.id, pr)
+      }
+    }
+
+    const mapped: Indicacao[] = referrals.map((r) => {
+      const base = referralRowToIndicacaoMerged(r, r.indicator_profile_id, planoById)
+      const ip = profileMap.get(r.indicator_profile_id)
+      const cp = r.commercial_profile_id
+        ? profileMap.get(r.commercial_profile_id)
+        : undefined
+      return {
+        ...base,
+        indicador: ip
+          ? stubIndicadorFromAdminProfile(ip.id, {
+              full_name: ip.full_name,
+              email: ip.email,
+              phone: ip.phone,
+              cpf: ip.cpf,
+              is_active: ip.is_active,
+              created_at: ip.created_at,
+            })
+          : undefined,
+        comercial:
+          cp && r.commercial_profile_id
+            ? stubComercialFromAdminProfile(r.commercial_profile_id, {
+                full_name: cp.full_name,
+                email: cp.email,
+                phone: cp.phone,
+                is_active: cp.is_active,
+                created_at: cp.created_at,
+              })
+            : undefined,
+      }
+    })
+
+    if (isDev()) {
+      console.log("[admin-indicacoes:supabase] mapped", mapped)
+    }
+
+    return mapped
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Perfis indicador (admin). `null` só em erro / sem permissão.
+ */
+export async function loadAdminIndicatorsFromSupabase(): Promise<Indicador[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
+      return null
+    }
+
+    const { data: profilesData, error: profErr } = await db
+      .from("profiles")
+      .select("id, full_name, email, phone, cpf, is_active, created_at, role")
+      .eq("role", "indicador")
+      .order("created_at", { ascending: false })
+
+    if (isDev()) {
+      console.log("[admin-indicadores:supabase] profiles", { data: profilesData, error: profErr })
+    }
+
+    if (profErr) {
+      return null
+    }
+
+    const profs = (profilesData ?? []) as AdminProfileShortRow[]
+    const ids = profs.map((p) => p.id)
+
+    const countMap = new Map<string, { total: number; aprovadas: number }>()
+    for (const id of ids) {
+      countMap.set(id, { total: 0, aprovadas: 0 })
+    }
+
+    if (ids.length > 0) {
+      const { data: refRows, error: refErr } = await db
+        .from("referrals")
+        .select("indicator_profile_id, status")
+        .in("indicator_profile_id", ids)
+
+      if (refErr) {
+        return null
+      }
+      for (const row of (refRows ?? []) as { indicator_profile_id: string; status: string }[]) {
+        const cur = countMap.get(row.indicator_profile_id) ?? { total: 0, aprovadas: 0 }
+        cur.total += 1
+        if (row.status === "aprovada" || row.status === "paga") cur.aprovadas += 1
+        countMap.set(row.indicator_profile_id, cur)
+      }
+    }
+
+    const balanceMap = new Map<string, number>()
+    if (ids.length > 0) {
+      const { data: txs, error: txErr } = await db
+        .from("wallet_transactions")
+        .select("indicator_profile_id, balance_after, created_at")
+        .in("indicator_profile_id", ids)
+        .order("created_at", { ascending: false })
+
+      if (!txErr && txs) {
+        for (const t of txs as {
+          indicator_profile_id: string
+          balance_after: number | string
+        }[]) {
+          if (!balanceMap.has(t.indicator_profile_id)) {
+            balanceMap.set(t.indicator_profile_id, Number(t.balance_after))
+          }
+        }
+      }
+    }
+
+    const mapped: Indicador[] = profs.map((p) => {
+      const counts = countMap.get(p.id) ?? { total: 0, aprovadas: 0 }
+      return {
+        id: p.id,
+        nome: p.full_name,
+        email: p.email,
+        telefone: p.phone ?? "",
+        role: "indicador",
+        cpf: p.cpf ?? undefined,
+        ativo: p.is_active,
+        createdAt: new Date(p.created_at),
+        totalIndicacoes: counts.total,
+        indicacoesAprovadas: counts.aprovadas,
+        totalRecebido: 0,
+        saldoDisponivel: balanceMap.get(p.id) ?? 0,
+        saldoDesconto: 0,
+      }
+    })
+
+    if (isDev()) {
+      console.log("[admin-indicadores:supabase] mapped", mapped)
+    }
+
+    return mapped
+  } catch {
+    return null
+  }
+}
+
+const REFERRAL_ACTIVE_FOR_COMMERCIAL_STATS = new Set([
+  "pendente",
+  "em_andamento",
+  "em_atendimento",
+  "em_negociacao",
+])
+
+/**
+ * Perfis comercial (admin). `null` só em erro / sem permissão.
+ */
+export async function loadAdminComerciaisFromSupabase(): Promise<Comercial[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
+      return null
+    }
+
+    const { data: profilesData, error: profErr } = await db
+      .from("profiles")
+      .select("id, full_name, email, phone, is_active, created_at, updated_at")
+      .eq("role", "comercial")
+      .order("created_at", { ascending: false })
+
+    if (profErr) {
+      return null
+    }
+
+    const profs = (profilesData ?? []) as {
+      id: string
+      full_name: string
+      email: string
+      phone: string
+      is_active: boolean
+      created_at: string
+      updated_at: string
+    }[]
+    const ids = profs.map((p) => p.id)
+
+    const availabilityMap = new Map<string, ComercialDisponibilidade>()
+    if (ids.length > 0) {
+      const { data: avRows, error: avErr } = await db
+        .from("commercial_availability")
+        .select("commercial_profile_id, availability_status, updated_at")
+        .in("commercial_profile_id", ids)
+        .order("updated_at", { ascending: false })
+
+      if (!avErr && avRows) {
+        for (const row of avRows as {
+          commercial_profile_id: string
+          availability_status: ComercialDisponibilidade
+          updated_at: string
+        }[]) {
+          if (!availabilityMap.has(row.commercial_profile_id)) {
+            availabilityMap.set(row.commercial_profile_id, row.availability_status)
+          }
+        }
+      }
+    }
+
+    const statsMap = new Map<string, { ativos: number; vendas: number }>()
+    for (const id of ids) {
+      statsMap.set(id, { ativos: 0, vendas: 0 })
+    }
+
+    if (ids.length > 0) {
+      const { data: refRows, error: refErr } = await db
+        .from("referrals")
+        .select("commercial_profile_id, status")
+        .in("commercial_profile_id", ids)
+
+      if (refErr) {
+        return null
+      }
+      for (const row of (refRows ?? []) as {
+        commercial_profile_id: string | null
+        status: string
+      }[]) {
+        const cid = row.commercial_profile_id
+        if (!cid) continue
+        const cur = statsMap.get(cid) ?? { ativos: 0, vendas: 0 }
+        if (row.status === "aprovada" || row.status === "paga") {
+          cur.vendas += 1
+        } else if (REFERRAL_ACTIVE_FOR_COMMERCIAL_STATS.has(row.status)) {
+          cur.ativos += 1
+        }
+        statsMap.set(cid, cur)
+      }
+    }
+
+    const mapped: Comercial[] = profs.map((p) => {
+      const stats = statsMap.get(p.id) ?? { ativos: 0, vendas: 0 }
+      const disp: ComercialDisponibilidade =
+        availabilityMap.get(p.id) ?? (p.is_active ? "disponivel" : "offline")
+      return {
+        id: p.id,
+        nome: p.full_name,
+        email: p.email,
+        telefone: p.phone,
+        role: "comercial",
+        ativo: p.is_active,
+        createdAt: new Date(p.created_at),
+        updatedAt: new Date(p.updated_at),
+        disponibilidade: disp,
+        leadsAtivos: stats.ativos,
+        vendasRealizadas: stats.vendas,
+        tempoMedioPrimeiroContato: 0,
+      }
+    })
+
+    return mapped
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Último status de disponibilidade do comercial logado (`commercial_availability`).
+ */
+export async function loadComercialAvailabilityStatusFromSupabase(): Promise<ComercialDisponibilidade | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    if (profileError || !profile) return null
+    if ((profile as { role: string }).role !== "comercial") return null
+
+    const { data: row, error } = await db
+      .from("commercial_availability")
+      .select("availability_status")
+      .eq("commercial_profile_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      return null
+    }
+    if (!row) return null
+    return (row as { availability_status: ComercialDisponibilidade })
+      .availability_status
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Histórico de `referral_history` para todos os leads atribuídos ao comercial logado.
+ */
+export async function loadComercialAssignedHistoryFromSupabase(): Promise<
+  Historico[] | null
+> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    if (profileError || !profile) return null
+    if ((profile as { role: string }).role !== "comercial") return null
+
+    const { data: refRows, error: refErr } = await db
+      .from("referrals")
+      .select("id")
+      .eq("commercial_profile_id", user.id)
+      .limit(500)
+
+    if (refErr) {
+      return null
+    }
+
+    const refIds = (refRows ?? []).map((r: { id: string }) => r.id)
+    if (refIds.length === 0) {
+      return []
+    }
+
+    const { data: historyRows, error: historyError } = await db
+      .from("referral_history")
+      .select(
+        "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
+      )
+      .in("referral_id", refIds)
+      .order("created_at", { ascending: false })
+      .limit(300)
+
+    if (historyError) {
+      return null
+    }
+
+    const actorIds = [
+      ...new Set(
+        (historyRows ?? [])
+          .map((h: unknown) => (h as ReferralHistoryRow).actor_profile_id)
+          .filter((id: string | null): id is string => Boolean(id))
+      ),
+    ]
+
+    const actorById = new Map<string, { full_name: string; phone: string | null }>()
+    if (actorIds.length > 0) {
+      const { data: actorRows, error: actorError } = await db
+        .from("profiles")
+        .select("id, full_name, phone")
+        .in("id", actorIds)
+      if (actorError) {
+        return null
+      }
+      for (const row of actorRows ?? []) {
+        const actor = row as { id: string; full_name: string; phone: string | null }
+        actorById.set(actor.id, {
+          full_name: actor.full_name,
+          phone: actor.phone,
+        })
+      }
+    }
+
+    const historico: Historico[] = (historyRows ?? []).map((raw: unknown) => {
+      const h = raw as ReferralHistoryRow
+      const actor = h.actor_profile_id ? actorById.get(h.actor_profile_id) : null
+      const acaoBase = h.action_note?.trim() || "Atualização de lead"
+      const descricaoStatus =
+        h.old_status && h.old_status !== h.new_status
+          ? `Status: ${h.old_status} -> ${h.new_status}`
+          : `Status: ${h.new_status}`
+      const metadataAction =
+        h.metadata && typeof h.metadata.action === "string"
+          ? `Ação: ${h.metadata.action}`
+          : null
+
+      return {
+        id: h.id,
+        leadId: h.referral_id,
+        comercialId: h.actor_profile_id ?? "",
+        comercial: h.actor_profile_id
+          ? stubComercialProfile(
+              h.actor_profile_id,
+              actor?.full_name ?? "Comercial",
+              actor?.phone ?? ""
+            )
+          : undefined,
+        acao: acaoBase,
+        descricao: [descricaoStatus, metadataAction].filter(Boolean).join(" • "),
+        createdAt: new Date(h.created_at),
+      }
+    })
+
+    if (isDev()) {
+      console.log("[supabase-query:debug]", {
+        query: "loadComercialAssignedHistoryFromSupabase",
+        rows: historico.length,
+      })
+    }
+
+    return historico
+  } catch {
+    return null
+  }
+}
+
 // --- Detalhe /indicador/indicacoes/[id] -------------------------------------------
 
 const INDICACAO_DETAIL_LOG_PREFIX = "[indicador-indicacao-detail:supabase]"
@@ -2399,17 +3043,6 @@ function devWarnComercialLeadDetailMock(reason: string): void {
   }
 }
 
-type ReferralHistoryRow = {
-  id: string
-  referral_id: string
-  actor_profile_id: string | null
-  old_status: string | null
-  new_status: string
-  action_note: string | null
-  metadata: Record<string, unknown> | null
-  created_at: string
-}
-
 export type ComercialLeadDetailsResult =
   | { kind: "ok"; lead: Lead; historico: Historico[] }
   | { kind: "not-found" }
@@ -2744,6 +3377,79 @@ export async function getAuthProfileRoleFromSupabase(): Promise<UserRole | null>
   }
 }
 
+/** Ações financeiras sensíveis: saques Pix e 1ª mensalidade (não inclui admin_consulta). */
+const ADMIN_FINANCE_MASTER_ROLES = new Set<UserRole>([
+  "admin_financeiro",
+  "admin_master",
+])
+
+async function assertAdminFinanceOrMasterForSensitiveAction(): Promise<
+  { ok: true } | { ok: false; message: string }
+> {
+  const role = await getAuthProfileRoleFromSupabase()
+  if (!role || !ADMIN_FINANCE_MASTER_ROLES.has(role)) {
+    return {
+      ok: false,
+      message: "Sem permissão para esta ação financeira.",
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * Perfil do usuário autenticado (`auth.users` + `public.profiles`).
+ */
+export async function getAuthProfileBasicsFromSupabase(): Promise<AuthProfileBasics | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return null
+    const { data: row, error } = await db
+      .from("profiles")
+      .select(
+        "id, full_name, email, phone, role, avatar_url, created_at"
+      )
+      .eq("id", user.id)
+      .maybeSingle()
+    if (error || !row) return null
+    const r = row as {
+      id: string
+      full_name: string | null
+      email: string
+      phone: string
+      role: UserRole
+      avatar_url: string | null
+      created_at: string
+    }
+    const profile: AuthProfileBasics = {
+      id: r.id,
+      fullName: (r.full_name ?? "").trim() || "Usuário",
+      email: r.email ?? "",
+      phone: r.phone ?? "",
+      role: r.role,
+      avatarUrl: r.avatar_url ?? null,
+      createdAt: r.created_at ?? null,
+    }
+    if (isDev()) {
+      console.log("[auth-profile:debug]", {
+        userId: user.id,
+        email: user.email,
+        profile: row,
+        source: "supabase",
+      })
+    }
+    return profile
+  } catch {
+    return null
+  }
+}
+
 const MARK_FIRST_INVOICE_ERROR_CODES: MarkFirstInvoicePaidErrorCode[] = [
   "forbidden",
   "referral_not_found",
@@ -2810,16 +3516,33 @@ export async function markFirstInvoiceAsPaidFromSupabase(
   referralId: string
 ): Promise<MarkFirstInvoicePaidResult> {
   try {
+    const gate = await assertAdminFinanceOrMasterForSensitiveAction()
+    if (!gate.ok) {
+      return { ok: false, code: "forbidden", message: gate.message }
+    }
     devLogFirstInvoicePaid("início markFirstInvoiceAsPaidFromSupabase", {
       referralId,
     })
     const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
     const dbRpc = supabase as unknown as {
       rpc: (
         fn: string,
         args: { p_referral_id: string }
       ) => ReturnType<typeof supabase.rpc>
     }
+
+    // Buscar indicator_profile_id antes de chamar RPC (para notificações)
+    const { data: referralRow } = await db
+      .from("referrals")
+      .select("indicator_profile_id")
+      .eq("id", referralId)
+      .maybeSingle()
+    const indicatorProfileId = (referralRow as { indicator_profile_id?: string } | null)
+      ?.indicator_profile_id ?? null
+
     const { data, error } = await dbRpc.rpc("mark_first_invoice_paid", {
       p_referral_id: referralId,
     })
@@ -2841,7 +3564,39 @@ export async function markFirstInvoiceAsPaidFromSupabase(
       }
     }
 
-    return parseMarkFirstInvoiceRpcPayload(data)
+    const result = parseMarkFirstInvoiceRpcPayload(data)
+
+    if (result.ok && indicatorProfileId) {
+      // Evento 2 — primeira mensalidade confirmada
+      void insertNotification({
+        profile_id: indicatorProfileId,
+        notification_type: "recompensa",
+        title: "Primeira mensalidade confirmada",
+        message: "A primeira mensalidade do indicado foi confirmada.",
+        data: {
+          action: "first_invoice_paid",
+          referral_id: referralId,
+          reward_id: result.rewardId,
+          wallet_transaction_id: result.transactionId,
+        },
+      })
+
+      // Evento 3 — recompensa disponível (mark_first_invoice_paid libera a reward para 'disponivel')
+      void insertNotification({
+        profile_id: indicatorProfileId,
+        notification_type: "recompensa",
+        title: "Recompensa liberada",
+        message: "Sua recompensa já está disponível para saque ou desconto.",
+        data: {
+          action: "reward_available",
+          referral_id: referralId,
+          reward_id: result.rewardId,
+          balance_after: result.balanceAfter,
+        },
+      })
+    }
+
+    return result
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     devLogFirstInvoicePaid("exceção", msg)
@@ -3199,6 +3954,21 @@ export async function updateComercialLeadStatus(
               "Recompensa criada, mas falhou ao registrar histórico de criação da recompensa.",
           }
         }
+
+        // Evento 1 — notificar indicador: recompensa gerada
+        const createdReward = (rewardRows as { id?: string }[] | null)?.[0]
+        void insertNotification({
+          profile_id: before.indicator_profile_id,
+          notification_type: "recompensa",
+          title: "Recompensa gerada",
+          message:
+            "Sua indicação foi aprovada e uma recompensa foi gerada. Ela será liberada após confirmação da primeira mensalidade.",
+          data: {
+            action: "reward_created",
+            referral_id: referralId,
+            reward_id: createdReward?.id ?? null,
+          },
+        })
       } else {
         devLogComercialLeadUpdate("reward já existe; não duplica", {
           referralId,
@@ -3247,11 +4017,17 @@ export async function claimComercialLead(
   try {
     devLogComercialLeads("claim: início", { referralId })
 
-    const supabase = getSupabaseClient()
-    const db = supabase as unknown as {
-      from: (t: string) => ReturnType<typeof supabase.from>
+    const useMock =
+      process.env.NEXT_PUBLIC_DATA_PROVIDER === "mock" ||
+      process.env.DATA_PROVIDER === "mock"
+    if (useMock) {
+      if (isDev()) {
+        devLogComercialLeads("claim: mock provider — pulando RPC", { referralId })
+      }
+      return { ok: true }
     }
 
+    const supabase = getSupabaseClient()
     const {
       data: { user },
       error: userError,
@@ -3275,248 +4051,80 @@ export async function claimComercialLead(
       }
     }
 
-    const { data: profile, error: profileError } = await db
-      .from("profiles")
-      .select("id, role")
-      .eq("id", user.id)
-      .maybeSingle()
+    const dbRpc = supabase as unknown as {
+      rpc: (
+        fn: string,
+        args: { p_referral_id: string }
+      ) => ReturnType<typeof supabase.rpc>
+    }
 
-    const role = (profile as { role?: string } | null)?.role ?? null
-    devLogComercialLeads("claim: profile", {
-      hasProfile: Boolean(profile && !profileError),
-      role,
-      error: profileError?.message ?? null,
-      code: profileError?.code ?? null,
+    const { data, error } = await dbRpc.rpc("claim_referral_lead", {
+      p_referral_id: referralId,
     })
 
-    if (profileError || !profile) {
+    devLogComercialLeads("claim: RPC claim_referral_lead", {
+      error: error?.message ?? null,
+      code: (error as { code?: string } | null)?.code ?? null,
+      data: data ?? null,
+    })
+
+    if (error) {
       if (isDev()) {
-        console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: profile inválido", {
-          message: profileError?.message ?? "perfil ausente",
-          code: profileError?.code ?? null,
+        console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: erro RPC", {
+          message: error.message,
+          code: error.code ?? null,
         })
       }
       return {
         ok: false,
-        message: "Não foi possível validar seu perfil.",
+        message: error.message || "Não foi possível assumir este lead.",
       }
     }
 
-    if (role !== "comercial") {
-      if (isDev()) {
-        console.warn(
-          COMERCIAL_LEADS_LOG_PREFIX,
-          `claim: role inválida "${role}" (esperado "comercial")`
-        )
-      }
-      return {
-        ok: false,
-        message: "Apenas usuários com perfil comercial podem assumir leads.",
+    let payload = data as Record<string, unknown> | null
+    if (typeof data === "string") {
+      try {
+        payload = JSON.parse(data) as Record<string, unknown>
+      } catch {
+        payload = null
       }
     }
 
-    const { data: referralBefore, error: beforeError } = await db
-      .from("referrals")
-      .select("id, commercial_profile_id, status, updated_at")
-      .eq("id", referralId)
-      .maybeSingle()
+    const okFlag = payload?.ok === true
+    const code = typeof payload?.code === "string" ? payload.code : "unknown"
+    const msgFromServer =
+      typeof payload?.message === "string" ? payload.message : null
 
-    devLogComercialLeads("claim: row antes do update", {
-      error: beforeError?.message ?? null,
-      code: beforeError?.code ?? null,
-      row: referralBefore ?? null,
-    })
-
-    if (beforeError || !referralBefore) {
-      if (isDev()) {
-        console.warn(
-          COMERCIAL_LEADS_LOG_PREFIX,
-          "claim: não encontrou referral antes do update",
-          {
-            message: beforeError?.message ?? "referral ausente",
-            code: beforeError?.code ?? null,
-          }
-        )
-      }
-      return {
-        ok: false,
-        message: "Lead não encontrado para assumir.",
-      }
-    }
-
-    const beforeCommercialId = (
-      referralBefore as { commercial_profile_id: string | null }
-    ).commercial_profile_id
-    const oldStatus = (referralBefore as { status: string }).status
-    if (beforeCommercialId !== null) {
-      if (isDev()) {
-        console.warn(
-          COMERCIAL_LEADS_LOG_PREFIX,
-          "claim: lead já possui comercial atribuído",
-          {
-            referralId,
-            commercial_profile_id: beforeCommercialId,
-          }
-        )
-      }
-      return {
-        ok: false,
-        message: "Este lead já foi assumido por outro comercial.",
-      }
-    }
-
-    const { data: updateRows, error: updateError } = await db
-      .from("referrals")
-      .update({
-        commercial_profile_id: user.id,
-        status: "em_atendimento",
-        assigned_at: new Date().toISOString(),
-        first_response_at: new Date().toISOString(),
-        last_interaction_at: new Date().toISOString(),
+    if (payload && okFlag) {
+      devLogComercialLeads("claim: sucesso", {
+        referralId: payload.referral_id,
+        commercialProfileId: payload.commercial_profile_id,
       })
-      .eq("id", referralId)
-      .select(
-        "id, commercial_profile_id, status, updated_at, assigned_at, first_response_at, last_interaction_at"
-      )
-
-    devLogComercialLeads("claim: resultado do update", {
-      error: updateError?.message ?? null,
-      code: updateError?.code ?? null,
-      rowCount: updateRows?.length ?? 0,
-      rows: updateRows ?? [],
-    })
-    devLogComercialLeads("claim: resultado do update (campos SLA)", {
-      sla: (updateRows ?? []).map((row: unknown) => {
-        const r = row as {
-          id: string
-          assigned_at?: string | null
-          first_response_at?: string | null
-          last_interaction_at?: string | null
-        }
-        return {
-          id: r.id,
-          assigned_at: r.assigned_at ?? null,
-          first_response_at: r.first_response_at ?? null,
-          last_interaction_at: r.last_interaction_at ?? null,
-        }
-      }),
-    })
-
-    if (updateError) {
-      if (isDev()) {
-        console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: falha no update", {
-          message: updateError.message,
-          code: updateError.code ?? null,
-          details: (updateError as { details?: string }).details ?? null,
-          hint: (updateError as { hint?: string }).hint ?? null,
-        })
-      }
-      return {
-        ok: false,
-        message: "Não foi possível assumir este lead.",
-      }
+      return { ok: true }
     }
 
-    const { data: historyRows, error: historyError } = await db
-      .from("referral_history")
-      .insert({
-        referral_id: referralId,
-        actor_profile_id: user.id,
-        old_status: oldStatus,
-        new_status: "em_atendimento",
-        action_note: "Lead assumido pelo comercial",
-        metadata: { action: "claim_lead" },
+    const messageByCode: Record<string, string> = {
+      not_found: "Lead não encontrado para assumir.",
+      already_claimed: "Este lead já foi assumido por outro comercial.",
+      forbidden:
+        msgFromServer ??
+        "Apenas usuários com perfil comercial podem assumir leads.",
+      unauthorized:
+        msgFromServer ?? "Sessão não encontrada. Faça login novamente.",
+    }
+    const message =
+      messageByCode[code] ??
+      msgFromServer ??
+      "Não foi possível assumir este lead."
+
+    if (isDev()) {
+      console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: RPC retornou ok=false", {
+        code,
+        payload,
       })
-      .select(
-        "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
-      )
-
-    devLogComercialLeads("claim: insert referral_history", {
-      error: historyError?.message ?? null,
-      code: historyError?.code ?? null,
-      rowCount: historyRows?.length ?? 0,
-      rows: historyRows ?? [],
-    })
-
-    if (historyError) {
-      if (isDev()) {
-        console.warn(COMERCIAL_LEADS_LOG_PREFIX, "claim: falha ao inserir histórico", {
-          message: historyError.message,
-          code: historyError.code ?? null,
-          details: (historyError as { details?: string }).details ?? null,
-          hint: (historyError as { hint?: string }).hint ?? null,
-          payload: {
-            referral_id: referralId,
-            actor_profile_id: user.id,
-            old_status: oldStatus,
-            new_status: "em_atendimento",
-            action_note: "Lead assumido pelo comercial",
-            metadata: { action: "claim_lead" },
-          },
-        })
-      }
-      return {
-        ok: false,
-        message: "Lead atualizado, mas não foi possível registrar o histórico.",
-      }
     }
 
-    const { data: referralAfter, error: afterError } = await db
-      .from("referrals")
-      .select(
-        "id, commercial_profile_id, status, updated_at, assigned_at, first_response_at, last_interaction_at"
-      )
-      .eq("id", referralId)
-      .maybeSingle()
-
-    devLogComercialLeads("claim: row depois do update", {
-      error: afterError?.message ?? null,
-      code: afterError?.code ?? null,
-      row: referralAfter ?? null,
-    })
-
-    if (afterError || !referralAfter) {
-      if (isDev()) {
-        console.warn(
-          COMERCIAL_LEADS_LOG_PREFIX,
-          "claim: falha ao confirmar persistência após update",
-          {
-            message: afterError?.message ?? "row não retornada no pós-update",
-            code: afterError?.code ?? null,
-          }
-        )
-      }
-      return {
-        ok: false,
-        message: "Não foi possível confirmar a atualização do lead.",
-      }
-    }
-
-    const after = referralAfter as {
-      commercial_profile_id: string | null
-      status: string
-    }
-    if (after.commercial_profile_id !== user.id || after.status !== "em_atendimento") {
-      if (isDev()) {
-        console.warn(
-          COMERCIAL_LEADS_LOG_PREFIX,
-          "claim: persistência divergente após update",
-          {
-            esperado: { commercial_profile_id: user.id, status: "em_atendimento" },
-            atual: {
-              commercial_profile_id: after.commercial_profile_id,
-              status: after.status,
-            },
-          }
-        )
-      }
-      return {
-        ok: false,
-        message: "Lead não foi atualizado como esperado.",
-      }
-    }
-
-    return { ok: true }
+    return { ok: false, message }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     if (isDev()) {
@@ -3690,6 +4298,299 @@ function parsePixWithdrawalRpc(raw: unknown): import("@/types/payment").PixWithd
   return { ok: false, code: "invalid_response", message: "Resposta inválida do servidor." }
 }
 
+// ============================================================
+// NOTIFICAÇÕES INTERNAS
+// ============================================================
+
+const NOTIFICATIONS_LOG_PREFIX = "[notifications:supabase]"
+
+function devLogNotification(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(NOTIFICATIONS_LOG_PREFIX, ...args)
+}
+
+type NotificationPayload = {
+  profile_id: string
+  notification_type: "sistema" | "indicacao" | "pagamento" | "recompensa" | "carteira" | "seguranca"
+  title: string
+  message: string
+  data?: Record<string, unknown>
+}
+
+/**
+ * Insere uma notificação interna.
+ * Nunca lança exceção: se falhar, apenas loga em dev e retorna silenciosamente.
+ */
+async function insertNotification(payload: NotificationPayload): Promise<void> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const row = {
+      profile_id: payload.profile_id,
+      notification_type: payload.notification_type,
+      title: payload.title,
+      message: payload.message,
+      data: payload.data ?? {},
+      is_read: false,
+    }
+    const { error } = await db.from("notifications").insert(row)
+    if (error) {
+      devLogNotification("falha ao inserir notificação", {
+        title: payload.title,
+        profile_id: payload.profile_id,
+        error: error.message,
+        code: error.code ?? null,
+      })
+    } else {
+      devLogNotification("notificação inserida", { title: payload.title, profile_id: payload.profile_id })
+    }
+  } catch (e) {
+    devLogNotification("exceção ao inserir notificação", e instanceof Error ? e.message : String(e))
+  }
+}
+
+/**
+ * Insere notificações para todos os admins com roles financeiro/master.
+ * Nunca lança exceção.
+ */
+async function insertNotificationForAdmins(
+  payload: Omit<NotificationPayload, "profile_id">
+): Promise<void> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const { data: admins, error: adminsError } = await db
+      .from("profiles")
+      .select("id")
+      .in("role", ["admin_financeiro", "admin_master"])
+      .eq("is_active", true)
+    if (adminsError || !admins) {
+      devLogNotification("falha ao buscar admins para notificação", adminsError?.message ?? "sem dados")
+      return
+    }
+    await Promise.all(
+      (admins as { id: string }[]).map((a) =>
+        insertNotification({ ...payload, profile_id: a.id })
+      )
+    )
+  } catch (e) {
+    devLogNotification("exceção em insertNotificationForAdmins", e instanceof Error ? e.message : String(e))
+  }
+}
+
+// --- Central de notificações (usuário logado) -------------------------------------
+
+const USER_NOTIFICATIONS_LOG_PREFIX = "[user-notifications:supabase]"
+
+function devLogUserNotifications(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(USER_NOTIFICATIONS_LOG_PREFIX, ...args)
+}
+
+function devWarnUserNotifications(reason: string): void {
+  if (!isDev()) return
+  console.warn(USER_NOTIFICATIONS_LOG_PREFIX, reason)
+}
+
+/**
+ * Lista notificações do usuário autenticado (RLS: profile_id = auth.uid()).
+ */
+export async function loadUserNotificationsFromSupabase(): Promise<NotificationItem[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) {
+      devWarnUserNotifications(`load: sem usuário (${authError?.message ?? "auth"})`)
+      return null
+    }
+    const { data: rows, error } = await db
+      .from("notifications")
+      .select("id, title, message, notification_type, data, is_read, read_at, created_at")
+      .eq("profile_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(200)
+
+    if (error) {
+      devWarnUserNotifications(`query falhou: ${error.message} (${error.code ?? "sem código"})`)
+      return null
+    }
+
+    const list: NotificationItem[] = (rows ?? []).map((raw: unknown) => {
+      const row = raw as {
+        id: string
+        title: string
+        message: string
+        notification_type: string
+        data: Record<string, unknown> | null
+        is_read: boolean
+        read_at: string | null
+        created_at: string
+      }
+      return {
+        id: row.id,
+        title: row.title,
+        message: row.message,
+        notificationType: row.notification_type,
+        data: row.data ?? {},
+        isRead: row.is_read,
+        readAt: row.read_at ? new Date(row.read_at) : null,
+        createdAt: new Date(row.created_at),
+      }
+    })
+
+    const unreadCount = list.filter((n) => !n.isRead).length
+    devLogUserNotifications("load", {
+      total: list.length,
+      unreadCount,
+    })
+
+    return list
+  } catch (e) {
+    devWarnUserNotifications(`load exceção: ${e instanceof Error ? e.message : String(e)}`)
+    return null
+  }
+}
+
+/**
+ * Contagem de notificações não lidas do usuário autenticado.
+ */
+export async function countUserUnreadNotificationsFromSupabase(): Promise<number | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return null
+    const { count, error } = await db
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("profile_id", user.id)
+      .eq("is_read", false)
+
+    if (error) {
+      devWarnUserNotifications(`count falhou: ${error.message}`)
+      return null
+    }
+    const unreadCount = count ?? 0
+    devLogUserNotifications("unread count", { unreadCount })
+    return unreadCount
+  } catch (e) {
+    devWarnUserNotifications(`count exceção: ${e instanceof Error ? e.message : String(e)}`)
+    return null
+  }
+}
+
+/**
+ * Marca uma notificação como lida (somente se pertencer ao usuário).
+ */
+export async function markUserNotificationAsRead(
+  notificationId: string
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { ok: false, message: "Sessão inválida. Faça login novamente." }
+    }
+    const now = new Date().toISOString()
+    const { data: updated, error } = await db
+      .from("notifications")
+      .update({ is_read: true, read_at: now })
+      .eq("id", notificationId)
+      .eq("profile_id", user.id)
+      .select("id, is_read, read_at")
+
+    devLogUserNotifications("markUserNotificationAsRead", {
+      notificationId,
+      error: error?.message ?? null,
+      rowCount: updated?.length ?? 0,
+    })
+
+    if (error) {
+      return {
+        ok: false,
+        message: error.message || "Não foi possível marcar como lida.",
+      }
+    }
+    if (!updated || updated.length === 0) {
+      return { ok: false, message: "Notificação não encontrada ou sem permissão." }
+    }
+    return { ok: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    devWarnUserNotifications(`markOne exceção: ${msg}`)
+    return { ok: false, message: msg }
+  }
+}
+
+/**
+ * Marca todas as notificações do usuário como lidas.
+ */
+export async function markAllUserNotificationsAsRead(): Promise<
+  { ok: true; updated: number } | { ok: false; message: string }
+> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { ok: false, message: "Sessão inválida. Faça login novamente." }
+    }
+    const now = new Date().toISOString()
+    const { data: updatedRows, error } = await db
+      .from("notifications")
+      .update({ is_read: true, read_at: now })
+      .eq("profile_id", user.id)
+      .eq("is_read", false)
+      .select("id")
+
+    devLogUserNotifications("markAllUserNotificationsAsRead", {
+      updated: updatedRows?.length ?? 0,
+      error: error?.message ?? null,
+    })
+
+    if (error) {
+      return {
+        ok: false,
+        message: error.message || "Falha ao marcar todas como lidas.",
+      }
+    }
+    return { ok: true, updated: updatedRows?.length ?? 0 }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return { ok: false, message: msg }
+  }
+}
+
+// ============================================================
+// SAQUES PIX — RPC HELPER
+// ============================================================
+
 async function rpcPixWithdrawal(
   fn: string,
   args: Record<string, string | number>
@@ -3720,36 +4621,143 @@ async function rpcPixWithdrawal(
   }
 }
 
+/** Retorna `indicator_profile_id` do payment, ou null se não encontrado. Nunca lança. */
+async function fetchPaymentIndicatorId(paymentId: string): Promise<string | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const { data } = await db
+      .from("payments")
+      .select("indicator_profile_id")
+      .eq("id", paymentId)
+      .maybeSingle()
+    return (data as { indicator_profile_id?: string } | null)?.indicator_profile_id ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function requestPixWithdrawalFromSupabase(
   amount: number
 ): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
-  return rpcPixWithdrawal("request_pix_withdrawal", { p_amount: amount })
+  const result = await rpcPixWithdrawal("request_pix_withdrawal", { p_amount: amount })
+
+  if (result.ok) {
+    // Evento 4 — notificar admins financeiro/master
+    void insertNotificationForAdmins({
+      notification_type: "carteira",
+      title: "Novo saque Pix solicitado",
+      message: "Um indicador solicitou saque Pix e aguarda análise.",
+      data: {
+        action: "pix_withdrawal_requested",
+        payment_id: result.paymentId ?? null,
+      },
+    })
+  }
+
+  return result
 }
 
 export async function approvePixWithdrawalFromSupabase(
   paymentId: string
 ): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
-  return rpcPixWithdrawal("approve_pix_withdrawal", { p_payment_id: paymentId })
+  const gate = await assertAdminFinanceOrMasterForSensitiveAction()
+  if (!gate.ok) {
+    return { ok: false, code: "forbidden", message: gate.message }
+  }
+  const result = await rpcPixWithdrawal("approve_pix_withdrawal", { p_payment_id: paymentId })
+
+  if (result.ok) {
+    // Evento 5 — notificar indicador: saque aprovado
+    const indicatorId = await fetchPaymentIndicatorId(paymentId)
+    if (indicatorId) {
+      void insertNotification({
+        profile_id: indicatorId,
+        notification_type: "carteira",
+        title: "Saque Pix aprovado",
+        message: "Sua solicitação de saque Pix foi aprovada e aguarda envio.",
+        data: {
+          action: "pix_withdrawal_approved",
+          payment_id: paymentId,
+        },
+      })
+    }
+  }
+
+  return result
 }
 
 export async function rejectPixWithdrawalFromSupabase(
   paymentId: string,
   reason: string
 ): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
-  return rpcPixWithdrawal("reject_pix_withdrawal", {
+  const gate = await assertAdminFinanceOrMasterForSensitiveAction()
+  if (!gate.ok) {
+    return { ok: false, code: "forbidden", message: gate.message }
+  }
+  const result = await rpcPixWithdrawal("reject_pix_withdrawal", {
     p_payment_id: paymentId,
     p_reason: reason,
   })
+
+  if (result.ok) {
+    // Evento 6 — notificar indicador: saque rejeitado
+    const indicatorId = await fetchPaymentIndicatorId(paymentId)
+    if (indicatorId) {
+      const reasonTrimmed = reason.trim()
+      const message = reasonTrimmed
+        ? `Sua solicitação de saque Pix foi rejeitada. Motivo: ${reasonTrimmed}`
+        : "Sua solicitação de saque Pix foi rejeitada."
+      void insertNotification({
+        profile_id: indicatorId,
+        notification_type: "carteira",
+        title: "Saque Pix rejeitado",
+        message,
+        data: {
+          action: "pix_withdrawal_rejected",
+          payment_id: paymentId,
+          reason: reasonTrimmed || null,
+        },
+      })
+    }
+  }
+
+  return result
 }
 
 export async function completePixWithdrawalFromSupabase(
   paymentId: string,
   receiptUrl: string
 ): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
-  return rpcPixWithdrawal("complete_pix_withdrawal", {
+  const gate = await assertAdminFinanceOrMasterForSensitiveAction()
+  if (!gate.ok) {
+    return { ok: false, code: "forbidden", message: gate.message }
+  }
+  const result = await rpcPixWithdrawal("complete_pix_withdrawal", {
     p_payment_id: paymentId,
     p_receipt_url: receiptUrl,
   })
+
+  if (result.ok) {
+    // Evento 7 — notificar indicador: saque concluído
+    const indicatorId = await fetchPaymentIndicatorId(paymentId)
+    if (indicatorId) {
+      void insertNotification({
+        profile_id: indicatorId,
+        notification_type: "carteira",
+        title: "Saque Pix concluído",
+        message: "Seu saque Pix foi concluído. O comprovante já está disponível.",
+        data: {
+          action: "pix_withdrawal_completed",
+          payment_id: paymentId,
+        },
+      })
+    }
+  }
+
+  return result
 }
 
 /**
@@ -3844,6 +4852,243 @@ export async function loadIndicadorWalletTransactionsFromSupabase(
   }
 }
 
+export type IndicadorCarteiraSupabasePayload = {
+  userId: string
+  availableBalance: number
+  pendingRewardsTotal: number
+  creditTotal: number
+  discountBalance: number
+  movimentacoes: WalletTransactionListItem[]
+  chavePix: string | null
+  rewardsCount: number
+}
+
+/**
+ * Carteira do indicador autenticado: saldo (último balance_after), totais e movimentações.
+ * Retorna null se não houver sessão, perfil inexistente ou role diferente de indicador.
+ * Em erro de consulta após autenticar, preenche com zeros e lista vazia (não simula dados).
+ */
+export async function loadIndicadorCarteiraFromSupabase(): Promise<IndicadorCarteiraSupabasePayload | null> {
+  const supabase = getSupabaseClient()
+  const db = supabase as unknown as {
+    from: (t: string) => ReturnType<typeof supabase.from>
+  }
+  const {
+    data: { user },
+    error: authErr,
+  } = await supabase.auth.getUser()
+  if (authErr || !user) return null
+
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle()
+
+  if (profileError || !profile) return null
+  if ((profile as { role: string }).role !== "indicador") return null
+
+  const uid = user.id
+
+  try {
+    const [wtLatestRes, wtCreditsRes, rewardsRes, movRes, pixRes] = await Promise.all([
+      db
+        .from("wallet_transactions")
+        .select("balance_after")
+        .eq("indicator_profile_id", uid)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      db
+        .from("wallet_transactions")
+        .select("amount")
+        .eq("indicator_profile_id", uid)
+        .eq("transaction_type", "credito"),
+      db
+        .from("rewards")
+        .select("amount, status, reward_type")
+        .eq("indicator_profile_id", uid),
+      db
+        .from("wallet_transactions")
+        .select("id, transaction_type, amount, description, balance_after, created_at")
+        .eq("indicator_profile_id", uid)
+        .order("created_at", { ascending: false })
+        .limit(30),
+      db
+        .from("pix_keys")
+        .select("key_value")
+        .eq("profile_id", uid)
+        .eq("is_primary", true)
+        .maybeSingle(),
+    ])
+
+    if (wtLatestRes.error) {
+      devWarnPixWithdrawal(`carteira saldo: ${wtLatestRes.error.message}`)
+    }
+    if (wtCreditsRes.error) {
+      devWarnPixWithdrawal(`carteira créditos: ${wtCreditsRes.error.message}`)
+    }
+    if (rewardsRes.error) {
+      devWarnPixWithdrawal(`carteira rewards: ${rewardsRes.error.message}`)
+    }
+    if (movRes.error) {
+      devWarnPixWithdrawal(`carteira movimentações: ${movRes.error.message}`)
+    }
+    if (pixRes.error) {
+      devWarnPixWithdrawal(`carteira pix_keys: ${pixRes.error.message}`)
+    }
+
+    const availableBalance =
+      !wtLatestRes.error && wtLatestRes.data
+        ? Number((wtLatestRes.data as { balance_after: number | string }).balance_after)
+        : 0
+
+    let creditTotal = 0
+    if (!wtCreditsRes.error && wtCreditsRes.data) {
+      for (const row of wtCreditsRes.data as { amount: number | string }[]) {
+        creditTotal += Number(row.amount)
+      }
+    }
+
+    const rewards = !rewardsRes.error && rewardsRes.data
+      ? (rewardsRes.data as RewardRow[])
+      : []
+
+    let pendingRewardsTotal = 0
+    let discountBalance = 0
+    for (const rw of rewards) {
+      const amt = Number(rw.amount)
+      if (rw.status === "pendente") pendingRewardsTotal += amt
+      if (
+        (rw.status === "disponivel" || rw.status === "solicitado") &&
+        rw.reward_type === "desconto_fatura"
+      ) {
+        discountBalance += amt
+      }
+    }
+
+    const movimentacoes: WalletTransactionListItem[] =
+      !movRes.error && movRes.data
+        ? (movRes.data as unknown[]).map((raw: unknown) => {
+            const row = raw as {
+              id: string
+              transaction_type: string
+              amount: number | string
+              description: string
+              balance_after: number | string
+              created_at: string
+            }
+            return {
+              id: row.id,
+              tipo: row.transaction_type,
+              valor: Number(row.amount),
+              descricao: row.description,
+              saldoApos: Number(row.balance_after),
+              createdAt: new Date(row.created_at),
+            }
+          })
+        : []
+
+    const chavePix =
+      !pixRes.error && pixRes.data
+        ? String((pixRes.data as { key_value: string }).key_value)
+        : null
+
+    const rewardsCount = rewards.length
+
+    if (isDev()) {
+      console.log("[wallet:debug]", {
+        userId: uid,
+        availableBalance,
+        pendingRewardsTotal,
+        creditTotal,
+        transactionsCount: movimentacoes.length,
+        rewardsCount,
+      })
+    }
+
+    return {
+      userId: uid,
+      availableBalance,
+      pendingRewardsTotal,
+      creditTotal,
+      discountBalance,
+      movimentacoes,
+      chavePix,
+      rewardsCount,
+    }
+  } catch (e) {
+    devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    return {
+      userId: uid,
+      availableBalance: 0,
+      pendingRewardsTotal: 0,
+      creditTotal: 0,
+      discountBalance: 0,
+      movimentacoes: [],
+      chavePix: null,
+      rewardsCount: 0,
+    }
+  }
+}
+
+/**
+ * Chave Pix primária do indicador logado. Sem linha → `{ keyType: "cpf", keyValue: "" }`.
+ * `null` só em erro / perfil não indicador.
+ */
+export async function loadIndicadorPrimaryPixKeyFromSupabase(): Promise<{
+  keyType: TipoChavePix
+  keyValue: string
+} | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    if (profileError || !profile) return null
+    if ((profile as { role: string }).role !== "indicador") return null
+
+    const { data, error } = await db
+      .from("pix_keys")
+      .select("key_type, key_value")
+      .eq("profile_id", user.id)
+      .eq("is_primary", true)
+      .maybeSingle()
+
+    if (error) {
+      devWarnPixWithdrawal(`pix_keys chave-pix: ${error.message}`)
+      return null
+    }
+
+    if (!data) {
+      return { keyType: "cpf", keyValue: "" }
+    }
+
+    const row = data as { key_type: string; key_value: string }
+    const allowed: TipoChavePix[] = ["cpf", "cnpj", "email", "telefone", "aleatoria"]
+    const keyType = (allowed.includes(row.key_type as TipoChavePix)
+      ? row.key_type
+      : "cpf") as TipoChavePix
+
+    return { keyType, keyValue: row.key_value ?? "" }
+  } catch (e) {
+    devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    return null
+  }
+}
+
 const PAYMENTS_SELECT = `
   id,
   indicator_profile_id,
@@ -3903,12 +5148,15 @@ export async function loadIndicadorPagamentosFromSupabase(): Promise<Pagamento[]
 
 const ADMIN_PAYMENT_ROLES = new Set(["admin_master", "admin_financeiro", "admin_consulta"])
 
+const ADMIN_PIX_PENDING_BADGE_ROLES = new Set(["admin_master", "admin_financeiro"])
+
 /**
- * Lista saques Pix (admin). Filtro por status opcional.
+ * Quantidade de saques Pix aguardando ação do financeiro (pendente ou aprovado aguardando comprovante).
+ * Apenas `admin_master` ou `admin_financeiro`. Retorna 0 se não houver linhas; null em falha de consulta ou sem permissão.
  */
-export async function loadAdminPixWithdrawalsFromSupabase(
-  status?: "pendente" | "aprovado" | "pago" | "rejeitado" | "todos"
-): Promise<Pagamento[] | null> {
+export async function countAdminPendingPixWithdrawalsFromSupabase(): Promise<
+  number | null
+> {
   try {
     const supabase = getSupabaseClient()
     const db = supabase as unknown as {
@@ -3925,9 +5173,247 @@ export async function loadAdminPixWithdrawalsFromSupabase(
       .select("role")
       .eq("id", user.id)
       .maybeSingle()
+
     const role = (profile as { role?: string } | null)?.role ?? null
-    if (profileError || !role || !ADMIN_PAYMENT_ROLES.has(role)) {
-      devWarnPixWithdrawal(`role sem acesso à lista admin: ${role}`)
+    if (profileError || !role || !ADMIN_PIX_PENDING_BADGE_ROLES.has(role)) {
+      return null
+    }
+
+    const { count, error } = await db
+      .from("payments")
+      .select("id", { count: "exact", head: true })
+      .eq("payment_kind", "pix_withdrawal")
+      .in("status", ["pendente", "aprovado"])
+
+    if (error) {
+      devWarnPixWithdrawal(
+        `countAdminPendingPixWithdrawals: ${error.message}`
+      )
+      return null
+    }
+    return count ?? 0
+  } catch (e) {
+    devWarnPixWithdrawal(
+      e instanceof Error ? e.message : String(e)
+    )
+    return null
+  }
+}
+
+const SIDEBAR_COUNTS_LOG_PREFIX = "[sidebar-counts:supabase]"
+
+function devWarnSidebarCounts(reason: string): void {
+  if (isDev()) {
+    console.warn(SIDEBAR_COUNTS_LOG_PREFIX, reason)
+  }
+}
+
+/**
+ * Leads em pipeline do comercial: referrals atribuídas ao usuário ou em pool (`commercial_profile_id` nulo),
+ * com status `pendente`, `em_atendimento`, `em_andamento` ou `em_negociacao`.
+ */
+export async function countComercialPipelineReferralsFromSupabase(): Promise<
+  number | null
+> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || role !== "comercial") {
+      return null
+    }
+
+    const orFilter = `commercial_profile_id.eq.${user.id},commercial_profile_id.is.null`
+    const { count, error } = await db
+      .from("referrals")
+      .select("id", { count: "exact", head: true })
+      .or(orFilter)
+      .in("status", ["pendente", "em_atendimento", "em_andamento", "em_negociacao"])
+
+    if (error) {
+      devWarnSidebarCounts(`countComercialPipelineReferrals: ${error.message}`)
+      return null
+    }
+    return count ?? 0
+  } catch (e) {
+    devWarnSidebarCounts(
+      `countComercialPipelineReferrals exceção: ${e instanceof Error ? e.message : String(e)}`
+    )
+    return null
+  }
+}
+
+/**
+ * Retornos agendados futuros do comercial. O schema atual de `referrals` não possui campo de data de retorno;
+ * retorna 0 para comercial autenticado e `null` sem sessão ou se não for comercial.
+ */
+export async function countComercialScheduledReturnsFromSupabase(): Promise<
+  number | null
+> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || role !== "comercial") {
+      return null
+    }
+    return 0
+  } catch (e) {
+    devWarnSidebarCounts(
+      `countComercialScheduledReturns exceção: ${e instanceof Error ? e.message : String(e)}`
+    )
+    return null
+  }
+}
+
+/**
+ * Total de indicações visíveis ao admin (mesmas roles que `loadAdminReferralsFromSupabase`).
+ */
+export async function countAdminReferralsFromSupabase(): Promise<number | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
+      return null
+    }
+
+    const { count, error } = await db
+      .from("referrals")
+      .select("id", { count: "exact", head: true })
+
+    if (error) {
+      devWarnSidebarCounts(`countAdminReferrals: ${error.message}`)
+      return null
+    }
+    return count ?? 0
+  } catch (e) {
+    devWarnSidebarCounts(
+      `countAdminReferrals exceção: ${e instanceof Error ? e.message : String(e)}`
+    )
+    return null
+  }
+}
+
+/**
+ * Indicadores ativos (`role = indicador` e `is_active = true`).
+ */
+export async function countAdminActiveIndicadoresFromSupabase(): Promise<
+  number | null
+> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
+      return null
+    }
+
+    const { count, error } = await db
+      .from("profiles")
+      .select("id", { count: "exact", head: true })
+      .eq("role", "indicador")
+      .eq("is_active", true)
+
+    if (error) {
+      devWarnSidebarCounts(`countAdminActiveIndicadores: ${error.message}`)
+      return null
+    }
+    return count ?? 0
+  } catch (e) {
+    devWarnSidebarCounts(
+      `countAdminActiveIndicadores exceção: ${e instanceof Error ? e.message : String(e)}`
+    )
+    return null
+  }
+}
+
+/**
+ * Lista saques Pix (admin). Filtro por status opcional.
+ */
+export async function loadAdminPixWithdrawalsFromSupabase(
+  status?: "pendente" | "aprovado" | "pago" | "rejeitado" | "todos"
+): Promise<Pagamento[] | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) {
+      return null
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role, email, full_name")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const role = ((profile as { role?: UserRole } | null)?.role ?? null) as UserRole | null
+    if (profileError || !role || !ADMIN_FINANCE_MASTER_ROLES.has(role)) {
+      devWarnPixWithdrawal(
+        `role sem acesso à lista admin: ${role} (profileError: ${profileError?.message ?? "nenhum"})`
+      )
       return null
     }
 
@@ -3937,8 +5423,16 @@ export async function loadAdminPixWithdrawalsFromSupabase(
       .eq("payment_kind", "pix_withdrawal")
       .order("created_at", { ascending: false })
 
-    if (status && status !== "todos") {
+    /**
+     * Status em `public.payment_status`: pendente | aprovado | pago | cancelado | rejeitado
+     * (schema.sql). Esta tela só lista saques em análise ou aguardando comprovante.
+     */
+    if (status === "pendente" || status === "aprovado") {
+      q = q.in("status", ["pendente", "aprovado"]).eq("status", status)
+    } else if (status && status !== "todos") {
       q = q.eq("status", status)
+    } else {
+      q = q.in("status", ["pendente", "aprovado"])
     }
 
     const { data, error } = await q
@@ -3946,8 +5440,40 @@ export async function loadAdminPixWithdrawalsFromSupabase(
       devWarnPixWithdrawal(`admin payments: ${error.message}`)
       return null
     }
-    const mapped = ((data ?? []) as PaymentRowDb[]).map(paymentRowToPagamento)
-    return await expandPaymentReceiptUrlsInPagamentos(mapped)
+
+    const rows = (data ?? []) as PaymentRowDb[]
+    const indicatorIds = [...new Set(rows.map((r) => r.indicator_profile_id))]
+    const profileMap = new Map<string, AdminProfileShortRow>()
+    if (indicatorIds.length > 0) {
+      const { data: profs, error: pErr } = await db
+        .from("profiles")
+        .select("id, full_name, email, phone, cpf, is_active, created_at")
+        .in("id", indicatorIds)
+      if (!pErr && profs) {
+        for (const pr of profs as AdminProfileShortRow[]) {
+          profileMap.set(pr.id, pr)
+        }
+      }
+    }
+
+    const mappedBase = rows.map((row) => {
+      const p = paymentRowToPagamento(row)
+      const pr = profileMap.get(row.indicator_profile_id)
+      if (pr) {
+        p.indicador = stubIndicadorFromAdminProfile(row.indicator_profile_id, {
+          full_name: pr.full_name,
+          email: pr.email,
+          phone: pr.phone,
+          cpf: pr.cpf,
+          is_active: pr.is_active,
+          created_at: pr.created_at,
+        })
+      }
+      return p
+    })
+    const mapped = await expandPaymentReceiptUrlsInPagamentos(mappedBase)
+
+    return mapped
   } catch (e) {
     devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
     return null
@@ -3994,6 +5520,209 @@ export async function loadAdminAllPaymentsFromSupabase(): Promise<Pagamento[] | 
     return await expandPaymentReceiptUrlsInPagamentos(mapped)
   } catch (e) {
     devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    return null
+  }
+}
+
+/**
+ * Detalhe de um indicador (admin): perfil, indicações e pagamentos do perfil.
+ */
+export async function loadAdminIndicatorDetailFromSupabase(
+  indicatorProfileId: string
+): Promise<{ indicador: Indicador; indicacoes: Indicacao[]; pagamentos: Pagamento[] } | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return null
+
+    const { data: adminProf, error: adminErr } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const adminRole = (adminProf as { role?: string } | null)?.role ?? null
+    if (adminErr || !adminRole || !ADMIN_PORTAL_READ_ROLES.has(adminRole)) {
+      return null
+    }
+
+    const { data: pRow, error: pErr } = await db
+      .from("profiles")
+      .select("id, full_name, email, phone, cpf, is_active, created_at, role")
+      .eq("id", indicatorProfileId)
+      .maybeSingle()
+
+    if (pErr || !pRow || (pRow as { role: string }).role !== "indicador") {
+      return null
+    }
+
+    const p = pRow as AdminProfileShortRow
+
+    const { data: refData, error: refError } = await db
+      .from("referrals")
+      .select(
+        `
+        id,
+        indicator_profile_id,
+        referred_name,
+        referred_phone,
+        referred_email,
+        referred_address,
+        plan_id,
+        reward_type,
+        reward_amount,
+        status,
+        commercial_profile_id,
+        notes,
+        first_invoice_paid,
+        first_invoice_paid_at,
+        approved_at,
+        rejected_at,
+        rejection_reason,
+        created_at,
+        updated_at
+      `
+      )
+      .eq("indicator_profile_id", indicatorProfileId)
+      .order("created_at", { ascending: false })
+
+    if (refError) {
+      return null
+    }
+
+    const referrals = (refData ?? []) as ReferralRow[]
+    let aprovadas = 0
+    for (const r of referrals) {
+      if (r.status === "aprovada" || r.status === "paga") aprovadas += 1
+    }
+
+    const planIds = [...new Set(referrals.map((r) => r.plan_id))]
+    const planoById = new Map<string, Plano>()
+    if (planIds.length > 0) {
+      const { data: plansData, error: plansError } = await db
+        .from("plans")
+        .select(
+          "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+        )
+        .in("id", planIds)
+      if (plansError) {
+        return null
+      }
+      for (const pr of plansData ?? []) {
+        const pl = mapPlanRowToPlano(pr as PlanCatalogRow)
+        planoById.set(pl.id, pl)
+      }
+    }
+
+    const profileIds = new Set<string>()
+    profileIds.add(p.id)
+    for (const r of referrals) {
+      if (r.commercial_profile_id) profileIds.add(r.commercial_profile_id)
+    }
+    const profileMap = new Map<string, AdminProfileShortRow>()
+    profileMap.set(p.id, p)
+    const extraIds = [...profileIds].filter((x) => x !== p.id)
+    if (extraIds.length > 0) {
+      const { data: profData, error: profError } = await db
+        .from("profiles")
+        .select("id, full_name, email, phone, cpf, is_active, created_at")
+        .in("id", extraIds)
+      if (profError) {
+        return null
+      }
+      for (const pr of (profData ?? []) as AdminProfileShortRow[]) {
+        profileMap.set(pr.id, pr)
+      }
+    }
+
+    const indicacoes: Indicacao[] = referrals.map((r) => {
+      const base = referralRowToIndicacaoMerged(r, r.indicator_profile_id, planoById)
+      const ip = profileMap.get(r.indicator_profile_id)
+      const cp = r.commercial_profile_id
+        ? profileMap.get(r.commercial_profile_id)
+        : undefined
+      return {
+        ...base,
+        indicador: ip
+          ? stubIndicadorFromAdminProfile(ip.id, {
+              full_name: ip.full_name,
+              email: ip.email,
+              phone: ip.phone,
+              cpf: ip.cpf,
+              is_active: ip.is_active,
+              created_at: ip.created_at,
+            })
+          : undefined,
+        comercial:
+          cp && r.commercial_profile_id
+            ? stubComercialFromAdminProfile(r.commercial_profile_id, {
+                full_name: cp.full_name,
+                email: cp.email,
+                phone: cp.phone,
+                is_active: cp.is_active,
+                created_at: cp.created_at,
+              })
+            : undefined,
+      }
+    })
+
+    let saldoDisponivel = 0
+    const { data: wtRow, error: wtErr } = await db
+      .from("wallet_transactions")
+      .select("balance_after")
+      .eq("indicator_profile_id", indicatorProfileId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (!wtErr && wtRow) {
+      saldoDisponivel = Number((wtRow as { balance_after: number | string }).balance_after)
+    }
+
+    const indicador: Indicador = {
+      ...stubIndicadorFromAdminProfile(p.id, {
+        full_name: p.full_name,
+        email: p.email,
+        phone: p.phone,
+        cpf: p.cpf,
+        is_active: p.is_active,
+        created_at: p.created_at,
+      }),
+      totalIndicacoes: referrals.length,
+      indicacoesAprovadas: aprovadas,
+      totalRecebido: 0,
+      saldoDisponivel,
+      saldoDesconto: 0,
+    }
+
+    const { data: payData, error: payErr } = await db
+      .from("payments")
+      .select(PAYMENTS_SELECT)
+      .eq("indicator_profile_id", indicatorProfileId)
+      .order("created_at", { ascending: false })
+      .limit(200)
+
+    if (payErr) {
+      return null
+    }
+    const pagamentosRaw = ((payData ?? []) as PaymentRowDb[]).map(paymentRowToPagamento)
+    const pagamentos = await expandPaymentReceiptUrlsInPagamentos(pagamentosRaw)
+
+    if (isDev()) {
+      console.log("[supabase-query:debug]", {
+        query: "loadAdminIndicatorDetailFromSupabase",
+        indicatorProfileId,
+        indicacoes: indicacoes.length,
+        pagamentos: pagamentos.length,
+      })
+    }
+
+    return { indicador, indicacoes, pagamentos }
+  } catch {
     return null
   }
 }

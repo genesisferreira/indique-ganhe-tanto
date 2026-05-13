@@ -1,9 +1,11 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { currentComercial } from "@/lib/services/mock-data.service"
+import { loadComercialAvailabilityStatusFromSupabase } from "@/lib/services/supabase-data.service"
 import {
   CheckCircle2,
   PauseCircle,
@@ -38,10 +40,19 @@ const statusOptions = [
 ]
 
 export default function DisponibilidadePage() {
-  const [status, setStatus] = useState<ComercialDisponibilidade>(
-    currentComercial.disponibilidade
-  )
+  const [status, setStatus] = useState<ComercialDisponibilidade>("disponivel")
   const [isLoading, setIsLoading] = useState(false)
+
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      setStatus(currentComercial.disponibilidade)
+      return
+    }
+    void (async () => {
+      const remote = await loadComercialAvailabilityStatusFromSupabase()
+      setStatus(remote ?? "disponivel")
+    })()
+  }, [])
 
   const handleChangeStatus = async (newStatus: ComercialDisponibilidade) => {
     setIsLoading(true)

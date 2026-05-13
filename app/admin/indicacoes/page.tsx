@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -8,32 +8,81 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { indicacoes, indicadores, comerciais } from "@/lib/services/mock-data.service"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import { indicacoes, comerciais } from "@/lib/services/mock-data.service"
+import {
+  loadAdminComerciaisFromSupabase,
+  loadAdminReferralsFromSupabase,
+} from "@/lib/services/supabase-data.service"
 import { Search, Eye, MoreHorizontal, UserPlus, RefreshCw } from "lucide-react"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "@/components/ui/dropdown-menu"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+} from "@/components/ui/dropdown-menu"
 import Link from "next/link"
-import type { Indicacao, Indicador, Comercial } from "@/types"
+import type { Indicacao, Comercial } from "@/types"
 
 export default function AdminIndicacoesPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("todos")
+  const [lista, setLista] = useState<Indicacao[]>([])
+  const [comerciaisLista, setComerciaisLista] = useState<Comercial[]>([])
+  const [carregando, setCarregando] = useState(true)
 
-  const filteredIndicacoes = indicacoes.filter((indicacao: Indicacao) => {
-    const matchesSearch = indicacao.nomeIndicado.toLowerCase().includes(search.toLowerCase()) ||
-                         indicacao.telefoneIndicado.includes(search)
+  const recarregar = useCallback(async () => {
+    setCarregando(true)
+    if (isDataProviderMock()) {
+      setLista(indicacoes)
+      setComerciaisLista(comerciais)
+      if (process.env.NODE_ENV === "development") {
+        console.log("[page-data:debug]", {
+          page: "/admin/indicacoes",
+          source: "mock",
+          total: indicacoes.length,
+        })
+      }
+      setCarregando(false)
+      return
+    }
+    const [remote, comRemoto] = await Promise.all([
+      loadAdminReferralsFromSupabase(),
+      loadAdminComerciaisFromSupabase(),
+    ])
+    if (process.env.NODE_ENV === "development") {
+      console.log("[page-data:debug]", {
+        page: "/admin/indicacoes",
+        source: "supabase",
+        total: remote?.length ?? 0,
+      })
+    }
+    setLista(remote ?? [])
+    setComerciaisLista(comRemoto ?? [])
+    setCarregando(false)
+  }, [])
+
+  useEffect(() => {
+    void recarregar()
+  }, [recarregar])
+
+  const filteredIndicacoes = lista.filter((indicacao: Indicacao) => {
+    const matchesSearch =
+      indicacao.nomeIndicado.toLowerCase().includes(search.toLowerCase()) ||
+      indicacao.telefoneIndicado.includes(search)
     const matchesStatus = statusFilter === "todos" || indicacao.status === statusFilter
     return matchesSearch && matchesStatus
   })
 
-  const getIndicadorNome = (indicadorId: string) => {
-    const indicador = indicadores.find((i: Indicador) => i.id === indicadorId)
-    return indicador?.nome || "Desconhecido"
-  }
+  const getIndicadorNome = (indicacao: Indicacao) =>
+    indicacao.indicador?.nome ?? "—"
 
-  const getComercialNome = (comercialId?: string) => {
-    if (!comercialId) return "Não atribuído"
-    const comercial = comerciais.find((c: Comercial) => c.id === comercialId)
-    return comercial?.nome || "Desconhecido"
+  const getComercialNome = (indicacao: Indicacao) => {
+    if (!indicacao.comercialId) return "Não atribuído"
+    return indicacao.comercial?.nome ?? "—"
   }
 
   const columns = [
@@ -51,8 +100,11 @@ export default function AdminIndicacoesPage() {
       key: "indicador",
       header: "Indicador",
       cell: (indicacao: Indicacao) => (
-        <Link href={`/admin/indicadores/${indicacao.indicadorId}`} className="text-primary hover:underline">
-          {getIndicadorNome(indicacao.indicadorId)}
+        <Link
+          href={`/admin/indicadores/${indicacao.indicadorId}`}
+          className="text-primary hover:underline"
+        >
+          {getIndicadorNome(indicacao)}
         </Link>
       ),
     },
@@ -61,7 +113,7 @@ export default function AdminIndicacoesPage() {
       header: "Comercial",
       cell: (indicacao: Indicacao) => (
         <span className={indicacao.comercialId ? "" : "text-muted-foreground"}>
-          {getComercialNome(indicacao.comercialId)}
+          {getComercialNome(indicacao)}
         </span>
       ),
     },
@@ -75,9 +127,7 @@ export default function AdminIndicacoesPage() {
     {
       key: "status",
       header: "Status",
-      cell: (indicacao: Indicacao) => (
-        <StatusBadge status={indicacao.status} />
-      ),
+      cell: (indicacao: Indicacao) => <StatusBadge status={indicacao.status} />,
     },
     {
       key: "data",
@@ -111,11 +161,11 @@ export default function AdminIndicacoesPage() {
                 Atribuir Comercial
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {comerciais.filter((c: Comercial) => c.disponibilidade === 'disponivel').map((comercial: Comercial) => (
-                  <DropdownMenuItem key={comercial.id}>
-                    {comercial.nome}
-                  </DropdownMenuItem>
-                ))}
+                {comerciaisLista
+                  .filter((c: Comercial) => c.disponibilidade === "disponivel")
+                  .map((comercial: Comercial) => (
+                    <DropdownMenuItem key={comercial.id}>{comercial.nome}</DropdownMenuItem>
+                  ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSub>
@@ -140,7 +190,11 @@ export default function AdminIndicacoesPage() {
     <div className="space-y-6">
       <PageHeader
         title="Todas as Indicações"
-        description="Visualize e gerencie todas as indicações do sistema"
+        description={
+          isDataProviderMock()
+            ? "Dados de demonstração (modo mock)."
+            : "Dados do Supabase."
+        }
       />
 
       <Card className="border-border/50 bg-card/50">
@@ -174,11 +228,15 @@ export default function AdminIndicacoesPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <DataTable
-            data={filteredIndicacoes}
-            columns={columns}
-            emptyMessage="Nenhuma indicação encontrada"
-          />
+          {carregando ? (
+            <p className="text-sm text-muted-foreground">Carregando…</p>
+          ) : (
+            <DataTable
+              data={filteredIndicacoes}
+              columns={columns}
+              emptyMessage="Nenhuma indicação encontrada"
+            />
+          )}
         </CardContent>
       </Card>
     </div>

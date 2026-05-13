@@ -7,10 +7,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { currentIndicador, dashboardIndicador } from "@/lib/services/mock-data.service"
 import {
-  loadIndicadorWalletBalanceFromSupabase,
-  loadIndicadorWalletTransactionsFromSupabase,
+  loadIndicadorCarteiraFromSupabase,
   requestPixWithdrawalFromSupabase,
   type WalletTransactionListItem,
 } from "@/lib/services/supabase-data.service"
@@ -25,24 +25,62 @@ import {
 
 const SAQUE_MINIMO = 100
 
+const MOCK_MOVIMENTACOES: WalletTransactionListItem[] = [
+  {
+    id: "mock-1",
+    tipo: "credito",
+    valor: 129.9,
+    descricao: "Recompensa - Pedro Almeida",
+    saldoApos: 299.7,
+    createdAt: new Date("2024-03-25"),
+  },
+  {
+    id: "mock-2",
+    tipo: "saque",
+    valor: 200,
+    descricao: "Resgate via Pix",
+    saldoApos: 99.8,
+    createdAt: new Date("2024-03-15"),
+  },
+]
+
 export default function CarteiraPage() {
   const [valorSaque, setValorSaque] = useState("")
-  const [saldoRemoto, setSaldoRemoto] = useState<number | null>(null)
-  const [movimentacoes, setMovimentacoes] = useState<WalletTransactionListItem[] | null>(
-    null
-  )
+  const [totalRecebido, setTotalRecebido] = useState(0)
+  const [totalAReceber, setTotalAReceber] = useState(0)
+  const [saldoDisponivel, setSaldoDisponivel] = useState(0)
+  const [saldoEmDesconto, setSaldoEmDesconto] = useState(0)
+  const [movimentacoes, setMovimentacoes] = useState<WalletTransactionListItem[]>([])
+  const [chavePix, setChavePix] = useState<string | null>(null)
   const [carregando, setCarregando] = useState(true)
   const [enviandoSaque, setEnviandoSaque] = useState(false)
 
-  const saldoDisponivel = saldoRemoto ?? dashboardIndicador.saldoDisponivel
-
   const recarregar = useCallback(async () => {
-    const [b, mov] = await Promise.all([
-      loadIndicadorWalletBalanceFromSupabase(),
-      loadIndicadorWalletTransactionsFromSupabase(30),
-    ])
-    if (b !== null) setSaldoRemoto(b)
-    if (mov !== null) setMovimentacoes(mov)
+    const payload = await loadIndicadorCarteiraFromSupabase()
+    if (payload) {
+      setSaldoDisponivel(payload.availableBalance)
+      setTotalRecebido(payload.creditTotal)
+      setTotalAReceber(payload.pendingRewardsTotal)
+      setSaldoEmDesconto(payload.discountBalance)
+      setMovimentacoes(payload.movimentacoes)
+      setChavePix(payload.chavePix)
+      return
+    }
+    if (isDataProviderMock()) {
+      setSaldoDisponivel(dashboardIndicador.saldoDisponivel)
+      setTotalRecebido(dashboardIndicador.totalRecebido)
+      setTotalAReceber(dashboardIndicador.totalAReceber)
+      setSaldoEmDesconto(dashboardIndicador.saldoEmDesconto)
+      setMovimentacoes(MOCK_MOVIMENTACOES)
+      setChavePix(currentIndicador.chavePix ?? null)
+      return
+    }
+    setSaldoDisponivel(0)
+    setTotalRecebido(0)
+    setTotalAReceber(0)
+    setSaldoEmDesconto(0)
+    setMovimentacoes([])
+    setChavePix(null)
   }, [])
 
   useEffect(() => {
@@ -50,9 +88,6 @@ export default function CarteiraPage() {
       setCarregando(true)
       await recarregar()
       setCarregando(false)
-      if (process.env.NODE_ENV === "development") {
-        console.debug("[carteira] dados remotos atualizados")
-      }
     })()
   }, [recarregar])
 
@@ -92,26 +127,8 @@ export default function CarteiraPage() {
 
   const podeResgatar = saldoDisponivel >= SAQUE_MINIMO
 
-  const movimentacoesExibir =
-    movimentacoes ??
-    [
-      {
-        id: "mock-1",
-        tipo: "credito",
-        valor: 129.9,
-        descricao: "Recompensa - Pedro Almeida",
-        saldoApos: 299.7,
-        createdAt: new Date("2024-03-25"),
-      },
-      {
-        id: "mock-2",
-        tipo: "saque",
-        valor: 200,
-        descricao: "Resgate via Pix",
-        saldoApos: 99.8,
-        createdAt: new Date("2024-03-15"),
-      },
-    ]
+  const fmtValor = (n: number) =>
+    `R$ ${n.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
 
   return (
     <div>
@@ -123,28 +140,24 @@ export default function CarteiraPage() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <StatCard
           title="Total Recebido"
-          value={`R$ ${dashboardIndicador.totalRecebido.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          value={fmtValor(totalRecebido)}
           icon={Wallet}
           variant="primary"
         />
         <StatCard
           title="Total a Receber"
-          value={`R$ ${dashboardIndicador.totalAReceber.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          value={fmtValor(totalAReceber)}
           icon={TrendingUp}
         />
         <StatCard
           title="Saldo Disponível"
-          value={
-            carregando
-              ? "…"
-              : `R$ ${saldoDisponivel.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
-          }
+          value={carregando ? "…" : fmtValor(saldoDisponivel)}
           icon={ArrowUpRight}
           variant="success"
         />
         <StatCard
           title="Saldo em Desconto"
-          value={`R$ ${dashboardIndicador.saldoEmDesconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+          value={fmtValor(saldoEmDesconto)}
           icon={Receipt}
         />
       </div>
@@ -159,10 +172,7 @@ export default function CarteiraPage() {
             <div className="flex items-center justify-between mb-2">
               <span className="text-muted-foreground">Saldo disponível</span>
               <span className="text-2xl font-bold text-primary">
-                R${" "}
-                {saldoDisponivel.toLocaleString("pt-BR", {
-                  minimumFractionDigits: 2,
-                })}
+                {carregando ? "…" : fmtValor(saldoDisponivel)}
               </span>
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -185,7 +195,7 @@ export default function CarteiraPage() {
               <p className="mt-2 text-muted-foreground">
                 Chave cadastrada:{" "}
                 <span className="text-foreground font-medium">
-                  {currentIndicador.chavePix ?? "— cadastre em Chave Pix"}
+                  {chavePix ?? "— cadastre em Chave Pix"}
                 </span>
               </p>
             </div>
@@ -214,7 +224,7 @@ export default function CarteiraPage() {
               ? "Enviando…"
               : podeResgatar
                 ? "Solicitar saque Pix"
-                : `Saldo mínimo: R$ ${SAQUE_MINIMO.toFixed(2).replace(".", ",")}`}
+                : "Saldo mínimo: R$ 100,00"}
           </Button>
         </div>
 
@@ -227,10 +237,7 @@ export default function CarteiraPage() {
             <div className="flex items-center justify-between mb-2">
               <span className="text-muted-foreground">Crédito disponível</span>
               <span className="text-2xl font-bold text-foreground">
-                R${" "}
-                {dashboardIndicador.saldoEmDesconto.toLocaleString("pt-BR", {
-                  minimumFractionDigits: 2,
-                })}
+                {fmtValor(saldoEmDesconto)}
               </span>
             </div>
             <p className="text-sm text-muted-foreground">
@@ -256,12 +263,14 @@ export default function CarteiraPage() {
           Últimas movimentações
         </h2>
         <div className="space-y-3">
-          {movimentacoesExibir.length === 0 ? (
+          {carregando ? (
+            <p className="text-sm text-muted-foreground text-center py-6">…</p>
+          ) : movimentacoes.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-6">
               Nenhuma movimentação na carteira.
             </p>
           ) : (
-            movimentacoesExibir.map((mov) => {
+            movimentacoes.map((mov) => {
               const entrada =
                 mov.tipo === "credito" || mov.tipo === "desconto"
               return (

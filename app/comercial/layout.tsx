@@ -1,5 +1,6 @@
-import { DashboardLayout } from "@/components/layout/dashboard-layout"
-import { currentComercial } from "@/lib/services/mock-data.service"
+"use client"
+
+import { AuthenticatedDashboardShell } from "@/components/layout/authenticated-dashboard-shell"
 
 export default function ComercialLayout({
   children,
@@ -7,12 +8,8 @@ export default function ComercialLayout({
   children: React.ReactNode
 }) {
   return (
-    <DashboardLayout
-      variant="comercial"
-      userName={currentComercial.nome}
-      userRole="Comercial"
-    >
+    <AuthenticatedDashboardShell variant="comercial">
       {children}
-    </DashboardLayout>
+    </AuthenticatedDashboardShell>
   )
 }

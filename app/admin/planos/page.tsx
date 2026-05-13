@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { Button } from "@/components/ui/button"
@@ -10,17 +10,60 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
-import { planos } from "@/lib/services/mock-data.service"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import { planos as mockPlanos } from "@/lib/services/mock-data.service"
+import { loadAdminPlansCatalogFromSupabase } from "@/lib/services/supabase-data.service"
 import { Plus, Edit, Trash2, Wifi, DollarSign, Gift, Package } from "lucide-react"
 import { StatCard } from "@/components/ui/stat-card"
 import type { Plano } from "@/types"
 
 export default function AdminPlanosPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [planos, setPlanos] = useState<Plano[]>(() =>
+    isDataProviderMock() ? mockPlanos : []
+  )
+
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      setPlanos(mockPlanos)
+      return
+    }
+    void (async () => {
+      const remote = await loadAdminPlansCatalogFromSupabase()
+      if (remote !== null) {
+        setPlanos(remote)
+        if (process.env.NODE_ENV === "development") {
+          console.log("[supabase-query:debug]", {
+            query: "loadAdminPlansCatalogFromSupabase",
+            count: remote.length,
+          })
+        }
+        return
+      }
+      setPlanos([])
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[flow-check:debug]", {
+          flow: "admin-planos",
+          ok: false,
+          note: "Erro ao carregar planos — lista vazia",
+        })
+      }
+    })()
+  }, [])
 
   const totalPlanos = planos.length
   const planosAtivos = planos.filter((p: Plano) => p.ativo).length
-  const precoMedio = planos.reduce((acc: number, p: Plano) => acc + p.preco, 0) / planos.length
+  const precoMedio = useMemo(() => {
+    if (!planos.length) return 0
+    return planos.reduce((acc: number, p: Plano) => acc + p.preco, 0) / planos.length
+  }, [planos])
+  const recompensaMedia = useMemo(() => {
+    if (!planos.length) return 0
+    return (
+      planos.reduce((acc: number, p: Plano) => acc + (p.valorRecompensa ?? 0), 0) /
+      planos.length
+    )
+  }, [planos])
 
   return (
     <div className="space-y-6">
@@ -99,7 +142,10 @@ export default function AdminPlanosPage() {
         />
         <StatCard
           title="Recompensa Media"
-          value="R$ 50,00"
+          value={`R$ ${recompensaMedia.toLocaleString("pt-BR", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}`}
           icon={Gift}
           variant="warning"
         />
@@ -125,7 +171,7 @@ export default function AdminPlanosPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-sm text-muted-foreground">{plano.descricao}</p>
-                
+
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-bold text-primary">
                     R$ {plano.preco.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
@@ -138,7 +184,9 @@ export default function AdminPlanosPage() {
                   <div>
                     <p className="text-xs text-muted-foreground">Recompensa por Indicacao</p>
                     <p className="font-semibold text-success">
-                      R$ {(plano.valorRecompensa || 50).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      R$ {(plano.valorRecompensa ?? 0).toLocaleString("pt-BR", {
+                        minimumFractionDigits: 2,
+                      })}
                     </p>
                   </div>
                 </div>

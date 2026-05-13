@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react"
+import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
@@ -18,6 +19,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { pagamentos } from "@/lib/services/mock-data.service"
 import {
   approvePixWithdrawalFromSupabase,
@@ -51,6 +53,7 @@ import {
 const RECEIPT_ACCEPT = "application/pdf,image/png,image/jpeg,image/webp"
 
 export default function AdminPagamentosPendentesPage() {
+  const router = useRouter()
   const [search, setSearch] = useState("")
   const [role, setRole] = useState<UserRole | null>(null)
   const [pendentes, setPendentes] = useState<Pagamento[]>([])
@@ -74,25 +77,54 @@ export default function AdminPagamentosPendentesPage() {
     role === "admin_financeiro" || role === "admin_master"
 
   const recarregar = useCallback(async () => {
-    const [p, a] = await Promise.all([
-      loadAdminPixWithdrawalsFromSupabase("pendente"),
-      loadAdminPixWithdrawalsFromSupabase("aprovado"),
-    ])
-    if (p !== null && a !== null) {
-      setPendentes(p)
-      setAprovados(a)
-      setFonteRemota(true)
+    if (isDataProviderMock()) {
+      const mockPix = pagamentos.filter((x) => x.kind === "pix_withdrawal")
+      setPendentes(mockPix.filter((x) => x.status === "pendente"))
+      setAprovados(mockPix.filter((x) => x.status === "aprovado"))
+      setFonteRemota(false)
       return
     }
-    const mockPix = pagamentos.filter((x) => x.kind === "pix_withdrawal")
-    setPendentes(mockPix.filter((x) => x.status === "pendente"))
-    setAprovados(mockPix.filter((x) => x.status === "aprovado"))
-    setFonteRemota(false)
+
+    const p = await loadAdminPixWithdrawalsFromSupabase("pendente")
+    const a = await loadAdminPixWithdrawalsFromSupabase("aprovado")
+
+    setPendentes(p ?? [])
+    setAprovados(a ?? [])
+    setFonteRemota(true)
+    if (process.env.NODE_ENV === "development") {
+      console.log("[supabase-query:debug]", {
+        query: "pagamentos-pendentes",
+        pendentes: p?.length ?? 0,
+        aprovados: a?.length ?? 0,
+      })
+    }
   }, [])
 
   useEffect(() => {
-    void getAuthProfileRoleFromSupabase().then(setRole)
-  }, [])
+    void getAuthProfileRoleFromSupabase().then((r) => {
+      setRole(r)
+      if (process.env.NODE_ENV === "development") {
+        console.log("[permission-check:debug]", {
+          page: "/admin/pagamentos-pendentes",
+          role: r,
+          podeAgirFinanceiro: r === "admin_financeiro" || r === "admin_master",
+        })
+      }
+      if (
+        !isDataProviderMock() &&
+        r === "admin_consulta"
+      ) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[permission-check:debug]", {
+            page: "/admin/pagamentos-pendentes",
+            action: "redirect_sem_permissao",
+            role: r,
+          })
+        }
+        router.replace("/admin")
+      }
+    })
+  }, [router])
 
   useEffect(() => {
     void recarregar()

@@ -1,7 +1,11 @@
 "use client"
 
+import { useCallback, useEffect, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { historicos, currentComercial } from "@/lib/services/mock-data.service"
+import { loadComercialAssignedHistoryFromSupabase } from "@/lib/services/supabase-data.service"
+import type { Historico } from "@/types"
 import { Clock, Phone, MessageSquare, CheckCircle2, XCircle } from "lucide-react"
 
 const iconMap: Record<string, React.ElementType> = {
@@ -13,12 +17,28 @@ const iconMap: Record<string, React.ElementType> = {
 }
 
 export default function HistoricoPage() {
-  const meuHistorico = historicos.filter(
-    (h) => h.comercialId === currentComercial.id
-  )
+  const [lista, setLista] = useState<Historico[]>([])
 
-  // Group by date
-  const groupedByDate = meuHistorico.reduce(
+  const recarregar = useCallback(async () => {
+    if (isDataProviderMock()) {
+      setLista(historicos.filter((h) => h.comercialId === currentComercial.id))
+      return
+    }
+    const remote = await loadComercialAssignedHistoryFromSupabase()
+    setLista(remote ?? [])
+    if (process.env.NODE_ENV === "development") {
+      console.log("[flow-check:debug]", {
+        flow: "comercial-historico",
+        total: remote?.length ?? 0,
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    void recarregar()
+  }, [recarregar])
+
+  const groupedByDate = lista.reduce(
     (acc, hist) => {
       const dateKey = hist.createdAt.toLocaleDateString("pt-BR")
       if (!acc[dateKey]) {
@@ -27,7 +47,7 @@ export default function HistoricoPage() {
       acc[dateKey].push(hist)
       return acc
     },
-    {} as Record<string, typeof meuHistorico>
+    {} as Record<string, Historico[]>
   )
 
   const sortedDates = Object.keys(groupedByDate).sort((a, b) => {

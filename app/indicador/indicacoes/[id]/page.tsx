@@ -5,6 +5,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { indicacoes } from "@/lib/services/mock-data.service"
 import { loadIndicadorReferralDetailFromSupabase } from "@/lib/services/supabase-data.service"
 import type { Indicacao } from "@/types/referral"
@@ -37,28 +38,26 @@ export default function DetalheIndicacaoPage({
   const { id } = use(params)
 
   const mockIndicacao = useMemo(
-    () => indicacoes.find((i) => i.id === id),
+    () => (isDataProviderMock() ? indicacoes.find((i) => i.id === id) : undefined),
     [id]
   )
 
-  const [indicacao, setIndicacao] = useState<Indicacao | undefined>(
-    () => mockIndicacao
-  )
-  const [ready, setReady] = useState(() => Boolean(mockIndicacao))
+  const [indicacao, setIndicacao] = useState<Indicacao | undefined>(undefined)
+  const [ready, setReady] = useState(false)
 
   useEffect(() => {
-    setIndicacao(mockIndicacao)
-    setReady(Boolean(mockIndicacao))
-  }, [id, mockIndicacao])
-
-  useEffect(() => {
+    if (isDataProviderMock()) {
+      setIndicacao(mockIndicacao)
+      setReady(true)
+      return
+    }
     let cancelled = false
+    setReady(false)
     void (async () => {
       const r = await loadIndicadorReferralDetailFromSupabase(id)
       if (cancelled) return
       if (r.kind === "ok") setIndicacao(r.indicacao)
-      else if (r.kind === "not-found") setIndicacao(undefined)
-      else setIndicacao(mockIndicacao)
+      else setIndicacao(undefined)
       setReady(true)
     })()
     return () => {

@@ -1,28 +1,85 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { PageHeader } from "@/components/ui/page-header"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { pagamentos } from "@/lib/services/mock-data.service"
+import {
+  getAuthProfileRoleFromSupabase,
+  loadAdminAllPaymentsFromSupabase,
+} from "@/lib/services/supabase-data.service"
 import type { Pagamento } from "@/types"
 import { Upload, FileText, CheckCircle, AlertCircle, Image, X, Search } from "lucide-react"
 
 export default function AdminUploadComprovantePage() {
+  const router = useRouter()
+  const [lista, setLista] = useState<Pagamento[]>([])
   const [selectedPagamento, setSelectedPagamento] = useState<string>("")
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle")
   const [search, setSearch] = useState("")
 
-  const pagamentosPagos = pagamentos.filter((p: Pagamento) => p.status === "pago" && !p.comprovanteUrl)
+  useEffect(() => {
+    if (isDataProviderMock()) return
+    void getAuthProfileRoleFromSupabase().then((r) => {
+      if (r === "admin_consulta") {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[permission-check:debug]", {
+            page: "/admin/upload-comprovante",
+            action: "redirect_sem_permissao",
+            role: r,
+          })
+        }
+        router.replace("/admin")
+      }
+    })
+  }, [router])
+
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      setLista(pagamentos)
+      if (process.env.NODE_ENV === "development") {
+        const pend = pagamentos.filter((p) => p.status === "pago" && !p.comprovanteUrl).length
+        console.log("[page-data:debug]", {
+          page: "/admin/upload-comprovante",
+          source: "mock",
+          total: pend,
+        })
+      }
+      return
+    }
+    void (async () => {
+      const remoto = await loadAdminAllPaymentsFromSupabase()
+      const base = remoto ?? []
+      const pend = base.filter((p) => p.status === "pago" && !p.comprovanteUrl).length
+      if (process.env.NODE_ENV === "development") {
+        console.log("[page-data:debug]", {
+          page: "/admin/upload-comprovante",
+          source: "supabase",
+          total: pend,
+        })
+      }
+      setLista(base)
+    })()
+  }, [])
+
+  const pagamentosPagos = useMemo(
+    () => lista.filter((p: Pagamento) => p.status === "pago" && !p.comprovanteUrl),
+    [lista]
+  )
 
   const filteredPagamentos = pagamentosPagos.filter((p: Pagamento) => {
     const indicacao = p.indicacao
-    return indicacao?.nomeIndicado.toLowerCase().includes(search.toLowerCase()) ||
-           p.indicador?.nome.toLowerCase().includes(search.toLowerCase())
+    const nomeInd = p.indicador?.nome?.toLowerCase() ?? ""
+    return (
+      indicacao?.nomeIndicado.toLowerCase().includes(search.toLowerCase()) ||
+      nomeInd.includes(search.toLowerCase())
+    )
   })
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -44,7 +101,7 @@ export default function AdminUploadComprovantePage() {
     }, 1500)
   }
 
-  const selectedPagamentoData = pagamentos.find((p: Pagamento) => p.id === selectedPagamento)
+  const selectedPagamentoData = lista.find((p: Pagamento) => p.id === selectedPagamento)
 
   return (
     <div className="space-y-6">

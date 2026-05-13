@@ -1,4 +1,7 @@
+"use client"
+
 import { Toaster } from "sonner"
+import { AuthenticatedDashboardShell } from "@/components/layout/authenticated-dashboard-shell"
 import { IndicadorHomeProvider } from "./indicador-home-provider"
 
 export default function IndicadorLayout({
@@ -8,7 +11,9 @@ export default function IndicadorLayout({
 }) {
   return (
     <>
-      <IndicadorHomeProvider>{children}</IndicadorHomeProvider>
+      <AuthenticatedDashboardShell variant="indicador">
+        <IndicadorHomeProvider>{children}</IndicadorHomeProvider>
+      </AuthenticatedDashboardShell>
       <Toaster richColors closeButton />
     </>
   )

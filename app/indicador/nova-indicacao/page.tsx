@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/ui/page-header"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { planos as mockPlanosFallback } from "@/lib/services/mock-data.service"
 import {
   fetchActivePlansForIndicador,
@@ -26,7 +27,9 @@ import { CheckCircle2, Wallet, Receipt, Info } from "lucide-react"
 export default function NovaIndicacaoPage() {
   const router = useRouter()
   const [isLoading, setIsLoading] = useState(false)
-  const [planos, setPlanos] = useState<Plano[]>(() => mockPlanosFallback)
+  const [planos, setPlanos] = useState<Plano[]>(() =>
+    isDataProviderMock() ? mockPlanosFallback : []
+  )
   const [selectedPlano, setSelectedPlano] = useState<string>("")
   const [tipoRecompensa, setTipoRecompensa] = useState<"pix" | "desconto">("pix")
   const [nome, setNome] = useState("")
@@ -34,11 +37,26 @@ export default function NovaIndicacaoPage() {
   const [email, setEmail] = useState("")
 
   useEffect(() => {
+    if (isDataProviderMock()) return
     void (async () => {
       const remote = await fetchActivePlansForIndicador()
-      if (remote?.length) {
+      if (remote !== null) {
         setPlanos(remote)
         setSelectedPlano("")
+        if (process.env.NODE_ENV === "development") {
+          console.log("[supabase-query:debug]", {
+            query: "fetchActivePlansForIndicador",
+            count: remote.length,
+          })
+        }
+        return
+      }
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[flow-check:debug]", {
+          flow: "nova-indicacao-planos",
+          ok: false,
+          note: "Supabase retornou erro — lista de planos vazia",
+        })
       }
     })()
   }, [])

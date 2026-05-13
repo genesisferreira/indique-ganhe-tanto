@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -12,7 +12,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/ui/page-header"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { currentIndicador } from "@/lib/services/mock-data.service"
+import { loadIndicadorPrimaryPixKeyFromSupabase } from "@/lib/services/supabase-data.service"
+import type { TipoChavePix } from "@/types/profile"
 import { Key, AlertTriangle, CheckCircle2, Pencil } from "lucide-react"
 
 const pixTypes = [
@@ -21,13 +24,53 @@ const pixTypes = [
   { value: "email", label: "E-mail" },
   { value: "telefone", label: "Telefone" },
   { value: "aleatoria", label: "Chave Aleatória" },
-]
+] as const
+
+const defaultTipo: TipoChavePix = "cpf"
 
 export default function ChavePixPage() {
   const [isEditing, setIsEditing] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [tipoChave, setTipoChave] = useState(currentIndicador.tipoChavePix)
-  const [chave, setChave] = useState(currentIndicador.chavePix)
+  const [tipoChave, setTipoChave] = useState<TipoChavePix>(defaultTipo)
+  const [chave, setChave] = useState("")
+  const [baselineTipo, setBaselineTipo] = useState<TipoChavePix>(defaultTipo)
+  const [baselineChave, setBaselineChave] = useState("")
+
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      const t = currentIndicador.tipoChavePix ?? defaultTipo
+      const v = currentIndicador.chavePix ?? ""
+      setTipoChave(t)
+      setChave(v)
+      setBaselineTipo(t)
+      setBaselineChave(v)
+      if (process.env.NODE_ENV === "development") {
+        console.log("[page-data:debug]", { page: "/indicador/chave-pix", source: "mock", total: 1 })
+      }
+      return
+    }
+    void (async () => {
+      const row = await loadIndicadorPrimaryPixKeyFromSupabase()
+      if (process.env.NODE_ENV === "development") {
+        console.log("[page-data:debug]", {
+          page: "/indicador/chave-pix",
+          source: "supabase",
+          total: row === null ? 0 : row.keyValue ? 1 : 0,
+        })
+      }
+      if (row) {
+        setTipoChave(row.keyType)
+        setChave(row.keyValue)
+        setBaselineTipo(row.keyType)
+        setBaselineChave(row.keyValue)
+      } else {
+        setTipoChave(defaultTipo)
+        setChave("")
+        setBaselineTipo(defaultTipo)
+        setBaselineChave("")
+      }
+    })()
+  }, [])
 
   const handleSave = async () => {
     setIsLoading(true)
@@ -35,6 +78,8 @@ export default function ChavePixPage() {
     setIsLoading(false)
     setIsEditing(false)
   }
+
+  const tipoLabel = pixTypes.find((t) => t.value === tipoChave)?.label
 
   return (
     <div>
@@ -57,8 +102,7 @@ export default function ChavePixPage() {
                 </h2>
                 <p className="text-sm text-muted-foreground">
                   Tipo:{" "}
-                  {pixTypes.find((t) => t.value === currentIndicador.tipoChavePix)
-                    ?.label}
+                  {tipoLabel}
                 </p>
               </div>
             </div>
@@ -73,14 +117,14 @@ export default function ChavePixPage() {
           {!isEditing ? (
             <div className="p-4 rounded-lg bg-muted/30">
               <p className="font-mono text-lg text-foreground">
-                {currentIndicador.chavePix}
+                {chave || "—"}
               </p>
             </div>
           ) : (
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="tipo">Tipo de Chave</Label>
-                <Select value={tipoChave} onValueChange={(v) => setTipoChave(v as typeof tipoChave)}>
+                <Select value={tipoChave} onValueChange={(v) => setTipoChave(v as TipoChavePix)}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -109,8 +153,8 @@ export default function ChavePixPage() {
                   variant="outline"
                   onClick={() => {
                     setIsEditing(false)
-                    setTipoChave(currentIndicador.tipoChavePix)
-                    setChave(currentIndicador.chavePix)
+                    setTipoChave(baselineTipo)
+                    setChave(baselineChave)
                   }}
                 >
                   Cancelar

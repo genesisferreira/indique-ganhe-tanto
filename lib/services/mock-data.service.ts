@@ -186,6 +186,57 @@ function createSnapshot(): MockDataSnapshot {
   }
 }
 
+export type SidebarBadgeCountsMock = {
+  unreadNotifications: number
+  comercialPipelineReferrals: number
+  comercialScheduledReturns: number
+  adminPendingPixWithdrawals: number
+  adminReferrals: number
+  adminActiveIndicadores: number
+}
+
+/**
+ * Contadores da sidebar derivados apenas do snapshot mock (quando `DATA_PROVIDER` / `NEXT_PUBLIC_DATA_PROVIDER` = mock).
+ */
+export function getSidebarBadgeCountsFromMock(
+  variant: "indicador" | "comercial" | "admin"
+): SidebarBadgeCountsMock {
+  const s = createSnapshot()
+  const pipelineLeadStatuses = new Set(["novo", "em_atendimento", "em_negociacao"])
+  const now = Date.now()
+
+  let comercialPipelineReferrals = 0
+  let comercialScheduledReturns = 0
+  if (variant === "comercial") {
+    const cid = s.currentComercial.id
+    for (const lead of s.leads) {
+      if (lead.comercialId !== cid) continue
+      if (pipelineLeadStatuses.has(lead.status)) {
+        comercialPipelineReferrals += 1
+      }
+      const ret = lead.retornoAgendado
+      if (ret instanceof Date && ret.getTime() > now) {
+        comercialScheduledReturns += 1
+      }
+    }
+  }
+
+  const adminPendingPixWithdrawals = s.pagamentos.filter(
+    (p) =>
+      p.kind === "pix_withdrawal" &&
+      (p.status === "pendente" || p.status === "aprovado")
+  ).length
+
+  return {
+    unreadNotifications: 0,
+    comercialPipelineReferrals,
+    comercialScheduledReturns,
+    adminPendingPixWithdrawals,
+    adminReferrals: s.indicacoes.length,
+    adminActiveIndicadores: s.indicadores.filter((i) => i.ativo).length,
+  }
+}
+
 export const mockDataService = {
   getSnapshot(): MockDataSnapshot {
     return createSnapshot()

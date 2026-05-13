@@ -1,8 +1,16 @@
 "use client"
 
+import { useEffect, useMemo, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
-import { currentComercial, dashboardComercial } from "@/lib/services/mock-data.service"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import { currentComercial, dashboardComercial, leads } from "@/lib/services/mock-data.service"
+import {
+  getAuthProfileBasicsFromSupabase,
+  loadComercialLeadsFromSupabase,
+} from "@/lib/services/supabase-data.service"
+import type { DashboardComercial } from "@/types/dashboard"
+import type { Lead } from "@/types/lead"
 import {
   ShoppingCart,
   UserX,
@@ -12,12 +20,110 @@ import {
   Award,
 } from "lucide-react"
 
+function dashboardFromAssignedLeads(assigned: Lead[]): DashboardComercial {
+  const counts = {
+    leadsNovos: 0,
+    leadsEmAtendimento: 0,
+    leadsSemContato: 0,
+    leadsEmNegociacao: 0,
+    vendasRealizadas: 0,
+    leadsPerdidos: 0,
+  }
+  const diffMins: number[] = []
+  for (const l of assigned) {
+    switch (l.status) {
+      case "novo":
+        counts.leadsNovos += 1
+        break
+      case "em_atendimento":
+      case "redistribuido":
+        counts.leadsEmAtendimento += 1
+        break
+      case "sem_contato":
+        counts.leadsSemContato += 1
+        break
+      case "em_negociacao":
+        counts.leadsEmNegociacao += 1
+        break
+      case "vendido":
+        counts.vendasRealizadas += 1
+        break
+      case "perdido":
+        counts.leadsPerdidos += 1
+        break
+      default:
+        break
+    }
+    if (l.primeiroContato) {
+      const ms = l.primeiroContato.getTime() - l.createdAt.getTime()
+      if (ms >= 0) diffMins.push(ms / 60000)
+    }
+  }
+  let tempo: string = "N/D"
+  if (diffMins.length > 0) {
+    const avg = diffMins.reduce((a, b) => a + b, 0) / diffMins.length
+    tempo = `${Math.max(0, Math.round(avg))} min`
+  }
+  return {
+    ...counts,
+    tempoMedioPrimeiroContato: tempo,
+  }
+}
+
 export default function DesempenhoPage() {
-  const taxaConversao = (
-    (dashboardComercial.vendasRealizadas /
-      (dashboardComercial.vendasRealizadas + dashboardComercial.leadsPerdidos)) *
-    100
-  ).toFixed(1)
+  const mockAssigned = useMemo(
+    () =>
+      isDataProviderMock()
+        ? leads.filter((l) => l.comercialId === currentComercial.id)
+        : [],
+    []
+  )
+
+  const [assigned, setAssigned] = useState<Lead[]>(mockAssigned)
+
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      setAssigned(mockAssigned)
+      return
+    }
+    void (async () => {
+      const [all, basics] = await Promise.all([
+        loadComercialLeadsFromSupabase(),
+        getAuthProfileBasicsFromSupabase(),
+      ])
+      const uid = basics?.id ?? null
+      setAssigned(uid && all ? all.filter((l) => l.comercialId === uid) : [])
+    })()
+  }, [mockAssigned])
+
+  const d = isDataProviderMock()
+    ? dashboardComercial
+    : dashboardFromAssignedLeads(assigned)
+
+  const leadsAtivosCount = isDataProviderMock()
+    ? currentComercial.leadsAtivos
+    : assigned.filter((l) => l.status !== "vendido" && l.status !== "perdido").length
+
+  const totalEncerradosOuAbertos = d.vendasRealizadas + d.leadsPerdidos + leadsAtivosCount
+  const taxaConversao =
+    d.vendasRealizadas + d.leadsPerdidos > 0
+      ? ((d.vendasRealizadas / (d.vendasRealizadas + d.leadsPerdidos)) * 100).toFixed(1)
+      : "0"
+
+  const metaVendasPct = Math.min(100, d.vendasRealizadas)
+  const tempoMetaPct =
+    d.tempoMedioPrimeiroContato === "N/D"
+      ? 0
+      : Math.min(
+          100,
+          (() => {
+            const m = /^(\d+)/.exec(d.tempoMedioPrimeiroContato)
+            const n = m ? Number(m[1]) : 0
+            if (!Number.isFinite(n) || n <= 0) return 0
+            return Math.round((10 / n) * 100)
+          })()
+        )
+  const taxaBar = Math.min(100, Number(taxaConversao) || 0)
 
   return (
     <div>
@@ -26,11 +132,10 @@ export default function DesempenhoPage() {
         description="Acompanhe suas métricas e resultados"
       />
 
-      {/* Main Stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <StatCard
           title="Vendas Realizadas"
-          value={dashboardComercial.vendasRealizadas}
+          value={d.vendasRealizadas}
           icon={ShoppingCart}
           variant="success"
           trend={{ value: 15, label: "este mês" }}
@@ -43,19 +148,18 @@ export default function DesempenhoPage() {
         />
         <StatCard
           title="Tempo Médio 1º Contato"
-          value={dashboardComercial.tempoMedioPrimeiroContato}
+          value={d.tempoMedioPrimeiroContato}
           icon={Clock}
         />
         <StatCard
           title="Leads Perdidos"
-          value={dashboardComercial.leadsPerdidos}
+          value={d.leadsPerdidos}
           icon={UserX}
           variant="destructive"
         />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Performance Summary */}
         <div className="rounded-xl border bg-card p-6">
           <h2 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
             <Award className="w-5 h-5 text-primary" />
@@ -68,9 +172,9 @@ export default function DesempenhoPage() {
                   Total de Leads Atribuídos
                 </p>
                 <p className="text-2xl font-bold text-foreground">
-                  {dashboardComercial.vendasRealizadas +
-                    dashboardComercial.leadsPerdidos +
-                    currentComercial.leadsAtivos}
+                  {isDataProviderMock()
+                    ? d.vendasRealizadas + d.leadsPerdidos + currentComercial.leadsAtivos
+                    : totalEncerradosOuAbertos}
                 </p>
               </div>
               <TrendingUp className="w-8 h-8 text-primary" />
@@ -80,20 +184,19 @@ export default function DesempenhoPage() {
               <div className="p-4 rounded-lg bg-success/10 border border-success/20">
                 <p className="text-sm text-muted-foreground">Convertidos</p>
                 <p className="text-xl font-bold text-success">
-                  {dashboardComercial.vendasRealizadas}
+                  {d.vendasRealizadas}
                 </p>
               </div>
               <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/20">
                 <p className="text-sm text-muted-foreground">Perdidos</p>
                 <p className="text-xl font-bold text-destructive">
-                  {dashboardComercial.leadsPerdidos}
+                  {d.leadsPerdidos}
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Monthly Progress */}
         <div className="rounded-xl border bg-card p-6">
           <h2 className="text-lg font-semibold text-foreground mb-4">
             Progresso Mensal
@@ -105,13 +208,13 @@ export default function DesempenhoPage() {
                   Meta de Vendas
                 </span>
                 <span className="text-sm font-medium text-foreground">
-                  87/100
+                  {d.vendasRealizadas}/100
                 </span>
               </div>
               <div className="h-3 rounded-full bg-muted overflow-hidden">
                 <div
                   className="h-full bg-primary rounded-full transition-all"
-                  style={{ width: "87%" }}
+                  style={{ width: `${metaVendasPct}%` }}
                 />
               </div>
             </div>
@@ -122,13 +225,13 @@ export default function DesempenhoPage() {
                   Tempo Médio (Meta: 10 min)
                 </span>
                 <span className="text-sm font-medium text-success">
-                  8 min
+                  {d.tempoMedioPrimeiroContato}
                 </span>
               </div>
               <div className="h-3 rounded-full bg-muted overflow-hidden">
                 <div
                   className="h-full bg-success rounded-full transition-all"
-                  style={{ width: "100%" }}
+                  style={{ width: `${tempoMetaPct}%` }}
                 />
               </div>
             </div>
@@ -145,7 +248,7 @@ export default function DesempenhoPage() {
               <div className="h-3 rounded-full bg-muted overflow-hidden">
                 <div
                   className="h-full bg-primary rounded-full transition-all"
-                  style={{ width: `${taxaConversao}%` }}
+                  style={{ width: `${taxaBar}%` }}
                 />
               </div>
             </div>
@@ -153,7 +256,6 @@ export default function DesempenhoPage() {
         </div>
       </div>
 
-      {/* Tips */}
       <div className="mt-6 p-4 rounded-xl bg-primary/10 border border-primary/20">
         <h3 className="font-semibold text-foreground mb-2">
           Dicas para melhorar seu desempenho

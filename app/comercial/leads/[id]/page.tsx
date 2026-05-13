@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { leads, historicos } from "@/lib/services/mock-data.service"
 import {
   getAuthProfileRoleFromSupabase,
@@ -35,7 +36,7 @@ import {
   MessageSquare,
   Send,
 } from "lucide-react"
-import type { LeadStatus } from "@/types"
+import type { Lead, LeadStatus, Historico } from "@/types"
 import type { UserRole } from "@/types/user"
 
 const statusOptions = [
@@ -69,21 +70,23 @@ export default function DetalheLeadPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = use(params)
-  const mockLead = useMemo(() => leads.find((l) => l.id === id), [id])
-  const [lead, setLead] = useState(mockLead)
-  const [novaObservacao, setNovaObservacao] = useState("")
-  const [status, setStatus] = useState<ComercialLeadUpdateStatus>(() =>
-    mapLeadStatusToUpdateStatus(mockLead?.status || "novo")
+  const mockLead = useMemo(
+    () => (isDataProviderMock() ? leads.find((l) => l.id === id) : undefined),
+    [id]
   )
+  const [lead, setLead] = useState<Lead | undefined>(undefined)
+  const [novaObservacao, setNovaObservacao] = useState("")
+  const [status, setStatus] = useState<ComercialLeadUpdateStatus>("em_atendimento")
   const [isSaving, setIsSaving] = useState(false)
   const [isConfirmingFirstInvoice, setIsConfirmingFirstInvoice] = useState(false)
   const [authRole, setAuthRole] = useState<UserRole | null>(null)
-  const [leadHistorico, setLeadHistorico] = useState(() =>
-    historicos.filter((h) => h.leadId === id)
-  )
+  const [leadHistorico, setLeadHistorico] = useState<Historico[]>([])
+  const [pageLoading, setPageLoading] = useState(() => !isDataProviderMock())
 
   const podeConfirmarPrimeiraMensalidade =
     authRole === "admin_financeiro" || authRole === "admin_master"
+
+  const podeEditarStatusComercial = authRole === "comercial"
 
   const reloadLeadData = async () => {
     const remote = await loadComercialLeadDetailsFromSupabase(id)
@@ -139,26 +142,59 @@ export default function DetalheLeadPage({
   }
 
   useEffect(() => {
-    setLead(mockLead)
-    setStatus(mapLeadStatusToUpdateStatus(mockLead?.status || "novo"))
-    setLeadHistorico(historicos.filter((h) => h.leadId === id))
-  }, [id, mockLead])
-
-  useEffect(() => {
+    if (isDataProviderMock()) {
+      setLead(mockLead)
+      setStatus(mapLeadStatusToUpdateStatus(mockLead?.status || "novo"))
+      setLeadHistorico(historicos.filter((h) => h.leadId === id))
+      setPageLoading(false)
+      return
+    }
+    setPageLoading(true)
+    setLead(undefined)
+    setLeadHistorico([])
     void (async () => {
-      await reloadLeadData()
+      const remote = await loadComercialLeadDetailsFromSupabase(id)
+      if (remote.kind === "ok") {
+        setLead(remote.lead)
+        setStatus(mapLeadStatusToUpdateStatus(remote.lead.status))
+        setLeadHistorico(remote.historico)
+      } else {
+        setLead(undefined)
+      }
+      setPageLoading(false)
+      if (process.env.NODE_ENV === "development") {
+        console.log("[flow-check:debug]", {
+          flow: "comercial-lead-detail",
+          id,
+          result: remote.kind,
+        })
+      }
     })()
-  }, [id])
+  }, [id, mockLead])
 
   useEffect(() => {
     void (async () => {
       const role = await getAuthProfileRoleFromSupabase()
       setAuthRole(role)
       if (process.env.NODE_ENV === "development") {
-        console.debug("[lead-detail] role do usuário autenticado", role)
+        console.log("[permission-check:debug]", {
+          page: "/comercial/leads/[id]",
+          role,
+          podeConfirmarPrimeiraMensalidade:
+            role === "admin_financeiro" || role === "admin_master",
+          podeEditarStatusComercial: role === "comercial",
+        })
       }
     })()
   }, [])
+
+  if (pageLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <p className="text-muted-foreground">Carregando...</p>
+      </div>
+    )
+  }
 
   if (!lead || !lead.indicacao) {
     return (
@@ -355,7 +391,8 @@ export default function DetalheLeadPage({
 
         {/* Sidebar */}
         <div className="space-y-6">
-          {/* Status */}
+          {/* Status — apenas comercial atribuído pode alterar fluxo comercial */}
+          {podeEditarStatusComercial && (
           <div className="rounded-xl border bg-card p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">
               Atualizar Status
@@ -385,6 +422,7 @@ export default function DetalheLeadPage({
               {isSaving ? "Salvando..." : "Salvar Status"}
             </Button>
           </div>
+          )}
 
           {/* Indicador */}
           {indicador && (

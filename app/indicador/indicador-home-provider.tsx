@@ -7,12 +7,12 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import { DashboardLayout } from "@/components/layout/dashboard-layout"
 import { mockDataService } from "@/lib/services/mock-data.service"
 import {
   getIndicadorHomeLoadFailureReasonForDev,
   loadIndicadorHomeFromSupabase,
 } from "@/lib/services/supabase-data.service"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import type { DashboardIndicador } from "@/types/dashboard"
 import type { Indicador } from "@/types/profile"
 import type { Indicacao } from "@/types/referral"
@@ -41,6 +41,48 @@ function mockIndicadorHome(): IndicadorHomeContextValue {
   }
 }
 
+function emptyIndicadorHome(): IndicadorHomeContextValue {
+  const now = new Date()
+  const emptyInd: Indicador = {
+    id: "",
+    nome: "",
+    email: "",
+    telefone: "",
+    role: "indicador",
+    ativo: true,
+    createdAt: now,
+    totalIndicacoes: 0,
+    indicacoesAprovadas: 0,
+    totalRecebido: 0,
+    saldoDisponivel: 0,
+    saldoDesconto: 0,
+  }
+  const emptyDash: DashboardIndicador = {
+    totalIndicacoes: 0,
+    emAndamento: 0,
+    aprovadas: 0,
+    recusadas: 0,
+    totalRecebido: 0,
+    totalAReceber: 0,
+    saldoDisponivel: 0,
+    saldoEmDesconto: 0,
+    recompensasPendentesCount: 0,
+    recompensasDisponiveisCount: 0,
+    valorRecompensasPendentes: 0,
+    valorRecompensasDisponiveis: 0,
+  }
+  return {
+    indicador: emptyInd,
+    dashboard: emptyDash,
+    recentIndicacoes: [],
+    source: "supabase",
+  }
+}
+
+function isDev(): boolean {
+  return process.env.NODE_ENV === "development"
+}
+
 export function useIndicadorHome() {
   const ctx = useContext(IndicadorHomeContext)
   if (!ctx) {
@@ -51,21 +93,24 @@ export function useIndicadorHome() {
 
 export function IndicadorHomeProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<IndicadorHomeContextValue>(() =>
-    mockIndicadorHome()
+    isDataProviderMock() ? mockIndicadorHome() : emptyIndicadorHome()
   )
 
   useEffect(() => {
+    if (isDataProviderMock()) {
+      return
+    }
     let cancelled = false
     void (async () => {
-      if (process.env.NODE_ENV === "development") {
+      if (isDev()) {
         console.log(
           "[indicador-home:provider]",
-          "início: buscando dados Supabase (estado inicial = mock)"
+          "buscando dados Supabase (estado inicial vazio até carregar)"
         )
       }
       const remote = await loadIndicadorHomeFromSupabase()
       if (cancelled) {
-        if (process.env.NODE_ENV === "development") {
+        if (isDev()) {
           console.log(
             "[indicador-home:provider]",
             "load ignorado: componente desmontou antes de concluir"
@@ -74,13 +119,13 @@ export function IndicadorHomeProvider({ children }: { children: ReactNode }) {
         return
       }
       if (!remote) {
-        if (process.env.NODE_ENV === "development") {
+        if (isDev()) {
           const motivo =
             getIndicadorHomeLoadFailureReasonForDev() ??
             "(sem motivo no buffer dev — ver console [indicador-home:supabase])"
           console.warn(
             "[indicador-home:provider]",
-            "Fallback para mock. Motivo:",
+            "Supabase não retornou home; mantendo estado vazio (sem fallback mock). Motivo:",
             motivo
           )
         }
@@ -92,7 +137,7 @@ export function IndicadorHomeProvider({ children }: { children: ReactNode }) {
         recentIndicacoes: remote.recentIndicacoes,
         source: "supabase",
       })
-      if (process.env.NODE_ENV === "development") {
+      if (isDev()) {
         console.log(
           "[indicador-home:provider]",
           "Estado atualizado com fonte supabase",
@@ -107,13 +152,7 @@ export function IndicadorHomeProvider({ children }: { children: ReactNode }) {
 
   return (
     <IndicadorHomeContext.Provider value={state}>
-      <DashboardLayout
-        variant="indicador"
-        userName={state.indicador.nome}
-        userRole="Indicador"
-      >
-        {children}
-      </DashboardLayout>
+      {children}
     </IndicadorHomeContext.Provider>
   )
 }

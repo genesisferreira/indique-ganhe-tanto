@@ -1,14 +1,49 @@
 "use client"
 
+import { useEffect, useMemo, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { Button } from "@/components/ui/button"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { pagamentos, currentIndicador } from "@/lib/services/mock-data.service"
+import { loadIndicadorPagamentosFromSupabase } from "@/lib/services/supabase-data.service"
+import type { Pagamento } from "@/types"
 import { FileText, Download, Calendar, Wallet, Eye } from "lucide-react"
 
 export default function ComprovantesPage() {
-  const comprovantes = pagamentos.filter(
-    (p) => p.indicadorId === currentIndicador.id && p.comprovanteUrl
-  )
+  const [lista, setLista] = useState<Pagamento[] | null>(null)
+
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      if (process.env.NODE_ENV === "development") {
+        const total = pagamentos.filter(
+          (p) => p.indicadorId === currentIndicador.id && p.comprovanteUrl
+        ).length
+        console.log("[page-data:debug]", { page: "/indicador/comprovantes", source: "mock", total })
+      }
+      setLista(null)
+      return
+    }
+    void (async () => {
+      const remoto = await loadIndicadorPagamentosFromSupabase()
+      const base = remoto ?? []
+      if (process.env.NODE_ENV === "development") {
+        const comUrl = base.filter((p) => p.comprovanteUrl).length
+        console.log("[page-data:debug]", {
+          page: "/indicador/comprovantes",
+          source: "supabase",
+          total: comUrl,
+        })
+      }
+      setLista(base)
+    })()
+  }, [])
+
+  const comprovantes = useMemo(() => {
+    const base = isDataProviderMock()
+      ? pagamentos.filter((p) => p.indicadorId === currentIndicador.id)
+      : (lista ?? [])
+    return base.filter((p) => p.comprovanteUrl)
+  }, [lista])
 
   return (
     <div>

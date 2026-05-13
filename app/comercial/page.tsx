@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
@@ -16,18 +17,138 @@ import {
   ArrowRight,
   Phone,
 } from "lucide-react"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { dashboardComercial, leads, currentComercial } from "@/lib/services/mock-data.service"
+import {
+  getAuthProfileBasicsFromSupabase,
+  loadComercialLeadsFromSupabase,
+} from "@/lib/services/supabase-data.service"
+import type { DashboardComercial } from "@/types/dashboard"
+import type { Lead } from "@/types/lead"
 
-const meusLeads = leads.filter((l) => l.comercialId === currentComercial.id)
-const leadsAtivos = meusLeads.filter(
-  (l) => l.status !== "vendido" && l.status !== "perdido"
-)
+function primeNome(nome: string): string {
+  const p = (nome ?? "").trim().split(/\s+/)[0]
+  return p || "—"
+}
+
+function dashboardFromAssignedLeads(assigned: Lead[]): DashboardComercial {
+  const counts = {
+    leadsNovos: 0,
+    leadsEmAtendimento: 0,
+    leadsSemContato: 0,
+    leadsEmNegociacao: 0,
+    vendasRealizadas: 0,
+    leadsPerdidos: 0,
+  }
+  const diffMins: number[] = []
+  for (const l of assigned) {
+    switch (l.status) {
+      case "novo":
+        counts.leadsNovos += 1
+        break
+      case "em_atendimento":
+      case "redistribuido":
+        counts.leadsEmAtendimento += 1
+        break
+      case "sem_contato":
+        counts.leadsSemContato += 1
+        break
+      case "em_negociacao":
+        counts.leadsEmNegociacao += 1
+        break
+      case "vendido":
+        counts.vendasRealizadas += 1
+        break
+      case "perdido":
+        counts.leadsPerdidos += 1
+        break
+      default:
+        break
+    }
+    if (l.primeiroContato) {
+      const ms = l.primeiroContato.getTime() - l.createdAt.getTime()
+      if (ms >= 0) diffMins.push(ms / 60000)
+    }
+  }
+  let tempo: string = "N/D"
+  if (diffMins.length > 0) {
+    const avg = diffMins.reduce((a, b) => a + b, 0) / diffMins.length
+    tempo = `${Math.max(0, Math.round(avg))} min`
+  }
+  return {
+    ...counts,
+    tempoMedioPrimeiroContato: tempo,
+  }
+}
+
+function initialMockComercialState(): {
+  nome: string
+  dashboard: DashboardComercial
+  leadsAtivos: Lead[]
+} | null {
+  if (!isDataProviderMock()) return null
+  const meus = leads.filter((l) => l.comercialId === currentComercial.id)
+  return {
+    nome: currentComercial.nome,
+    dashboard: dashboardComercial,
+    leadsAtivos: meus.filter((l) => l.status !== "vendido" && l.status !== "perdido"),
+  }
+}
 
 export default function ComercialDashboard() {
+  const init = initialMockComercialState()
+  const [nomeCumprimento, setNomeCumprimento] = useState(init?.nome ?? "")
+  const [dashboard, setDashboard] = useState<DashboardComercial | null>(init?.dashboard ?? null)
+  const [leadsAtivosLista, setLeadsAtivosLista] = useState<Lead[]>(init?.leadsAtivos ?? [])
+
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      if (process.env.NODE_ENV === "development") {
+        const total = leads.filter((l) => l.comercialId === currentComercial.id).length
+        console.log("[page-data:debug]", { page: "/comercial", source: "mock", total })
+      }
+      return
+    }
+
+    void (async () => {
+      const [allLeads, basics] = await Promise.all([
+        loadComercialLeadsFromSupabase(),
+        getAuthProfileBasicsFromSupabase(),
+      ])
+      const uid = basics?.id ?? null
+      setNomeCumprimento(basics?.fullName ?? "")
+      const assigned =
+        uid && allLeads ? allLeads.filter((l) => l.comercialId === uid) : []
+      setDashboard(dashboardFromAssignedLeads(assigned))
+      setLeadsAtivosLista(
+        assigned.filter((l) => l.status !== "vendido" && l.status !== "perdido")
+      )
+      if (process.env.NODE_ENV === "development") {
+        console.log("[page-data:debug]", {
+          page: "/comercial",
+          source: "supabase",
+          total: allLeads?.length ?? 0,
+        })
+      }
+    })()
+  }, [])
+
+  const d =
+    dashboard ??
+    ({
+      leadsNovos: 0,
+      leadsEmAtendimento: 0,
+      leadsSemContato: 0,
+      leadsEmNegociacao: 0,
+      vendasRealizadas: 0,
+      leadsPerdidos: 0,
+      tempoMedioPrimeiroContato: "N/D",
+    } satisfies DashboardComercial)
+
   return (
     <div>
       <PageHeader
-        title={`Olá, ${currentComercial.nome.split(" ")[0]}!`}
+        title={`Olá, ${primeNome(nomeCumprimento)}!`}
         description="Gerencie seus leads e acompanhe seu desempenho"
       >
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-success/10 border border-success/20">
@@ -40,24 +161,24 @@ export default function ComercialDashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <StatCard
           title="Leads Novos"
-          value={dashboardComercial.leadsNovos}
+          value={d.leadsNovos}
           icon={Users}
           variant="primary"
         />
         <StatCard
           title="Em Atendimento"
-          value={dashboardComercial.leadsEmAtendimento}
+          value={d.leadsEmAtendimento}
           icon={UserCheck}
         />
         <StatCard
           title="Sem Contato"
-          value={dashboardComercial.leadsSemContato}
+          value={d.leadsSemContato}
           icon={AlertTriangle}
           variant="warning"
         />
         <StatCard
           title="Em Negociação"
-          value={dashboardComercial.leadsEmNegociacao}
+          value={d.leadsEmNegociacao}
           icon={Handshake}
         />
       </div>
@@ -65,19 +186,19 @@ export default function ComercialDashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 mb-8">
         <StatCard
           title="Vendas Realizadas"
-          value={dashboardComercial.vendasRealizadas}
+          value={d.vendasRealizadas}
           icon={ShoppingCart}
           variant="success"
         />
         <StatCard
           title="Leads Perdidos"
-          value={dashboardComercial.leadsPerdidos}
+          value={d.leadsPerdidos}
           icon={UserX}
           variant="destructive"
         />
         <StatCard
           title="Tempo Médio 1º Contato"
-          value={dashboardComercial.tempoMedioPrimeiroContato}
+          value={d.tempoMedioPrimeiroContato}
           icon={Clock}
         />
       </div>
@@ -97,12 +218,12 @@ export default function ComercialDashboard() {
         </div>
 
         <div className="space-y-3">
-          {leadsAtivos.length === 0 ? (
+          {leadsAtivosLista.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               Nenhum lead ativo no momento
             </div>
           ) : (
-            leadsAtivos.slice(0, 5).map((lead) => {
+            leadsAtivosLista.slice(0, 5).map((lead) => {
               const indicacao = lead.indicacao
               if (!indicacao) return null
               return (
@@ -141,13 +262,13 @@ export default function ComercialDashboard() {
       </div>
 
       {/* Alert for leads without contact */}
-      {dashboardComercial.leadsSemContato > 0 && (
+      {d.leadsSemContato > 0 && (
         <div className="mt-6 p-4 rounded-xl bg-warning/10 border border-warning/20 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-warning mt-0.5" />
           <div>
             <p className="font-medium text-foreground">Atenção!</p>
             <p className="text-sm text-muted-foreground">
-              Você tem {dashboardComercial.leadsSemContato} lead(s) sem contato.
+              Você tem {d.leadsSemContato} lead(s) sem contato.
               Entre em contato em até 15 minutos para evitar redistribuição.
             </p>
           </div>

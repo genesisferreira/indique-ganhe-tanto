@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server'
+import { logAuthAudit } from '@/lib/auth/auth-audit'
 // import { updateSession } from '@/lib/supabase/middleware'
 
 // Define route permissions
@@ -24,11 +25,24 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
+  const protectedRouteMatch = Object.keys(routePermissions).find((route) =>
+    pathname.startsWith(route)
+  )
+  if (process.env.NODE_ENV === 'development' && protectedRouteMatch) {
+    logAuthAudit({
+      role: null,
+      route: pathname,
+      allowed: true,
+      reason:
+        'middleware(dev): bypass de autenticação; enforcement no cliente (AuthenticatedDashboardShell) + RLS',
+    })
+  }
+
   // TODO: Enable when Supabase is connected
   // const { supabaseResponse, user } = await updateSession(request)
   
-  // For now, allow all routes in development
-  // Remove this when authentication is implemented
+  // Autenticação por rota: em produção habilitar `updateSession` + checagem de role abaixo.
+  // Hoje a coerência role × área é aplicada no cliente (`AuthenticatedDashboardShell` + RLS no Supabase).
   if (process.env.NODE_ENV === 'development') {
     return NextResponse.next()
   }

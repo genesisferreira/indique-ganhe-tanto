@@ -5,11 +5,32 @@ import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { loadAdminDashboardMetricsFromSupabase, type AdminDashboardMetrics } from "@/lib/services"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts"
 
 function isDev(): boolean {
   return process.env.NODE_ENV === "development"
+}
+
+const EMPTY_ADMIN_DASHBOARD: AdminDashboardMetrics = {
+  totalReferrals: 0,
+  pendingReferrals: 0,
+  inAttendanceReferrals: 0,
+  approvedReferrals: 0,
+  rejectedReferrals: 0,
+  slaExpiredReferrals: 0,
+  unreadNotifications: 0,
+  totalCommercials: 0,
+  availableCommercials: 0,
+  todayReferrals: 0,
+  totalIndicators: 0,
+  activeIndicators: 0,
+  pendingPaymentsValue: 0,
+  pendingPaymentsCount: 0,
+  totalPaidValue: 0,
+  monthlyData: [],
+  topIndicadores: [],
 }
 
 export default function AdminDashboard() {
@@ -46,7 +67,9 @@ export default function AdminDashboard() {
     ],
   }
 
-  const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>(fallbackMetrics)
+  const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>(() =>
+    isDataProviderMock() ? fallbackMetrics : EMPTY_ADMIN_DASHBOARD
+  )
 
   useEffect(() => {
     let mounted = true
@@ -57,12 +80,24 @@ export default function AdminDashboard() {
 
       if (!metricsFromSupabase) {
         if (isDev()) {
-          console.warn("[admin-dashboard] fallback mock mantido (Supabase indisponível)")
+          if (isDataProviderMock()) {
+            console.warn("[admin-dashboard] Supabase indisponível — mantendo métricas de demonstração")
+          } else {
+            console.warn("[flow-check:debug]", {
+              flow: "admin-dashboard",
+              ok: false,
+              note: "Supabase sem métricas — painel zerado (sem mock)",
+            })
+            setDashboardMetrics(EMPTY_ADMIN_DASHBOARD)
+          }
+        } else if (!isDataProviderMock()) {
+          setDashboardMetrics(EMPTY_ADMIN_DASHBOARD)
         }
         return
       }
 
       if (isDev()) {
+        console.log("[flow-check:debug]", { flow: "admin-dashboard", ok: true })
         console.log("[admin-dashboard] métricas recebidas do Supabase", metricsFromSupabase)
       }
       setDashboardMetrics(metricsFromSupabase)

@@ -1,33 +1,111 @@
 "use client"
 
+import { useEffect, useMemo, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { pagamentos } from "@/lib/services/mock-data.service"
+import { loadAdminAllPaymentsFromSupabase } from "@/lib/services/supabase-data.service"
 import type { Pagamento } from "@/types"
-import { DollarSign, TrendingUp, TrendingDown, Clock, CheckCircle, XCircle, ArrowUpRight, ArrowDownRight, Wallet } from "lucide-react"
+import { DollarSign, TrendingUp, Clock, CheckCircle, ArrowUpRight, ArrowDownRight, Wallet } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from "recharts"
 import Link from "next/link"
 
+const MOCK_MONTHLY = [
+  { mes: "Jan", pago: 12500, pendente: 3200 },
+  { mes: "Fev", pago: 15800, pendente: 2800 },
+  { mes: "Mar", pago: 18200, pendente: 4100 },
+  { mes: "Abr", pago: 16500, pendente: 3500 },
+  { mes: "Mai", pago: 21000, pendente: 2900 },
+  { mes: "Jun", pago: 19800, pendente: 2345 },
+]
+
+const MOCK_FLUXO = [
+  { mes: "Jan", entrada: 45000, saida: 12500 },
+  { mes: "Fev", entrada: 52000, saida: 15800 },
+  { mes: "Mar", entrada: 61000, saida: 18200 },
+  { mes: "Abr", entrada: 58000, saida: 16500 },
+  { mes: "Mai", entrada: 72000, saida: 21000 },
+  { mes: "Jun", entrada: 68000, saida: 19800 },
+]
+
+function monthKeyPt(d: Date): string {
+  return d.toLocaleString("pt-BR", { month: "short", year: "2-digit" })
+}
+
+function buildLastSixMonthsSeries(
+  lista: Pagamento[]
+): { mes: string; pago: number; pendente: number; entrada: number; saida: number }[] {
+  const now = new Date()
+  const keys: string[] = []
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    keys.push(monthKeyPt(d))
+  }
+  const pagoBy = new Map<string, number>()
+  const pendBy = new Map<string, number>()
+  for (const k of keys) {
+    pagoBy.set(k, 0)
+    pendBy.set(k, 0)
+  }
+  for (const p of lista) {
+    const d = new Date(p.createdAt)
+    const k = monthKeyPt(d)
+    if (!pagoBy.has(k)) continue
+    if (p.status === "pago") {
+      pagoBy.set(k, (pagoBy.get(k) ?? 0) + p.valor)
+    }
+    if (p.status === "pendente" || p.status === "aprovado") {
+      pendBy.set(k, (pendBy.get(k) ?? 0) + p.valor)
+    }
+  }
+  return keys.map((mes) => {
+    const pg = pagoBy.get(mes) ?? 0
+    const pd = pendBy.get(mes) ?? 0
+    return { mes, pago: pg, pendente: pd, entrada: pg + pd, saida: pg }
+  })
+}
+
 export default function AdminFinanceiroPage() {
-  const pagamentosPendentes = pagamentos.filter((p: Pagamento) => p.status === "pendente")
-  const pagamentosPagos = pagamentos.filter((p: Pagamento) => p.status === "pago")
-  const pagamentosCancelados = pagamentos.filter((p: Pagamento) => p.status === "cancelado")
+  const [lista, setLista] = useState<Pagamento[]>([])
+
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      setLista(pagamentos)
+      return
+    }
+    void loadAdminAllPaymentsFromSupabase().then((r) => setLista(r ?? []))
+  }, [])
+
+  const pagamentosPendentes = lista.filter((p: Pagamento) => p.status === "pendente")
+  const pagamentosPagos = lista.filter((p: Pagamento) => p.status === "pago")
+  const pagamentosCancelados = lista.filter(
+    (p: Pagamento) => p.status === "cancelado" || p.status === "rejeitado"
+  )
 
   const totalPendente = pagamentosPendentes.reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
   const totalPago = pagamentosPagos.reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
-  const totalCancelado = pagamentosCancelados.reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
   const totalGeral = totalPendente + totalPago
 
-  const monthlyData = [
-    { mes: "Jan", pago: 12500, pendente: 3200 },
-    { mes: "Fev", pago: 15800, pendente: 2800 },
-    { mes: "Mar", pago: 18200, pendente: 4100 },
-    { mes: "Abr", pago: 16500, pendente: 3500 },
-    { mes: "Mai", pago: 21000, pendente: 2900 },
-    { mes: "Jun", pago: 19800, pendente: totalPendente },
-  ]
+  const monthlyData = useMemo(() => {
+    if (isDataProviderMock()) return MOCK_MONTHLY
+    return buildLastSixMonthsSeries(lista).map(({ mes, pago, pendente }) => ({
+      mes,
+      pago,
+      pendente,
+    }))
+  }, [lista])
+
+  const fluxoCaixa = useMemo(() => {
+    if (isDataProviderMock()) return MOCK_FLUXO
+    return buildLastSixMonthsSeries(lista).map(({ mes, entrada, saida }) => ({
+      mes,
+      entrada,
+      saida,
+    }))
+  }, [lista])
 
   const statusData = [
     { name: "Pago", value: pagamentosPagos.length, color: "#22c55e" },
@@ -35,14 +113,8 @@ export default function AdminFinanceiroPage() {
     { name: "Cancelado", value: pagamentosCancelados.length, color: "#ef4444" },
   ]
 
-  const fluxoCaixa = [
-    { mes: "Jan", entrada: 45000, saida: 12500 },
-    { mes: "Fev", entrada: 52000, saida: 15800 },
-    { mes: "Mar", entrada: 61000, saida: 18200 },
-    { mes: "Abr", entrada: 58000, saida: 16500 },
-    { mes: "Mai", entrada: 72000, saida: 21000 },
-    { mes: "Jun", entrada: 68000, saida: 19800 },
-  ]
+  const receitaMesCard =
+    fluxoCaixa.length > 0 ? fluxoCaixa[fluxoCaixa.length - 1]?.entrada ?? 0 : 0
 
   return (
     <div className="space-y-6">
@@ -58,9 +130,7 @@ export default function AdminFinanceiroPage() {
             </Link>
           </Button>
           <Button asChild>
-            <Link href="/admin/historico-pagamentos">
-              Ver Historico
-            </Link>
+            <Link href="/admin/historico-pagamentos">Ver Historico</Link>
           </Button>
         </div>
       </PageHeader>
@@ -90,7 +160,7 @@ export default function AdminFinanceiroPage() {
         />
         <StatCard
           title="Saldo Disponivel"
-          value={`R$ ${(totalGeral - totalPago).toLocaleString("pt-BR")}`}
+          value={`R$ ${Math.max(0, totalGeral - totalPago).toLocaleString("pt-BR")}`}
           subtitle="Para pagamento"
           icon={Wallet}
         />
@@ -185,7 +255,7 @@ export default function AdminFinanceiroPage() {
                   stroke="hsl(var(--success))"
                   strokeWidth={2}
                   dot={{ fill: "hsl(var(--success))" }}
-                  name="Receita (Vendas)"
+                  name="Volume (pago + pendente)"
                 />
                 <Line
                   type="monotone"
@@ -193,7 +263,7 @@ export default function AdminFinanceiroPage() {
                   stroke="hsl(var(--destructive))"
                   strokeWidth={2}
                   dot={{ fill: "hsl(var(--destructive))" }}
-                  name="Saida (Comissoes)"
+                  name="Pago no mes"
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -209,9 +279,16 @@ export default function AdminFinanceiroPage() {
                 <ArrowUpRight className="h-6 w-6 text-success" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Receita do Mes</p>
-                <p className="text-2xl font-bold">R$ 68.000,00</p>
-                <p className="text-xs text-success">+8.2% vs mes anterior</p>
+                <p className="text-sm text-muted-foreground">Volume no ultimo mes (grafico)</p>
+                <p className="text-2xl font-bold">
+                  R${" "}
+                  {receitaMesCard.toLocaleString("pt-BR", {
+                    minimumFractionDigits: 2,
+                  })}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {isDataProviderMock() ? "+8.2% vs mes anterior" : "Dados do Supabase"}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -224,8 +301,10 @@ export default function AdminFinanceiroPage() {
                 <ArrowDownRight className="h-6 w-6 text-destructive" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Comissoes do Mes</p>
-                <p className="text-2xl font-bold">R$ {totalPago.toLocaleString("pt-BR")}</p>
+                <p className="text-sm text-muted-foreground">Total pago (acumulado)</p>
+                <p className="text-2xl font-bold">
+                  R$ {totalPago.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                </p>
                 <p className="text-xs text-muted-foreground">Custo de aquisicao</p>
               </div>
             </div>
@@ -239,9 +318,15 @@ export default function AdminFinanceiroPage() {
                 <TrendingUp className="h-6 w-6 text-primary" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">ROI do Programa</p>
-                <p className="text-2xl font-bold">342%</p>
-                <p className="text-xs text-success">Excelente performance</p>
+                <p className="text-sm text-muted-foreground">Indicadores</p>
+                <p className="text-2xl font-bold">
+                  {lista.length > 0 && pagamentosPagos.length > 0
+                    ? `${((pagamentosPagos.length / lista.length) * 100).toFixed(0)}%`
+                    : "—"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {isDataProviderMock() ? "Excelente performance" : "Proporcao pagos / registros"}
+                </p>
               </div>
             </div>
           </CardContent>

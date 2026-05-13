@@ -18,6 +18,7 @@ import {
   leads,
   currentComercial,
 } from "@/lib/services/mock-data.service"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import {
   claimComercialLead,
   loadComercialLeadsFromSupabase,
@@ -41,24 +42,39 @@ export default function LeadsPage() {
   const [claimingLeadId, setClaimingLeadId] = useState<string | null>(null)
 
   const mockLeads = useMemo(
-    () => leads.filter((l) => l.comercialId === currentComercial.id),
+    () =>
+      isDataProviderMock()
+        ? leads.filter((l) => l.comercialId === currentComercial.id)
+        : [],
     []
   )
 
   const [listaLeads, setListaLeads] = useState<Lead[]>(() => mockLeads)
 
   useEffect(() => {
+    if (isDataProviderMock()) {
+      setListaLeads(mockLeads)
+      return
+    }
     void (async () => {
       const remote = await loadComercialLeadsFromSupabase()
-      if (remote !== null) setListaLeads(remote)
+      setListaLeads(remote ?? [])
+      if (process.env.NODE_ENV === "development") {
+        console.log("[flow-check:debug]", {
+          flow: "comercial-leads-list",
+          total: remote?.length ?? 0,
+        })
+      }
     })()
-  }, [])
+  }, [mockLeads])
 
   const reloadLeadsFromSupabase = async () => {
-    const remote = await loadComercialLeadsFromSupabase()
-    if (remote !== null) {
-      setListaLeads(remote)
+    if (isDataProviderMock()) {
+      setListaLeads(mockLeads)
+      return
     }
+    const remote = await loadComercialLeadsFromSupabase()
+    setListaLeads(remote ?? [])
   }
 
   const handleClaimLead = async (lead: Lead) => {

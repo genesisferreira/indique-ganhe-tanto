@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { DataTable } from "@/components/ui/data-table"
@@ -12,112 +12,160 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { pagamentos, indicadores } from "@/lib/services/mock-data.service"
+import {
+  getAuthProfileRoleFromSupabase,
+  loadAdminAllPaymentsFromSupabase,
+} from "@/lib/services/supabase-data.service"
 import { Search, DollarSign, Clock, CheckCircle, MoreHorizontal, Eye, Check, X, Upload } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import type { Pagamento, Indicador } from "@/types"
+import type { UserRole } from "@/types/user"
+
+const FINANCE_ACTION_ROLES = new Set<UserRole>(["admin_financeiro", "admin_master"])
 
 export default function AdminPagamentosPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("todos")
   const [selectedPagamento, setSelectedPagamento] = useState<Pagamento | null>(null)
   const [dialogType, setDialogType] = useState<"aprovar" | "rejeitar" | "detalhes" | null>(null)
+  const [lista, setLista] = useState<Pagamento[]>([])
+  const [role, setRole] = useState<UserRole | null>(null)
 
-  const filteredPagamentos = pagamentos.filter((pagamento: Pagamento) => {
-    const indicador = indicadores.find((i: Indicador) => i.id === pagamento.indicadorId)
-    const matchesSearch = indicador?.nome.toLowerCase().includes(search.toLowerCase()) ||
-                         (pagamento.indicador?.chavePix?.toLowerCase().includes(search.toLowerCase()) ?? false)
-    const matchesStatus = statusFilter === "todos" || pagamento.status === statusFilter
-    return matchesSearch && matchesStatus
-  })
+  useEffect(() => {
+    void getAuthProfileRoleFromSupabase().then((r) => {
+      setRole(r)
+      if (process.env.NODE_ENV === "development") {
+        console.log("[permission-check:debug]", {
+          page: "/admin/pagamentos",
+          role: r,
+          acoesFinanceiras: r ? FINANCE_ACTION_ROLES.has(r) : false,
+        })
+      }
+    })
+  }, [])
 
-  const totalPendente = pagamentos.filter((p: Pagamento) => p.status === "pendente").reduce((acc, p) => acc + p.valor, 0)
-  const totalPago = pagamentos.filter((p: Pagamento) => p.status === "pago").reduce((acc, p) => acc + p.valor, 0)
-  const pagamentosPendentes = pagamentos.filter((p: Pagamento) => p.status === "pendente").length
-  const pagamentosPagos = pagamentos.filter((p: Pagamento) => p.status === "pago").length
+  useEffect(() => {
+    if (isDataProviderMock()) {
+      setLista(pagamentos)
+      return
+    }
+    void loadAdminAllPaymentsFromSupabase().then((r) => setLista(r ?? []))
+  }, [])
 
-  const getIndicadorNome = (indicadorId: string) => {
-    const indicador = indicadores.find((i: Indicador) => i.id === indicadorId)
-    return indicador?.nome || "Desconhecido"
-  }
+  const podeFin = role !== null && FINANCE_ACTION_ROLES.has(role)
+
+  const getIndicadorNome = (pagamento: Pagamento) =>
+    pagamento.indicador?.nome ??
+    indicadores.find((i: Indicador) => i.id === pagamento.indicadorId)?.nome ??
+    "—"
+
+  const filteredPagamentos = useMemo(() => {
+    const q = search.toLowerCase()
+    return lista.filter((pagamento: Pagamento) => {
+      const nome = getIndicadorNome(pagamento).toLowerCase()
+      const matchesSearch =
+        nome.includes(q) ||
+        (pagamento.indicador?.chavePix?.toLowerCase().includes(q) ?? false)
+      const matchesStatus = statusFilter === "todos" || pagamento.status === statusFilter
+      return matchesSearch && matchesStatus
+    })
+  }, [lista, search, statusFilter])
+
+  const totalPendente = lista
+    .filter((p: Pagamento) => p.status === "pendente")
+    .reduce((acc, p) => acc + p.valor, 0)
+  const totalPago = lista
+    .filter((p: Pagamento) => p.status === "pago")
+    .reduce((acc, p) => acc + p.valor, 0)
+  const pagamentosPendentes = lista.filter((p: Pagamento) => p.status === "pendente").length
+  const pagamentosPagos = lista.filter((p: Pagamento) => p.status === "pago").length
 
   const handleAction = (pagamento: Pagamento, type: "aprovar" | "rejeitar" | "detalhes") => {
     setSelectedPagamento(pagamento)
     setDialogType(type)
   }
 
-  const columns = [
-    {
-      key: "indicador",
-      header: "Indicador",
-      cell: (pagamento: Pagamento) => (
-        <p className="font-medium">{getIndicadorNome(pagamento.indicadorId)}</p>
-      ),
-    },
-    {
-      key: "valor",
-      header: "Valor",
-      cell: (pagamento: Pagamento) => (
-        <span className="font-semibold">
-          R$ {pagamento.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-        </span>
-      ),
-    },
-    {
-      key: "tipo",
-      header: "Tipo",
-      cell: (pagamento: Pagamento) => (
-        <span className="text-sm capitalize">{pagamento.tipo === 'pix' ? 'PIX' : 'Desconto'}</span>
-      ),
-    },
-    {
-      key: "dataSolicitacao",
-      header: "Solicitação",
-      cell: (pagamento: Pagamento) => (
-        <span className="text-sm text-muted-foreground">
-          {new Date(pagamento.createdAt).toLocaleDateString("pt-BR")}
-        </span>
-      ),
-    },
-    {
-      key: "status",
-      header: "Status",
-      cell: (pagamento: Pagamento) => (
-        <StatusBadge status={pagamento.status} />
-      ),
-    },
-    {
-      key: "acoes",
-      header: "Ações",
-      cell: (pagamento: Pagamento) => (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon">
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => handleAction(pagamento, "detalhes")}>
-              <Eye className="mr-2 h-4 w-4" />
-              Ver Detalhes
-            </DropdownMenuItem>
-            {pagamento.status === "pendente" && (
-              <>
-                <DropdownMenuItem onClick={() => handleAction(pagamento, "aprovar")} className="text-success">
-                  <Check className="mr-2 h-4 w-4" />
-                  Aprovar Pagamento
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleAction(pagamento, "rejeitar")} className="text-destructive">
-                  <X className="mr-2 h-4 w-4" />
-                  Rejeitar
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ),
-    },
-  ]
+  const columns = useMemo(
+    () => [
+      {
+        key: "indicador",
+        header: "Indicador",
+        cell: (pagamento: Pagamento) => (
+          <p className="font-medium">{getIndicadorNome(pagamento)}</p>
+        ),
+      },
+      {
+        key: "valor",
+        header: "Valor",
+        cell: (pagamento: Pagamento) => (
+          <span className="font-semibold">
+            R$ {pagamento.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+          </span>
+        ),
+      },
+      {
+        key: "tipo",
+        header: "Tipo",
+        cell: (pagamento: Pagamento) => (
+          <span className="text-sm capitalize">{pagamento.tipo === "pix" ? "PIX" : "Desconto"}</span>
+        ),
+      },
+      {
+        key: "dataSolicitacao",
+        header: "Solicitação",
+        cell: (pagamento: Pagamento) => (
+          <span className="text-sm text-muted-foreground">
+            {new Date(pagamento.createdAt).toLocaleDateString("pt-BR")}
+          </span>
+        ),
+      },
+      {
+        key: "status",
+        header: "Status",
+        cell: (pagamento: Pagamento) => <StatusBadge status={pagamento.status} />,
+      },
+      {
+        key: "acoes",
+        header: "Ações",
+        cell: (pagamento: Pagamento) => (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleAction(pagamento, "detalhes")}>
+                <Eye className="mr-2 h-4 w-4" />
+                Ver Detalhes
+              </DropdownMenuItem>
+              {podeFin && pagamento.status === "pendente" && (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => handleAction(pagamento, "aprovar")}
+                    className="text-success"
+                  >
+                    <Check className="mr-2 h-4 w-4" />
+                    Aprovar Pagamento
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => handleAction(pagamento, "rejeitar")}
+                    className="text-destructive"
+                  >
+                    <X className="mr-2 h-4 w-4" />
+                    Rejeitar
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ),
+      },
+    ],
+    [podeFin]
+  )
 
   return (
     <div className="space-y-6">
@@ -197,7 +245,7 @@ export default function AdminPagamentosPage() {
             <div className="space-y-4 py-4">
               <div className="rounded-lg bg-muted/30 p-4">
                 <p className="text-sm text-muted-foreground">Indicador</p>
-                <p className="font-medium">{getIndicadorNome(selectedPagamento.indicadorId)}</p>
+                <p className="font-medium">{getIndicadorNome(selectedPagamento)}</p>
               </div>
               <div className="rounded-lg bg-muted/30 p-4">
                 <p className="text-sm text-muted-foreground">Valor</p>
@@ -240,7 +288,7 @@ export default function AdminPagamentosPage() {
             <div className="space-y-4 py-4">
               <div className="rounded-lg bg-muted/30 p-4">
                 <p className="text-sm text-muted-foreground">Indicador</p>
-                <p className="font-medium">{getIndicadorNome(selectedPagamento.indicadorId)}</p>
+                <p className="font-medium">{getIndicadorNome(selectedPagamento)}</p>
               </div>
               <div className="rounded-lg bg-muted/30 p-4">
                 <p className="text-sm text-muted-foreground">Valor</p>
@@ -276,7 +324,7 @@ export default function AdminPagamentosPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="rounded-lg bg-muted/30 p-4">
                   <p className="text-sm text-muted-foreground">Indicador</p>
-                  <p className="font-medium">{getIndicadorNome(selectedPagamento.indicadorId)}</p>
+                  <p className="font-medium">{getIndicadorNome(selectedPagamento)}</p>
                 </div>
                 <div className="rounded-lg bg-muted/30 p-4">
                   <p className="text-sm text-muted-foreground">Status</p>

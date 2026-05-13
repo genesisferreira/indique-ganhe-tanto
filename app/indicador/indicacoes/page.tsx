@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { indicacoes, currentIndicador } from "@/lib/services/mock-data.service"
 import { loadIndicadorReferralsListFromSupabase } from "@/lib/services/supabase-data.service"
 import { Plus, Search, Eye, Filter } from "lucide-react"
@@ -33,7 +34,9 @@ export default function MinhasIndicacoesPage() {
 
   const mockIndicacoes = useMemo(
     () =>
-      indicacoes.filter((i) => i.indicadorId === currentIndicador.id),
+      isDataProviderMock()
+        ? indicacoes.filter((i) => i.indicadorId === currentIndicador.id)
+        : [],
     []
   )
 
@@ -41,16 +44,20 @@ export default function MinhasIndicacoesPage() {
     useState<Indicacao[]>(mockIndicacoes)
 
   useEffect(() => {
+    if (isDataProviderMock()) {
+      setListaIndicacoes(mockIndicacoes)
+      return
+    }
     let cancelled = false
     void (async () => {
       const remote = await loadIndicadorReferralsListFromSupabase()
-      if (cancelled || remote === null) return
-      setListaIndicacoes(remote)
+      if (cancelled) return
+      setListaIndicacoes(remote ?? [])
     })()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [mockIndicacoes])
 
   const filteredIndicacoes = listaIndicacoes.filter((indicacao) => {
     const matchesSearch = indicacao.nomeIndicado

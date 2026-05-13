@@ -1,6 +1,8 @@
 "use client"
 
+import type { ElementType } from "react"
 import { useState } from "react"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { Button } from "@/components/ui/button"
@@ -128,7 +130,7 @@ const severityConfig = {
   critical: { label: "Critico", className: "bg-destructive/10 text-destructive border-destructive/30" },
 }
 
-const moduleIcons: Record<string, React.ElementType> = {
+const moduleIcons: Record<string, ElementType> = {
   Pagamentos: DollarSign,
   Indicadores: UserCheck,
   Configuracoes: Settings,
@@ -142,8 +144,11 @@ export default function AdminAuditoriaPage() {
   const [search, setSearch] = useState("")
   const [moduleFilter, setModuleFilter] = useState<string>("todos")
   const [severityFilter, setSeverityFilter] = useState<string>("todos")
+  const [auditLogs] = useState<AuditLog[]>(() =>
+    isDataProviderMock() ? mockAuditLogs : []
+  )
 
-  const filteredLogs = mockAuditLogs.filter((log) => {
+  const filteredLogs = auditLogs.filter((log) => {
     const matchesSearch = log.userName.toLowerCase().includes(search.toLowerCase()) ||
                          log.description.toLowerCase().includes(search.toLowerCase()) ||
                          log.action.toLowerCase().includes(search.toLowerCase())
@@ -152,9 +157,9 @@ export default function AdminAuditoriaPage() {
     return matchesSearch && matchesModule && matchesSeverity
   })
 
-  const totalLogs = mockAuditLogs.length
-  const criticalLogs = mockAuditLogs.filter(l => l.severity === "critical").length
-  const warningLogs = mockAuditLogs.filter(l => l.severity === "warning").length
+  const totalLogs = auditLogs.length
+  const criticalLogs = auditLogs.filter((l) => l.severity === "critical").length
+  const warningLogs = auditLogs.filter((l) => l.severity === "warning").length
 
   const columns = [
     {
