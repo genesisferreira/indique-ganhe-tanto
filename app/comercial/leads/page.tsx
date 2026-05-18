@@ -25,6 +25,10 @@ import {
 } from "@/lib/client/referral-data-sync"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import {
+  REALTIME_TABLES_COMERCIAL,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
+import {
   claimComercialLead,
   loadComercialLeadsFromSupabase,
 } from "@/lib/services/supabase-data.service"
@@ -86,6 +90,14 @@ export default function LeadsPage() {
       })
     })
   }, [loadComercialLeads])
+
+  useRealtimeReload(
+    () => {
+      setReloadTick((t) => t + 1)
+    },
+    REALTIME_TABLES_COMERCIAL,
+    { enabled: !isDataProviderMock() }
+  )
 
   useEffect(() => {
     const onVisible = () => {

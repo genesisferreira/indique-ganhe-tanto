@@ -19,9 +19,12 @@ import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { indicacoes, comerciais } from "@/lib/services/mock-data.service"
 import {
   assignReferralToCommercialFromSupabase,
+  canConfirmFirstInvoice,
   getAuthProfileBasicsFromSupabase,
   loadAdminComerciaisFromSupabase,
   loadAdminReferralDetailFromSupabase,
+  ensureRewardForReferralFromSupabase,
+  markFirstInvoiceAsPaidFromSupabase,
   updateAdminReferralStatusFromSupabase,
 } from "@/lib/services"
 import type { Historico } from "@/types/lead"
@@ -32,6 +35,10 @@ import {
   emitReferralDataMutated,
   subscribeReferralDataMutated,
 } from "@/lib/client/referral-data-sync"
+import {
+  REALTIME_TABLES_ADMIN,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { ArrowLeft, Calendar, Mail, Phone, User } from "lucide-react"
 
 const STATUS_OPTIONS: IndicacaoStatus[] = [
@@ -65,15 +72,17 @@ export default function AdminIndicacaoDetalhePage({
   const [selectedStatus, setSelectedStatus] = useState<IndicacaoStatus | "">("")
   const [savingAssign, setSavingAssign] = useState(false)
   const [savingStatus, setSavingStatus] = useState(false)
+  const [isConfirmingFirstInvoice, setIsConfirmingFirstInvoice] = useState(false)
+  const [authUserId, setAuthUserId] = useState<string | null>(null)
 
   const canMutate = role === "admin_master" || role === "admin_financeiro"
 
-  const reloadReferral = useCallback(async () => {
+  const reloadReferral = useCallback(async (): Promise<boolean> => {
     if (isDataProviderMock()) {
       setIndicacao(mockIndicacao)
       setHistorico([])
       setReady(true)
-      return
+      return true
     }
     const [detail, basics] = await Promise.all([
       loadAdminReferralDetailFromSupabase(id),
@@ -81,18 +90,23 @@ export default function AdminIndicacaoDetalhePage({
     ])
     const r = basics?.role ?? null
     setRole(r)
+    setAuthUserId(basics?.id ?? null)
     const mut = r === "admin_master" || r === "admin_financeiro"
     const comRemoto = mut ? await loadAdminComerciaisFromSupabase() : null
 
     if (detail.kind === "ok") {
       setIndicacao(structuredClone(detail.indicacao))
       setHistorico([...detail.historico])
-    } else {
-      setIndicacao(undefined)
-      setHistorico([])
+      if (comRemoto) setComerciaisLista([...comRemoto])
+      setReady(true)
+      return true
     }
+
+    setIndicacao(undefined)
+    setHistorico([])
     if (comRemoto) setComerciaisLista([...comRemoto])
     setReady(true)
+    return false
   }, [id, mockIndicacao])
 
   useEffect(() => {
@@ -105,16 +119,39 @@ export default function AdminIndicacaoDetalhePage({
   }, [reloadReferral])
 
   const refreshAfterMutation = useCallback(async () => {
-    await reloadReferral()
+    const ok = await reloadReferral()
     emitReferralDataMutated()
     router.refresh()
+    return ok
   }, [reloadReferral, router])
+
+  const patchIndicacaoFirstInvoicePaid = useCallback(() => {
+    setIndicacao((prev) => {
+      if (!prev) return prev
+      const now = new Date()
+      return {
+        ...prev,
+        primeiraFaturaPaga: true,
+        dataPrimeiraFaturaPaga: now,
+        status: "paga",
+        updatedAt: now,
+      }
+    })
+  }, [])
 
   useEffect(() => {
     return subscribeReferralDataMutated(() => {
       void reloadReferral()
     })
   }, [reloadReferral])
+
+  useRealtimeReload(
+    () => {
+      void reloadReferral()
+    },
+    REALTIME_TABLES_ADMIN,
+    { enabled: !isDataProviderMock() }
+  )
 
   const handleAssign = async () => {
     if (!selectedComercialId || !indicacao) return
@@ -145,6 +182,42 @@ export default function AdminIndicacaoDetalhePage({
       }
     } finally {
       setSavingAssign(false)
+    }
+  }
+
+  const handleConfirmFirstInvoice = async () => {
+    if (!indicacao || isConfirmingFirstInvoice || isDataProviderMock()) return
+    console.log("[admin:first-invoice] click")
+    setIsConfirmingFirstInvoice(true)
+    const ensureReward = await ensureRewardForReferralFromSupabase(indicacao.id, {
+      actorProfileId: authUserId,
+    })
+    if (!ensureReward.ok) {
+      toast.error(ensureReward.message)
+      setIsConfirmingFirstInvoice(false)
+      return
+    }
+    const result = await markFirstInvoiceAsPaidFromSupabase(indicacao.id)
+    console.log("[admin:first-invoice] result", result)
+    if (!result.ok) {
+      toast.error(result.message)
+      setIsConfirmingFirstInvoice(false)
+      return
+    }
+    patchIndicacaoFirstInvoicePaid()
+    try {
+      console.log("[admin:first-invoice] refreshing")
+      const reloadOk = await refreshAfterMutation()
+      console.log("[admin:first-invoice] done", { reloadOk })
+      if (!reloadOk) {
+        toast.error(
+          "Operação concluída, mas não foi possível atualizar a visualização."
+        )
+        return
+      }
+      toast.success("Primeira mensalidade confirmada e recompensa liberada.")
+    } finally {
+      setIsConfirmingFirstInvoice(false)
     }
   }
 
@@ -194,6 +267,17 @@ export default function AdminIndicacaoDetalhePage({
   const comerciaisDisponiveis = isDataProviderMock()
     ? comerciais.filter((c) => c.disponibilidade === "disponivel")
     : comerciaisLista.filter((c) => c.disponibilidade === "disponivel" && c.ativo !== false)
+
+  const canConfirmFirstInvoiceAction = canConfirmFirstInvoice({
+    role,
+    authUserId,
+    commercialProfileId: indicacao.comercialId ?? null,
+  })
+
+  const showFirstInvoiceButton =
+    !isDataProviderMock() &&
+    canConfirmFirstInvoiceAction &&
+    !indicacao.primeiraFaturaPaga
 
   return (
     <div className="space-y-6">
@@ -262,6 +346,21 @@ export default function AdminIndicacaoDetalhePage({
               <p className="text-muted-foreground">Primeira mensalidade paga</p>
               <p>{indicacao.primeiraFaturaPaga ? "Sim" : "Não"}</p>
             </div>
+            {showFirstInvoiceButton ? (
+              <Button
+                type="button"
+                className="w-full"
+                variant="secondary"
+                disabled={isConfirmingFirstInvoice}
+                onClick={() => {
+                  void handleConfirmFirstInvoice()
+                }}
+              >
+                {isConfirmingFirstInvoice
+                  ? "Confirmando..."
+                  : "Primeira mensalidade paga"}
+              </Button>
+            ) : null}
             <div className="flex items-center gap-2">
               <Calendar className="h-4 w-4 text-muted-foreground" />
               <span>Criada em {indicacao.createdAt.toLocaleString("pt-BR")}</span>

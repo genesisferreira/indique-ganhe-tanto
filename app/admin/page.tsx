@@ -1,11 +1,15 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { loadAdminDashboardMetricsFromSupabase, type AdminDashboardMetrics } from "@/lib/services"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  REALTIME_TABLES_ADMIN,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts"
 
@@ -71,43 +75,41 @@ export default function AdminDashboard() {
     isDataProviderMock() ? fallbackMetrics : EMPTY_ADMIN_DASHBOARD
   )
 
-  useEffect(() => {
-    let mounted = true
+  const loadMetrics = useCallback(async () => {
+    const metricsFromSupabase = await loadAdminDashboardMetricsFromSupabase()
 
-    const loadMetrics = async () => {
-      const metricsFromSupabase = await loadAdminDashboardMetricsFromSupabase()
-      if (!mounted) return
-
-      if (!metricsFromSupabase) {
-        if (isDev()) {
-          if (isDataProviderMock()) {
-            console.warn("[admin-dashboard] Supabase indisponível — mantendo métricas de demonstração")
-          } else {
-            console.warn("[flow-check:debug]", {
-              flow: "admin-dashboard",
-              ok: false,
-              note: "Supabase sem métricas — painel zerado (sem mock)",
-            })
-            setDashboardMetrics(EMPTY_ADMIN_DASHBOARD)
-          }
-        } else if (!isDataProviderMock()) {
+    if (!metricsFromSupabase) {
+      if (isDev()) {
+        if (isDataProviderMock()) {
+          console.warn("[admin-dashboard] Supabase indisponível — mantendo métricas de demonstração")
+        } else {
+          console.warn("[flow-check:debug]", {
+            flow: "admin-dashboard",
+            ok: false,
+            note: "Supabase sem métricas — painel zerado (sem mock)",
+          })
           setDashboardMetrics(EMPTY_ADMIN_DASHBOARD)
         }
-        return
+      } else if (!isDataProviderMock()) {
+        setDashboardMetrics(EMPTY_ADMIN_DASHBOARD)
       }
-
-      if (isDev()) {
-        console.log("[flow-check:debug]", { flow: "admin-dashboard", ok: true })
-        console.log("[admin-dashboard] métricas recebidas do Supabase", metricsFromSupabase)
-      }
-      setDashboardMetrics(metricsFromSupabase)
+      return
     }
 
-    void loadMetrics()
-    return () => {
-      mounted = false
+    if (isDev()) {
+      console.log("[flow-check:debug]", { flow: "admin-dashboard", ok: true })
+      console.log("[admin-dashboard] métricas recebidas do Supabase", metricsFromSupabase)
     }
+    setDashboardMetrics(metricsFromSupabase)
   }, [])
+
+  useEffect(() => {
+    void loadMetrics()
+  }, [loadMetrics])
+
+  useRealtimeReload(loadMetrics, REALTIME_TABLES_ADMIN, {
+    enabled: !isDataProviderMock(),
+  })
 
   const totalIndicadores = dashboardMetrics.totalIndicators
   const indicadoresAtivos = dashboardMetrics.activeIndicators

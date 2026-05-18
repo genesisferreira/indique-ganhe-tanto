@@ -7,6 +7,10 @@ import {
   emitReferralDataMutated,
   subscribeReferralDataMutated,
 } from "@/lib/client/referral-data-sync"
+import {
+  REALTIME_TABLES_ADMIN,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -103,6 +107,16 @@ export default function AdminIndicacoesPage() {
       })
     })
   }, [loadAdminReferrals])
+
+  useRealtimeReload(
+    () => {
+      void loadAdminReferrals({ silent: true }).then(() => {
+        setDataVersion((v) => v + 1)
+      })
+    },
+    REALTIME_TABLES_ADMIN,
+    { enabled: !isDataProviderMock() }
+  )
 
   const refreshAfterMutation = useCallback(async () => {
     await loadAdminReferrals({ silent: true })

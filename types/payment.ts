@@ -82,6 +82,7 @@ export interface AuditoriaPagamentoItem {
 export type PixWithdrawalRpcResult =
   | {
       ok: true
+      idempotent?: boolean
       paymentId?: string
       status?: string
       balanceAfter?: number

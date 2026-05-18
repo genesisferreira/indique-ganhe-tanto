@@ -14,6 +14,7 @@ import {
   markUserNotificationAsRead,
 } from "@/lib/services/supabase-data.service"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import { useRealtimeReload } from "@/hooks/use-supabase-realtime"
 import type { NotificationItem } from "@/types/notification"
 import type { UserRole } from "@/types/user"
 import { ExternalLink } from "lucide-react"
@@ -116,6 +117,10 @@ export default function NotificacoesPage() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  useRealtimeReload(reload, ["notifications"], {
+    enabled: !isDataProviderMock(),
+  })
 
   const onMarkOne = async (id: string) => {
     if (source === "mock" && id.startsWith("mock-")) {

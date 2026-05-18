@@ -20,6 +20,10 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  REALTIME_TABLES_ADMIN,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { pagamentos } from "@/lib/services/mock-data.service"
 import {
   approvePixWithdrawalFromSupabase,
@@ -70,6 +74,7 @@ export default function AdminPagamentosPendentesPage() {
   const [fileInputKey, setFileInputKey] = useState(0)
   const [uploadCompleting, setUploadCompleting] = useState(false)
   const receiptInputRef = useRef<HTMLInputElement>(null)
+  const actionInFlightRef = useRef(false)
   const [auditRows, setAuditRows] = useState<AuditoriaPagamentoItem[] | null>(null)
   const [loadingAudit, setLoadingAudit] = useState(false)
 
@@ -130,6 +135,10 @@ export default function AdminPagamentosPendentesPage() {
     void recarregar()
   }, [recarregar])
 
+  useRealtimeReload(recarregar, REALTIME_TABLES_ADMIN, {
+    enabled: !isDataProviderMock(),
+  })
+
   useEffect(() => {
     if (dialogComplete) {
       setReceiptFile(null)
@@ -163,7 +172,9 @@ export default function AdminPagamentosPendentesPage() {
   }
 
   const handleApprove = async () => {
-    if (!selected || !podeAgir) return
+    if (!selected || !podeAgir || actionInFlightRef.current) return
+    actionInFlightRef.current = true
+    try {
     const r = await approvePixWithdrawalFromSupabase(selected.id)
     if (!r.ok) {
       toast.error(r.message)
@@ -173,10 +184,15 @@ export default function AdminPagamentosPendentesPage() {
     setDialogApprove(false)
     setSelected(null)
     await recarregar()
+    } finally {
+      actionInFlightRef.current = false
+    }
   }
 
   const handleReject = async () => {
-    if (!selected || !podeAgir) return
+    if (!selected || !podeAgir || actionInFlightRef.current) return
+    actionInFlightRef.current = true
+    try {
     const r = await rejectPixWithdrawalFromSupabase(selected.id, rejectReason)
     if (!r.ok) {
       toast.error(r.message)
@@ -187,6 +203,9 @@ export default function AdminPagamentosPendentesPage() {
     setSelected(null)
     setRejectReason("")
     await recarregar()
+    } finally {
+      actionInFlightRef.current = false
+    }
   }
 
   const aplicarArquivo = (file: File | undefined) => {
@@ -216,7 +235,7 @@ export default function AdminPagamentosPendentesPage() {
   }
 
   const handleComplete = async () => {
-    if (!selected || !podeAgir) return
+    if (!selected || !podeAgir || actionInFlightRef.current || uploadCompleting) return
     if (!receiptFile) {
       toast.error("Selecione um arquivo de comprovante.")
       return
@@ -227,17 +246,16 @@ export default function AdminPagamentosPendentesPage() {
       return
     }
 
+    actionInFlightRef.current = true
     setUploadCompleting(true)
+    try {
     const upload = await uploadPixWithdrawalReceipt(selected.id, receiptFile)
     if (!upload.ok) {
       toast.error(upload.message)
-      setUploadCompleting(false)
       return
     }
 
     const r = await completePixWithdrawalFromSupabase(selected.id, upload.receiptPath)
-    setUploadCompleting(false)
-
     if (!r.ok) {
       toast.error(r.message)
       return
@@ -247,6 +265,10 @@ export default function AdminPagamentosPendentesPage() {
     setSelected(null)
     setReceiptFile(null)
     await recarregar()
+    } finally {
+      setUploadCompleting(false)
+      actionInFlightRef.current = false
+    }
   }
 
   const colunasPendente = [

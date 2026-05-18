@@ -2,11 +2,16 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
   type ReactNode,
 } from "react"
+import {
+  REALTIME_TABLES_INDICADOR,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { mockDataService } from "@/lib/services/mock-data.service"
 import {
   getIndicadorHomeLoadFailureReasonForDev,
@@ -96,59 +101,48 @@ export function IndicadorHomeProvider({ children }: { children: ReactNode }) {
     isDataProviderMock() ? mockIndicadorHome() : emptyIndicadorHome()
   )
 
-  useEffect(() => {
-    if (isDataProviderMock()) {
+  const loadHome = useCallback(async () => {
+    if (isDataProviderMock()) return
+    if (isDev()) {
+      console.log(
+        "[indicador-home:provider]",
+        "buscando dados Supabase (estado inicial vazio até carregar)"
+      )
+    }
+    const remote = await loadIndicadorHomeFromSupabase()
+    if (!remote) {
+      if (isDev()) {
+        const motivo =
+          getIndicadorHomeLoadFailureReasonForDev() ??
+          "(sem motivo no buffer dev — ver console [indicador-home:supabase])"
+        console.warn(
+          "[indicador-home:provider]",
+          "Supabase não retornou home; mantendo estado vazio (sem fallback mock). Motivo:",
+          motivo
+        )
+      }
       return
     }
-    let cancelled = false
-    void (async () => {
-      if (isDev()) {
-        console.log(
-          "[indicador-home:provider]",
-          "buscando dados Supabase (estado inicial vazio até carregar)"
-        )
-      }
-      const remote = await loadIndicadorHomeFromSupabase()
-      if (cancelled) {
-        if (isDev()) {
-          console.log(
-            "[indicador-home:provider]",
-            "load ignorado: componente desmontou antes de concluir"
-          )
-        }
-        return
-      }
-      if (!remote) {
-        if (isDev()) {
-          const motivo =
-            getIndicadorHomeLoadFailureReasonForDev() ??
-            "(sem motivo no buffer dev — ver console [indicador-home:supabase])"
-          console.warn(
-            "[indicador-home:provider]",
-            "Supabase não retornou home; mantendo estado vazio (sem fallback mock). Motivo:",
-            motivo
-          )
-        }
-        return
-      }
-      setState({
-        indicador: remote.indicador,
-        dashboard: remote.dashboard,
-        recentIndicacoes: remote.recentIndicacoes,
-        source: "supabase",
+    setState({
+      indicador: remote.indicador,
+      dashboard: remote.dashboard,
+      recentIndicacoes: remote.recentIndicacoes,
+      source: "supabase",
+    })
+    if (isDev()) {
+      console.log("[indicador-home:provider]", "Estado atualizado com fonte supabase", {
+        indicadorId: remote.indicador.id,
       })
-      if (isDev()) {
-        console.log(
-          "[indicador-home:provider]",
-          "Estado atualizado com fonte supabase",
-          { indicadorId: remote.indicador.id }
-        )
-      }
-    })()
-    return () => {
-      cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    void loadHome()
+  }, [loadHome])
+
+  useRealtimeReload(loadHome, REALTIME_TABLES_INDICADOR, {
+    enabled: !isDataProviderMock(),
+  })
 
   return (
     <IndicadorHomeContext.Provider value={state}>

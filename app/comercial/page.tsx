@@ -20,6 +20,10 @@ import {
 } from "lucide-react"
 import { subscribeReferralDataMutated } from "@/lib/client/referral-data-sync"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  REALTIME_TABLES_COMERCIAL,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { dashboardComercial, leads, currentComercial } from "@/lib/services/mock-data.service"
 import {
   getAuthProfileBasicsFromSupabase,
@@ -169,6 +173,14 @@ export default function ComercialDashboard() {
       setReloadTick((t) => t + 1)
     })
   }, [])
+
+  useRealtimeReload(
+    () => {
+      setReloadTick((t) => t + 1)
+    },
+    REALTIME_TABLES_COMERCIAL,
+    { enabled: !isDataProviderMock() }
+  )
 
   useEffect(() => {
     const onVisible = () => {

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -16,6 +16,10 @@ import {
 } from "@/components/ui/select"
 import { pagamentos } from "@/lib/services/mock-data.service"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  REALTIME_TABLES_ADMIN,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { loadAdminAllPaymentsFromSupabase } from "@/lib/services/supabase-data.service"
 import type { Pagamento, PagamentoStatus } from "@/types"
 import {
@@ -37,7 +41,7 @@ export default function AdminHistoricoPagamentosPage() {
   const [periodoFilter, setPeriodoFilter] = useState<string>("todos")
   const [lista, setLista] = useState<Pagamento[]>([])
 
-  useEffect(() => {
+  const loadHistorico = useCallback(async () => {
     if (isDataProviderMock()) {
       setLista(pagamentos)
       if (process.env.NODE_ENV === "development") {
@@ -49,18 +53,24 @@ export default function AdminHistoricoPagamentosPage() {
       }
       return
     }
-    void (async () => {
-      const remoto = await loadAdminAllPaymentsFromSupabase()
-      if (process.env.NODE_ENV === "development") {
-        console.log("[page-data:debug]", {
-          page: "/admin/historico-pagamentos",
-          source: "supabase",
-          total: remoto?.length ?? 0,
-        })
-      }
-      setLista(remoto ?? [])
-    })()
+    const remoto = await loadAdminAllPaymentsFromSupabase()
+    if (process.env.NODE_ENV === "development") {
+      console.log("[page-data:debug]", {
+        page: "/admin/historico-pagamentos",
+        source: "supabase",
+        total: remoto?.length ?? 0,
+      })
+    }
+    setLista(remoto ?? [])
   }, [])
+
+  useEffect(() => {
+    void loadHistorico()
+  }, [loadHistorico])
+
+  useRealtimeReload(loadHistorico, REALTIME_TABLES_ADMIN, {
+    enabled: !isDataProviderMock(),
+  })
 
   const filteredPagamentos = useMemo(() => {
     const q = search.toLowerCase()

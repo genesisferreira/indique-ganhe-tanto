@@ -1,11 +1,15 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  REALTIME_TABLES_ADMIN,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { pagamentos } from "@/lib/services/mock-data.service"
 import { loadAdminAllPaymentsFromSupabase } from "@/lib/services/supabase-data.service"
 import type { Pagamento } from "@/types"
@@ -71,13 +75,22 @@ function buildLastSixMonthsSeries(
 export default function AdminFinanceiroPage() {
   const [lista, setLista] = useState<Pagamento[]>([])
 
-  useEffect(() => {
+  const loadFinanceiro = useCallback(async () => {
     if (isDataProviderMock()) {
       setLista(pagamentos)
       return
     }
-    void loadAdminAllPaymentsFromSupabase().then((r) => setLista(r ?? []))
+    const r = await loadAdminAllPaymentsFromSupabase()
+    setLista(r ?? [])
   }, [])
+
+  useEffect(() => {
+    void loadFinanceiro()
+  }, [loadFinanceiro])
+
+  useRealtimeReload(loadFinanceiro, REALTIME_TABLES_ADMIN, {
+    enabled: !isDataProviderMock(),
+  })
 
   const pagamentosPendentes = lista.filter((p: Pagamento) => p.status === "pendente")
   const pagamentosPagos = lista.filter((p: Pagamento) => p.status === "pago")

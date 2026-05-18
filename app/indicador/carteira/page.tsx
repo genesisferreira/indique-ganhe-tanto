@@ -8,6 +8,10 @@ import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  REALTIME_TABLES_INDICADOR,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { currentIndicador, dashboardIndicador } from "@/lib/services/mock-data.service"
 import {
   loadIndicadorCarteiraFromSupabase,
@@ -91,6 +95,10 @@ export default function CarteiraPage() {
     })()
   }, [recarregar])
 
+  useRealtimeReload(recarregar, REALTIME_TABLES_INDICADOR, {
+    enabled: !isDataProviderMock(),
+  })
+
   const handleSolicitarSaque = async () => {
     const normalizado = String(valorSaque).trim().replace(/\./g, "").replace(",", ".")
     const valor = Number(normalizado)
@@ -102,9 +110,10 @@ export default function CarteiraPage() {
       toast.error("Valor acima do saldo disponível.")
       return
     }
+    if (enviandoSaque) return
     setEnviandoSaque(true)
+    try {
     const resultado = await requestPixWithdrawalFromSupabase(valor)
-    setEnviandoSaque(false)
     if (!resultado.ok) {
       toast.error(resultado.message)
       return
@@ -112,6 +121,9 @@ export default function CarteiraPage() {
     toast.success("Solicitação de saque Pix enviada. Acompanhe em Meus Pagamentos.")
     setValorSaque("")
     await recarregar()
+    } finally {
+      setEnviandoSaque(false)
+    }
   }
 
   const proximoPagamento = new Date()

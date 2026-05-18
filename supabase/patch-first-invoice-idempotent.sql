@@ -1,7 +1,5 @@
--- DEPRECATED: preferir supabase/patch-first-invoice-idempotent.sql (inclui comercial + idempotência).
--- Permite comercial atribuído confirmar 1ª mensalidade (além de admin financeiro/master).
--- Bloqueia: admin_consulta, indicador, comercial não atribuído.
--- Aplicar após supabase/first-invoice-paid.sql
+-- Idempotência financeira: mark_first_invoice_paid + suporte comercial
+-- Aplicar após supabase/first-invoice-paid.sql e supabase/patch-first-invoice-comercial.sql
 
 begin;
 
@@ -19,12 +17,13 @@ declare
   v_balance_after numeric(10,2);
   v_now timestamptz := timezone('utc', now());
   v_tx_id uuid;
+  v_existing_tx_id uuid;
+  v_existing_balance_after numeric(10,2);
 begin
   select p.role into v_role
   from public.profiles p
   where p.id = auth.uid();
 
-  -- admin_master e admin_financeiro: permitido; admin_consulta e indicador: negado aqui
   if v_role is null or v_role not in ('admin_financeiro', 'admin_master', 'comercial') then
     return jsonb_build_object(
       'ok', false,
@@ -54,6 +53,53 @@ begin
     );
   end if;
 
+  select * into v_reward
+  from public.rewards
+  where referral_id = p_referral_id
+  for update;
+
+  if not found then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'reward_not_found',
+      'message', 'Não há recompensa vinculada a esta indicação.'
+    );
+  end if;
+
+  -- Idempotente: crédito já existe para esta recompensa
+  select wt.id, wt.balance_after
+  into v_existing_tx_id, v_existing_balance_after
+  from public.wallet_transactions wt
+  where wt.reward_id = v_reward.id
+    and wt.transaction_type = 'credito'::public.wallet_transaction_type
+  order by wt.created_at desc, wt.id desc
+  limit 1;
+
+  if v_existing_tx_id is not null then
+    update public.referrals
+    set
+      first_invoice_paid = true,
+      first_invoice_paid_at = coalesce(v_ref.first_invoice_paid_at, v_now),
+      updated_at = v_now
+    where id = p_referral_id;
+
+    update public.rewards
+    set
+      status = 'disponivel'::public.reward_status,
+      available_at = coalesce(v_reward.available_at, v_now),
+      updated_at = v_now
+    where id = v_reward.id;
+
+    return jsonb_build_object(
+      'ok', true,
+      'idempotent', true,
+      'referral_id', p_referral_id,
+      'reward_id', v_reward.id,
+      'transaction_id', v_existing_tx_id,
+      'balance_after', coalesce(v_existing_balance_after, 0)
+    );
+  end if;
+
   if v_ref.first_invoice_paid then
     return jsonb_build_object(
       'ok', false,
@@ -62,38 +108,11 @@ begin
     );
   end if;
 
-  select * into v_reward
-  from public.rewards
-  where referral_id = p_referral_id
-  for update;
-
-  -- Recompensa deve existir (criada ao aprovar/vender via ensureRewardForReferral no app)
-  if not found then
-    return jsonb_build_object(
-      'ok', false,
-      'code', 'reward_not_found',
-      'message', 'Não há recompensa vinculada a esta indicação. Verifique se o lead foi marcado como vendido.'
-    );
-  end if;
-
   if v_reward.status is distinct from 'pendente'::public.reward_status then
     return jsonb_build_object(
       'ok', false,
       'code', 'reward_not_pending',
       'message', format('A recompensa não está pendente (status atual: %s).', v_reward.status::text)
-    );
-  end if;
-
-  if exists (
-    select 1
-    from public.wallet_transactions wt
-    where wt.reward_id = v_reward.id
-      and wt.transaction_type = 'credito'::public.wallet_transaction_type
-  ) then
-    return jsonb_build_object(
-      'ok', false,
-      'code', 'already_released',
-      'message', 'Esta recompensa já gerou crédito na carteira.'
     );
   end if;
 
@@ -107,7 +126,7 @@ begin
     v_balance_before := 0;
   end if;
 
-  v_balance_after := v_balance_before + v_reward.amount;
+  v_balance_after := greatest(0::numeric, v_balance_before + v_reward.amount);
 
   update public.referrals
   set
@@ -151,11 +170,38 @@ begin
 
   return jsonb_build_object(
     'ok', true,
+    'idempotent', false,
     'referral_id', p_referral_id,
     'reward_id', v_reward.id,
     'transaction_id', v_tx_id,
     'balance_after', v_balance_after
   );
+exception
+  when unique_violation then
+    select wt.id, wt.balance_after
+    into v_existing_tx_id, v_existing_balance_after
+    from public.wallet_transactions wt
+    where wt.reward_id = v_reward.id
+      and wt.transaction_type = 'credito'::public.wallet_transaction_type
+    order by wt.created_at desc, wt.id desc
+    limit 1;
+
+    if v_existing_tx_id is not null then
+      return jsonb_build_object(
+        'ok', true,
+        'idempotent', true,
+        'referral_id', p_referral_id,
+        'reward_id', v_reward.id,
+        'transaction_id', v_existing_tx_id,
+        'balance_after', coalesce(v_existing_balance_after, 0)
+      );
+    end if;
+
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'already_released',
+      'message', 'Esta recompensa já gerou crédito na carteira.'
+    );
 end;
 $$;
 

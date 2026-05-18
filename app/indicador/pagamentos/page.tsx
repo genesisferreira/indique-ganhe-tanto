@@ -1,11 +1,15 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { Button } from "@/components/ui/button"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  REALTIME_TABLES_INDICADOR,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { pagamentos, currentIndicador } from "@/lib/services/mock-data.service"
 import { loadIndicadorPagamentosFromSupabase } from "@/lib/services/supabase-data.service"
 import type { Pagamento, PagamentoStatus } from "@/types"
@@ -27,7 +31,7 @@ function subtituloReferencia(p: Pagamento): string {
 export default function PagamentosPage() {
   const [remotos, setRemotos] = useState<Pagamento[] | null>(null)
 
-  useEffect(() => {
+  const loadPagamentos = useCallback(async () => {
     if (isDataProviderMock()) {
       if (process.env.NODE_ENV === "development") {
         const total = pagamentos.filter((p) => p.indicadorId === currentIndicador.id).length
@@ -36,18 +40,24 @@ export default function PagamentosPage() {
       setRemotos(null)
       return
     }
-    void (async () => {
-      const lista = await loadIndicadorPagamentosFromSupabase()
-      if (process.env.NODE_ENV === "development") {
-        console.log("[page-data:debug]", {
-          page: "/indicador/pagamentos",
-          source: "supabase",
-          total: lista?.length ?? 0,
-        })
-      }
-      setRemotos(lista ?? [])
-    })()
+    const lista = await loadIndicadorPagamentosFromSupabase()
+    if (process.env.NODE_ENV === "development") {
+      console.log("[page-data:debug]", {
+        page: "/indicador/pagamentos",
+        source: "supabase",
+        total: lista?.length ?? 0,
+      })
+    }
+    setRemotos(lista ?? [])
   }, [])
+
+  useEffect(() => {
+    void loadPagamentos()
+  }, [loadPagamentos])
+
+  useRealtimeReload(loadPagamentos, REALTIME_TABLES_INDICADOR, {
+    enabled: !isDataProviderMock(),
+  })
 
   const meusPagamentos = useMemo(() => {
     const base = isDataProviderMock()

@@ -2759,6 +2759,18 @@ export async function updateAdminReferralStatusFromSupabase(
       }
     }
 
+    if (newStatus === "aprovada") {
+      const ensureReward = await ensureRewardForReferralFromSupabase(referralId, {
+        actorProfileId: user.id,
+      })
+      if (!ensureReward.ok) {
+        logAdminReferralsStatus("falha ao garantir recompensa", {
+          message: ensureReward.message,
+        })
+        return { ok: false, message: ensureReward.message }
+      }
+    }
+
     logAdminReferralsStatus("ok", { referralId, oldStatus, newStatus })
     return { ok: true }
   } catch (e) {
@@ -4006,24 +4018,216 @@ async function assertAdminFinanceOrMasterForSensitiveAction(): Promise<
   return { ok: true }
 }
 
+export type EnsureRewardForReferralResult =
+  | { ok: true; rewardId: string; created: boolean }
+  | { ok: false; message: string }
+
+const ENSURE_REWARD_LOG_PREFIX = "[ensure-reward:supabase]"
+
+function devLogEnsureReward(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(ENSURE_REWARD_LOG_PREFIX, ...args)
+}
+
+/**
+ * Garante uma recompensa pendente vinculada ao referral (idempotente por referral_id).
+ */
+export async function ensureRewardForReferralFromSupabase(
+  referralId: string,
+  options?: {
+    actorProfileId?: string | null
+    skipNotification?: boolean
+  }
+): Promise<EnsureRewardForReferralResult> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const { data: refRow, error: refError } = await db
+      .from("referrals")
+      .select("id, indicator_profile_id, reward_amount, reward_type, status")
+      .eq("id", referralId)
+      .maybeSingle()
+
+    if (refError || !refRow) {
+      devLogEnsureReward("referral não encontrada", { referralId, refError })
+      return { ok: false, message: "Indicação não encontrada." }
+    }
+
+    const ref = refRow as {
+      id: string
+      indicator_profile_id: string | null
+      reward_amount: number | string | null
+      reward_type: string | null
+      status: string
+    }
+
+    if (!ref.indicator_profile_id) {
+      return { ok: false, message: "Indicação sem indicador vinculado." }
+    }
+
+    const amount = Number(ref.reward_amount)
+    if (!Number.isFinite(amount) || amount < 0) {
+      return {
+        ok: false,
+        message: "Valor de recompensa inválido ou ausente na indicação.",
+      }
+    }
+
+    const { data: existingRows, error: existingError } = await db
+      .from("rewards")
+      .select("id, referral_id, status, amount, created_at")
+      .eq("referral_id", referralId)
+      .order("created_at", { ascending: true })
+
+    if (existingError) {
+      return {
+        ok: false,
+        message: `Falha ao verificar recompensa: ${existingError.message}`,
+      }
+    }
+
+    const existingList = (existingRows ?? []) as {
+      id: string
+      referral_id: string
+      status: string
+      amount: number | string
+    }[]
+
+    if (existingList.length > 1) {
+      devLogEnsureReward("DUPLICATA: mais de uma reward para o mesmo referral_id", {
+        referralId,
+        rewardIds: existingList.map((r) => r.id),
+        count: existingList.length,
+      })
+    }
+
+    if (existingList.length > 0) {
+      const primary = existingList[0]
+      devLogEnsureReward("reward já existe", {
+        referralId,
+        rewardId: primary.id,
+        status: primary.status,
+        amount: Number(primary.amount),
+      })
+      return {
+        ok: true,
+        rewardId: primary.id,
+        created: false,
+      }
+    }
+
+    const rewardType =
+      ref.reward_type === "desconto_fatura" ? "desconto_fatura" : "pix"
+
+    const rewardPayload = {
+      referral_id: referralId,
+      indicator_profile_id: ref.indicator_profile_id,
+      amount,
+      reward_type: rewardType,
+      status: "pendente" as const,
+      available_at: null,
+      paid_at: null,
+    }
+
+    const { data: insertedRows, error: insertError } = await db
+      .from("rewards")
+      .insert(rewardPayload)
+      .select("id")
+
+    if (insertError) {
+      const code = (insertError as { code?: string }).code
+      if (code === "23505") {
+        const { data: raced, error: racedError } = await db
+          .from("rewards")
+          .select("id")
+          .eq("referral_id", referralId)
+          .maybeSingle()
+        if (!racedError && raced) {
+          return {
+            ok: true,
+            rewardId: (raced as { id: string }).id,
+            created: false,
+          }
+        }
+      }
+      devLogEnsureReward("falha insert reward", { referralId, insertError })
+      return {
+        ok: false,
+        message: `Falha ao criar recompensa: ${insertError.message}`,
+      }
+    }
+
+    const rewardId = (insertedRows as { id?: string }[] | null)?.[0]?.id
+    if (!rewardId) {
+      return { ok: false, message: "Recompensa criada sem identificador retornado." }
+    }
+
+    devLogEnsureReward("reward criada", { referralId, rewardId })
+
+    const actorProfileId = options?.actorProfileId ?? null
+    if (actorProfileId) {
+      const { error: histError } = await db.from("referral_history").insert({
+        referral_id: referralId,
+        actor_profile_id: actorProfileId,
+        old_status: ref.status,
+        new_status: ref.status,
+        action_note: "Recompensa gerada automaticamente",
+        metadata: { action: "reward_created" },
+      })
+      if (histError) {
+        devLogEnsureReward("histórico reward_created falhou", histError.message)
+      }
+    }
+
+    if (!options?.skipNotification) {
+      void insertNotification({
+        profile_id: ref.indicator_profile_id,
+        notification_type: "recompensa",
+        title: "Recompensa gerada",
+        message:
+          "Sua indicação foi aprovada e uma recompensa foi gerada. Ela será liberada após confirmação da primeira mensalidade.",
+        data: {
+          action: "reward_created",
+          referral_id: referralId,
+          reward_id: rewardId,
+        },
+      })
+    }
+
+    return { ok: true, rewardId, created: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    devLogEnsureReward("exceção", msg)
+    return { ok: false, message: msg || "Erro ao garantir recompensa." }
+  }
+}
+
+/** UI e gate client: admin financeiro/master ou comercial atribuído ao lead. */
+export function canConfirmFirstInvoice(params: {
+  role: UserRole | null | undefined
+  authUserId: string | null | undefined
+  commercialProfileId: string | null | undefined
+}): boolean {
+  const { role, authUserId, commercialProfileId } = params
+  if (!role) return false
+  if (role === "admin_master" || role === "admin_financeiro") return true
+  if (role === "comercial") {
+    return Boolean(
+      authUserId &&
+        commercialProfileId &&
+        commercialProfileId === authUserId
+    )
+  }
+  return false
+}
+
 async function assertCanMarkFirstInvoicePaid(
   referralId: string
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const role = await getAuthProfileRoleFromSupabase()
-  if (!role) {
-    return { ok: false, message: "Sem permissão para esta ação financeira." }
-  }
-  if (ADMIN_FINANCE_MASTER_ROLES.has(role)) {
-    return { ok: true }
-  }
-  if (role !== "comercial") {
-    return { ok: false, message: "Sem permissão para esta ação financeira." }
-  }
-
   const supabase = getSupabaseClient()
-  const db = supabase as unknown as {
-    from: (t: string) => ReturnType<typeof supabase.from>
-  }
   const {
     data: { user },
     error: authError,
@@ -4032,7 +4236,12 @@ async function assertCanMarkFirstInvoicePaid(
     return { ok: false, message: "Sessão não encontrada. Faça login novamente." }
   }
 
-  const { data: row, error } = await db
+  const role = await getAuthProfileRoleFromSupabase()
+  const { data: row, error } = await (
+    supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+  )
     .from("referrals")
     .select("commercial_profile_id")
     .eq("id", referralId)
@@ -4042,14 +4251,25 @@ async function assertCanMarkFirstInvoicePaid(
     return { ok: false, message: "Indicação não encontrada." }
   }
 
-  const assignedTo =
+  const commercialProfileId =
     (row as { commercial_profile_id?: string | null }).commercial_profile_id ??
     null
-  if (assignedTo !== user.id) {
-    return {
-      ok: false,
-      message: "Apenas o comercial atribuído pode confirmar a primeira mensalidade.",
+
+  if (
+    !canConfirmFirstInvoice({
+      role,
+      authUserId: user.id,
+      commercialProfileId,
+    })
+  ) {
+    if (role === "comercial") {
+      return {
+        ok: false,
+        message:
+          "Apenas o comercial atribuído pode confirmar a primeira mensalidade.",
+      }
     }
+    return { ok: false, message: "Sem permissão para esta ação financeira." }
   }
 
   return { ok: true }
@@ -4119,6 +4339,50 @@ const MARK_FIRST_INVOICE_ERROR_CODES: MarkFirstInvoicePaidErrorCode[] = [
   "rpc_error",
   "unknown",
 ]
+
+async function resolveIdempotentFirstInvoiceCredit(
+  referralId: string
+): Promise<Extract<MarkFirstInvoicePaidResult, { ok: true }> | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const { data: rewardRow, error: rewardError } = await db
+      .from("rewards")
+      .select("id")
+      .eq("referral_id", referralId)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    if (rewardError || !rewardRow) return null
+
+    const rewardId = (rewardRow as { id: string }).id
+
+    const { data: txRow, error: txError } = await db
+      .from("wallet_transactions")
+      .select("id, balance_after")
+      .eq("reward_id", rewardId)
+      .eq("transaction_type", "credito")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (txError || !txRow) return null
+
+    const tx = txRow as { id: string; balance_after: number | string }
+    return {
+      ok: true,
+      rewardId,
+      transactionId: tx.id,
+      balanceAfter: Math.max(0, Number(tx.balance_after)),
+    }
+  } catch {
+    return null
+  }
+}
 
 function parseMarkFirstInvoiceRpcPayload(
   raw: unknown
@@ -4223,9 +4487,31 @@ export async function markFirstInvoiceAsPaidFromSupabase(
       }
     }
 
-    const result = parseMarkFirstInvoiceRpcPayload(data)
+    let result = parseMarkFirstInvoiceRpcPayload(data)
 
-    if (result.ok && indicatorProfileId) {
+    if (
+      !result.ok &&
+      (result.code === "already_paid" || result.code === "already_released")
+    ) {
+      const idempotent = await resolveIdempotentFirstInvoiceCredit(referralId)
+      if (idempotent) {
+        devLogFirstInvoicePaid("resolvido como idempotente (crédito existente)", {
+          referralId,
+          idempotent,
+        })
+        result = idempotent
+      }
+    }
+
+    const isIdempotentSuccess =
+      result.ok &&
+      Boolean(
+        data &&
+          typeof data === "object" &&
+          (data as Record<string, unknown>).idempotent === true
+      )
+
+    if (result.ok && indicatorProfileId && !isIdempotentSuccess) {
       // Evento 2 — primeira mensalidade confirmada
       void insertNotification({
         profile_id: indicatorProfileId,
@@ -4515,124 +4801,22 @@ export async function updateComercialLeadStatus(
       }
     }
 
-    devLogComercialLeadUpdate("fluxo recompensa (venda → reward pendente)", {
-      oldStatus: (referralBefore as { status?: string } | null)?.status,
-      finalStatus,
-      referralId,
-    })
-
     if (
       finalStatus === "aprovada" &&
       (referralBefore as { status?: string } | null)?.status !== "aprovada"
     ) {
-      const { data: existingReward, error: existingRewardError } = await db
-        .from("rewards")
-        .select("id, referral_id, status")
-        .eq("referral_id", referralId)
-        .maybeSingle()
-
-      devLogComercialLeadUpdate("verificação reward existente", {
-        referralId,
-        hasReward: Boolean(existingReward),
-        error: existingRewardError?.message ?? null,
-        code: existingRewardError?.code ?? null,
+      const ensureReward = await ensureRewardForReferralFromSupabase(referralId, {
+        actorProfileId: user.id,
       })
-
-      if (existingRewardError) {
+      devLogComercialLeadUpdate("ensureRewardForReferral (venda → aprovada)", {
+        referralId,
+        ensureReward,
+      })
+      if (!ensureReward.ok) {
         return {
           ok: false,
-          message: `Status atualizado, mas falhou ao verificar recompensa existente: ${existingRewardError.message}`,
+          message: ensureReward.message,
         }
-      }
-
-      if (!existingReward) {
-        const rewardPayload = {
-          referral_id: referralId,
-          indicator_profile_id: before.indicator_profile_id,
-          amount: Number(before.reward_amount),
-          reward_type:
-            before.reward_type === "desconto_fatura" ? "desconto_fatura" : "pix",
-          status: "pendente",
-          available_at: null,
-          paid_at: null,
-        }
-
-        const { data: rewardRows, error: rewardError } = await db
-          .from("rewards")
-          .insert(rewardPayload)
-          .select(
-            "id, referral_id, indicator_profile_id, amount, reward_type, status, available_at, paid_at"
-          )
-
-        devLogComercialLeadUpdate("resultado insert rewards", {
-          referralId,
-          payload: rewardPayload,
-          error: rewardError?.message ?? null,
-          code: rewardError?.code ?? null,
-          details: (rewardError as { details?: string } | null)?.details ?? null,
-          rowCount: rewardRows?.length ?? 0,
-        })
-
-        if (rewardError) {
-          return {
-            ok: false,
-            message:
-              `Falha ao criar recompensa automática: ${rewardError.message} ` +
-              `(code: ${rewardError.code ?? "sem código"}) ` +
-              `(details: ${(rewardError as { details?: string }).details ?? "sem detalhes"})`,
-          }
-        }
-
-        const { data: rewardHistoryRows, error: rewardHistoryError } = await db
-          .from("referral_history")
-          .insert({
-            referral_id: referralId,
-            actor_profile_id: user.id,
-            old_status: nextReferralStatus,
-            new_status: nextReferralStatus,
-            action_note: "Recompensa gerada automaticamente",
-            metadata: { action: "reward_created" },
-          })
-          .select(
-            "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
-          )
-
-        devLogComercialLeadUpdate("resultado insert referral_history reward_created", {
-          referralId,
-          error: rewardHistoryError?.message ?? null,
-          code: rewardHistoryError?.code ?? null,
-          details:
-            (rewardHistoryError as { details?: string } | null)?.details ?? null,
-          rowCount: rewardHistoryRows?.length ?? 0,
-        })
-
-        if (rewardHistoryError) {
-          return {
-            ok: false,
-            message:
-              "Recompensa criada, mas falhou ao registrar histórico de criação da recompensa.",
-          }
-        }
-
-        // Evento 1 — notificar indicador: recompensa gerada
-        const createdReward = (rewardRows as { id?: string }[] | null)?.[0]
-        void insertNotification({
-          profile_id: before.indicator_profile_id,
-          notification_type: "recompensa",
-          title: "Recompensa gerada",
-          message:
-            "Sua indicação foi aprovada e uma recompensa foi gerada. Ela será liberada após confirmação da primeira mensalidade.",
-          data: {
-            action: "reward_created",
-            referral_id: referralId,
-            reward_id: createdReward?.id ?? null,
-          },
-        })
-      } else {
-        devLogComercialLeadUpdate("reward já existe; não duplica", {
-          referralId,
-          existingRewardId: (existingReward as { id?: string } | null)?.id ?? null,
-        })
       }
     }
 
@@ -4805,9 +4989,32 @@ function devLogPixWithdrawal(...args: unknown[]): void {
   console.log(PIX_WITHDRAWAL_LOG_PREFIX, ...args)
 }
 
+function devLogPixApprove(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log("[pix-approve]", ...args)
+}
+
+function devLogPixReject(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log("[pix-reject]", ...args)
+}
+
+function devLogWalletLedger(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log("[wallet-ledger]", ...args)
+}
+
 function devWarnPixWithdrawal(reason: string): void {
   if (!isDev()) return
   console.warn(PIX_WITHDRAWAL_LOG_PREFIX, "fallback / aviso →", reason)
+}
+
+function isPixWithdrawalRpcIdempotent(raw: unknown): boolean {
+  return (
+    Boolean(raw) &&
+    typeof raw === "object" &&
+    (raw as Record<string, unknown>).idempotent === true
+  )
 }
 
 type PaymentRowDb = {
@@ -4933,15 +5140,21 @@ function parsePixWithdrawalRpc(raw: unknown): import("@/types/payment").PixWithd
   }
   const o = raw as Record<string, unknown>
   if (o.ok === false) {
+    const code = String(o.code ?? "error")
+    if (code === "already_completed" || code === "open_withdrawal_exists") {
+      devLogPixWithdrawal("rpc erro de negócio", { code, message: o.message })
+    }
     return {
       ok: false,
-      code: String(o.code ?? "error"),
+      code,
       message: String(o.message ?? "Operação não concluída."),
     }
   }
   if (o.ok === true) {
-    return {
-      ok: true,
+    const idempotent = isPixWithdrawalRpcIdempotent(o)
+    const result = {
+      ok: true as const,
+      idempotent,
       paymentId: o.payment_id != null ? String(o.payment_id) : undefined,
       status: o.status != null ? String(o.status) : undefined,
       balanceAfter:
@@ -4953,6 +5166,10 @@ function parsePixWithdrawalRpc(raw: unknown): import("@/types/payment").PixWithd
       walletTransactionId:
         o.wallet_transaction_id != null ? String(o.wallet_transaction_id) : undefined,
     }
+    if (idempotent) {
+      devLogWalletLedger("operação idempotente (sem efeito duplicado)", result)
+    }
+    return result
   }
   return { ok: false, code: "invalid_response", message: "Resposta inválida do servidor." }
 }
@@ -5301,10 +5518,32 @@ async function fetchPaymentIndicatorId(paymentId: string): Promise<string | null
 export async function requestPixWithdrawalFromSupabase(
   amount: number
 ): Promise<import("@/types/payment").PixWithdrawalRpcResult> {
+  devLogPixWithdrawal("solicitação", { amount })
   const result = await rpcPixWithdrawal("request_pix_withdrawal", { p_amount: amount })
 
   if (result.ok) {
-    // Evento 4 — notificar admins financeiro/master
+    devLogWalletLedger("reserva criada", {
+      paymentId: result.paymentId,
+      balanceAfter: result.balanceAfter,
+      walletTransactionId: result.walletTransactionId,
+    })
+    const supabase = getSupabaseClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (user) {
+      void insertNotification({
+        profile_id: user.id,
+        notification_type: "carteira",
+        title: "Saque Pix solicitado",
+        message: "Sua solicitação foi registrada e o valor foi reservado na carteira.",
+        data: {
+          action: "pix_withdrawal_requested",
+          payment_id: result.paymentId ?? null,
+          amount,
+        },
+      })
+    }
     void insertNotificationForAdmins({
       notification_type: "carteira",
       title: "Novo saque Pix solicitado",
@@ -5326,10 +5565,11 @@ export async function approvePixWithdrawalFromSupabase(
   if (!gate.ok) {
     return { ok: false, code: "forbidden", message: gate.message }
   }
+  devLogPixApprove("início", { paymentId })
   const result = await rpcPixWithdrawal("approve_pix_withdrawal", { p_payment_id: paymentId })
+  devLogPixApprove("resultado", result)
 
-  if (result.ok) {
-    // Evento 5 — notificar indicador: saque aprovado
+  if (result.ok && !result.idempotent) {
     const indicatorId = await fetchPaymentIndicatorId(paymentId)
     if (indicatorId) {
       void insertNotification({
@@ -5356,13 +5596,22 @@ export async function rejectPixWithdrawalFromSupabase(
   if (!gate.ok) {
     return { ok: false, code: "forbidden", message: gate.message }
   }
+  devLogPixReject("início", { paymentId, reason: reason.trim() })
   const result = await rpcPixWithdrawal("reject_pix_withdrawal", {
     p_payment_id: paymentId,
     p_reason: reason,
   })
+  devLogPixReject("resultado", result)
 
   if (result.ok) {
-    // Evento 6 — notificar indicador: saque rejeitado
+    if (result.balanceAfter != null) {
+      devLogWalletLedger("reversão de reserva", {
+        paymentId,
+        balanceAfter: result.balanceAfter,
+        walletTransactionId: result.walletTransactionId,
+      })
+    }
+    if (result.idempotent) return result
     const indicatorId = await fetchPaymentIndicatorId(paymentId)
     if (indicatorId) {
       const reasonTrimmed = reason.trim()
@@ -5394,13 +5643,20 @@ export async function completePixWithdrawalFromSupabase(
   if (!gate.ok) {
     return { ok: false, code: "forbidden", message: gate.message }
   }
+  devLogPixApprove("complete início", { paymentId, receiptUrl: receiptUrl.slice(0, 80) })
   const result = await rpcPixWithdrawal("complete_pix_withdrawal", {
     p_payment_id: paymentId,
     p_receipt_url: receiptUrl,
   })
+  devLogPixApprove("complete resultado", result)
 
   if (result.ok) {
-    // Evento 7 — notificar indicador: saque concluído
+    devLogWalletLedger("débito definitivo / conclusão", {
+      paymentId,
+      balanceAfter: result.balanceAfter,
+      walletTransactionId: result.walletTransactionId,
+    })
+    if (result.idempotent) return result
     const indicatorId = await fetchPaymentIndicatorId(paymentId)
     if (indicatorId) {
       void insertNotification({
@@ -5438,6 +5694,7 @@ export async function loadIndicadorWalletBalanceFromSupabase(): Promise<number |
       .select("balance_after")
       .eq("indicator_profile_id", user.id)
       .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
       .limit(1)
       .maybeSingle()
     if (error) {
@@ -5445,7 +5702,12 @@ export async function loadIndicadorWalletBalanceFromSupabase(): Promise<number |
       return null
     }
     if (!data) return 0
-    return Number((data as { balance_after: number | string }).balance_after)
+    const balance = Math.max(
+      0,
+      Number((data as { balance_after: number | string }).balance_after)
+    )
+    devLogWalletLedger("saldo ledger", { userId: user.id, balance })
+    return balance
   } catch (e) {
     devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
     return null
@@ -5556,6 +5818,7 @@ export async function loadIndicadorCarteiraFromSupabase(): Promise<IndicadorCart
         .select("balance_after")
         .eq("indicator_profile_id", uid)
         .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
         .limit(1)
         .maybeSingle(),
       db
@@ -5597,15 +5860,17 @@ export async function loadIndicadorCarteiraFromSupabase(): Promise<IndicadorCart
       devWarnPixWithdrawal(`carteira pix_keys: ${pixRes.error.message}`)
     }
 
-    const availableBalance =
+    const availableBalance = Math.max(
+      0,
       !wtLatestRes.error && wtLatestRes.data
         ? Number((wtLatestRes.data as { balance_after: number | string }).balance_after)
         : 0
+    )
 
     let creditTotal = 0
     if (!wtCreditsRes.error && wtCreditsRes.data) {
       for (const row of wtCreditsRes.data as { amount: number | string }[]) {
-        creditTotal += Number(row.amount)
+        creditTotal += Math.max(0, Number(row.amount))
       }
     }
 
@@ -5616,7 +5881,7 @@ export async function loadIndicadorCarteiraFromSupabase(): Promise<IndicadorCart
     let pendingRewardsTotal = 0
     let discountBalance = 0
     for (const rw of rewards) {
-      const amt = Number(rw.amount)
+      const amt = Math.max(0, Number(rw.amount))
       if (rw.status === "pendente") pendingRewardsTotal += amt
       if (
         (rw.status === "disponivel" || rw.status === "solicitado") &&
@@ -5640,9 +5905,9 @@ export async function loadIndicadorCarteiraFromSupabase(): Promise<IndicadorCart
             return {
               id: row.id,
               tipo: row.transaction_type,
-              valor: Number(row.amount),
+              valor: Math.max(0, Number(row.amount)),
               descricao: row.description,
-              saldoApos: Number(row.balance_after),
+              saldoApos: Math.max(0, Number(row.balance_after)),
               createdAt: new Date(row.created_at),
             }
           })
@@ -5656,13 +5921,15 @@ export async function loadIndicadorCarteiraFromSupabase(): Promise<IndicadorCart
     const rewardsCount = rewards.length
 
     if (isDev()) {
-      console.log("[wallet:debug]", {
+      devLogWalletLedger("carteira carregada", {
         userId: uid,
         availableBalance,
         pendingRewardsTotal,
         creditTotal,
+        discountBalance,
         transactionsCount: movimentacoes.length,
         rewardsCount,
+        fonteSaldo: "ultimo balance_after do ledger",
       })
     }
 
@@ -5688,6 +5955,385 @@ export async function loadIndicadorCarteiraFromSupabase(): Promise<IndicadorCart
       chavePix: null,
       rewardsCount: 0,
     }
+  }
+}
+
+export type FinancialIntegrityReport = {
+  duplicateRewardsByReferral: Array<{
+    referral_id: string
+    count: number
+    reward_ids: string[]
+  }>
+  duplicateWalletCreditsByReward: Array<{
+    reward_id: string
+    count: number
+    transaction_ids: string[]
+  }>
+  rewardsWithoutReferral: string[]
+  rewardsWithoutIndicator: string[]
+  approvedReferralsWithoutReward: Array<{ referral_id: string; status: string }>
+  availableRewardsWithoutWalletTx: Array<{
+    reward_id: string
+    referral_id: string
+    reward_type: string
+  }>
+  creditWalletTxWithoutReward: string[]
+  pendingPixWithdrawalsWithoutReserve: Array<{ payment_id: string; indicator_profile_id: string }>
+  reservesWithoutPayment: string[]
+  approvedPixWithoutDefinitiveDebit: Array<{ payment_id: string; status: string }>
+  rejectedPixWithoutReversal: Array<{ payment_id: string }>
+  ledgerBalanceMismatches: Array<{
+    indicator_profile_id: string
+    ledgerBalance: number
+    computedBalance: number
+    delta: number
+  }>
+  openReservesVsPaymentsMismatches: Array<{
+    indicator_profile_id: string
+    openReservesSum: number
+    openPaymentsSum: number
+    delta: number
+  }>
+}
+
+const FINANCIAL_INTEGRITY_LOG = "[financial-integrity:debug]"
+
+/**
+ * Diagnóstico de consistência financeira (somente development).
+ * Chamar manualmente no console: `await debugFinancialIntegrityFromSupabase()`
+ */
+export async function debugFinancialIntegrityFromSupabase(
+  indicatorProfileId?: string
+): Promise<FinancialIntegrityReport | null> {
+  if (!isDev()) {
+    console.warn(FINANCIAL_INTEGRITY_LOG, "disponível apenas em NODE_ENV=development")
+    return null
+  }
+
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    let rewardsQuery = db
+      .from("rewards")
+      .select("id, referral_id, indicator_profile_id, status, reward_type, amount, created_at")
+      .limit(5000)
+
+    if (indicatorProfileId) {
+      rewardsQuery = rewardsQuery.eq("indicator_profile_id", indicatorProfileId)
+    }
+
+    let referralsQuery = db
+      .from("referrals")
+      .select("id, status, indicator_profile_id")
+      .in("status", ["aprovada", "paga"])
+      .limit(5000)
+
+    if (indicatorProfileId) {
+      referralsQuery = referralsQuery.eq("indicator_profile_id", indicatorProfileId)
+    }
+
+    let wtQuery = db
+      .from("wallet_transactions")
+      .select(
+        "id, reward_id, payment_id, transaction_type, indicator_profile_id, amount, balance_after, created_at"
+      )
+      .order("created_at", { ascending: true })
+      .limit(10000)
+
+    if (indicatorProfileId) {
+      wtQuery = wtQuery.eq("indicator_profile_id", indicatorProfileId)
+    }
+
+    let paymentsQuery = db
+      .from("payments")
+      .select(
+        "id, indicator_profile_id, status, payment_kind, amount, wallet_reserve_transaction_id, wallet_debit_transaction_id"
+      )
+      .eq("payment_kind", "pix_withdrawal")
+      .limit(5000)
+
+    if (indicatorProfileId) {
+      paymentsQuery = paymentsQuery.eq("indicator_profile_id", indicatorProfileId)
+    }
+
+    const [rewardsRes, referralsRes, wtRes, paymentsRes] = await Promise.all([
+      rewardsQuery,
+      referralsQuery,
+      wtQuery,
+      paymentsQuery,
+    ])
+
+    const rewards = (rewardsRes.data ?? []) as {
+      id: string
+      referral_id: string | null
+      indicator_profile_id: string | null
+      status: string
+      reward_type: string
+    }[]
+
+    const referrals = (referralsRes.data ?? []) as {
+      id: string
+      status: string
+    }[]
+
+    const walletTxs = (wtRes.data ?? []) as {
+      id: string
+      reward_id: string | null
+      payment_id: string | null
+      transaction_type: string
+      indicator_profile_id: string
+      amount: number | string
+      balance_after: number | string
+    }[]
+
+    const pixPayments = (paymentsRes.data ?? []) as {
+      id: string
+      indicator_profile_id: string
+      status: string
+      amount: number | string
+      wallet_reserve_transaction_id: string | null
+      wallet_debit_transaction_id: string | null
+    }[]
+
+    const rewardsByReferral = new Map<string, string[]>()
+    const rewardsWithoutReferral: string[] = []
+    const rewardsWithoutIndicator: string[] = []
+
+    for (const rw of rewards) {
+      if (!rw.referral_id) {
+        rewardsWithoutReferral.push(rw.id)
+        continue
+      }
+      if (!rw.indicator_profile_id) {
+        rewardsWithoutIndicator.push(rw.id)
+      }
+      const list = rewardsByReferral.get(rw.referral_id) ?? []
+      list.push(rw.id)
+      rewardsByReferral.set(rw.referral_id, list)
+    }
+
+    const duplicateRewardsByReferral = [...rewardsByReferral.entries()]
+      .filter(([, ids]) => ids.length > 1)
+      .map(([referral_id, reward_ids]) => ({
+        referral_id,
+        count: reward_ids.length,
+        reward_ids,
+      }))
+
+    const creditsByReward = new Map<string, string[]>()
+    const creditWalletTxWithoutReward: string[] = []
+
+    for (const wt of walletTxs) {
+      if (wt.transaction_type !== "credito") continue
+      if (!wt.reward_id) {
+        creditWalletTxWithoutReward.push(wt.id)
+        continue
+      }
+      const list = creditsByReward.get(wt.reward_id) ?? []
+      list.push(wt.id)
+      creditsByReward.set(wt.reward_id, list)
+    }
+
+    const duplicateWalletCreditsByReward = [...creditsByReward.entries()]
+      .filter(([, ids]) => ids.length > 1)
+      .map(([reward_id, transaction_ids]) => ({
+        reward_id,
+        count: transaction_ids.length,
+        transaction_ids,
+      }))
+
+    const referralIdsWithReward = new Set(
+      rewards.map((r) => r.referral_id).filter(Boolean) as string[]
+    )
+
+    const approvedReferralsWithoutReward = referrals
+      .filter((ref) => !referralIdsWithReward.has(ref.id))
+      .map((ref) => ({ referral_id: ref.id, status: ref.status }))
+
+    const rewardIdsWithCredit = new Set(creditsByReward.keys())
+
+    const availableRewardsWithoutWalletTx = rewards
+      .filter(
+        (rw) =>
+          rw.status === "disponivel" &&
+          rw.reward_type === "pix" &&
+          rw.referral_id &&
+          !rewardIdsWithCredit.has(rw.id)
+      )
+      .map((rw) => ({
+        reward_id: rw.id,
+        referral_id: rw.referral_id!,
+        reward_type: rw.reward_type,
+      }))
+
+    const reserveTxIds = new Set(
+      walletTxs
+        .filter((wt) => wt.transaction_type === "saque_reserva")
+        .map((wt) => wt.id)
+    )
+    const reversalPaymentIds = new Set(
+      walletTxs
+        .filter((wt) => wt.transaction_type === "reversao_saque" && wt.payment_id)
+        .map((wt) => wt.payment_id as string)
+    )
+    const saquePaymentIds = new Set(
+      walletTxs
+        .filter((wt) => wt.transaction_type === "saque" && wt.payment_id)
+        .map((wt) => wt.payment_id as string)
+    )
+
+    const pendingPixWithdrawalsWithoutReserve = pixPayments
+      .filter(
+        (p) =>
+          p.status === "pendente" &&
+          (!p.wallet_reserve_transaction_id ||
+            !reserveTxIds.has(p.wallet_reserve_transaction_id))
+      )
+      .map((p) => ({
+        payment_id: p.id,
+        indicator_profile_id: p.indicator_profile_id,
+      }))
+
+    const reservesWithoutPayment = walletTxs
+      .filter((wt) => wt.transaction_type === "saque_reserva" && !wt.payment_id)
+      .map((wt) => wt.id)
+
+    const approvedPixWithoutDefinitiveDebit = pixPayments
+      .filter(
+        (p) =>
+          p.status === "pago" &&
+          !p.wallet_debit_transaction_id &&
+          !saquePaymentIds.has(p.id)
+      )
+      .map((p) => ({ payment_id: p.id, status: p.status }))
+
+    const rejectedPixWithoutReversal = pixPayments
+      .filter(
+        (p) =>
+          p.status === "rejeitado" &&
+          p.wallet_reserve_transaction_id != null &&
+          !reversalPaymentIds.has(p.id)
+      )
+      .map((p) => ({ payment_id: p.id }))
+
+    const ledgerByIndicator = new Map<string, typeof walletTxs>()
+    for (const wt of walletTxs) {
+      const list = ledgerByIndicator.get(wt.indicator_profile_id) ?? []
+      list.push(wt)
+      ledgerByIndicator.set(wt.indicator_profile_id, list)
+    }
+
+    const ledgerBalanceMismatches: FinancialIntegrityReport["ledgerBalanceMismatches"] =
+      []
+    const openReservesVsPaymentsMismatches: FinancialIntegrityReport["openReservesVsPaymentsMismatches"] =
+      []
+
+    const debitTypes = new Set(["saque_reserva", "saque", "debito"])
+    const creditTypes = new Set(["credito", "reversao_saque"])
+
+    for (const [indId, txs] of ledgerByIndicator) {
+      if (txs.length === 0) continue
+      const last = txs[txs.length - 1]
+      const ledgerBalance = Math.max(0, Number(last.balance_after))
+
+      let computedBalance = 0
+      for (const t of txs) {
+        const amt = Number(t.amount)
+        if (creditTypes.has(t.transaction_type)) {
+          computedBalance += amt
+        } else if (debitTypes.has(t.transaction_type)) {
+          computedBalance -= amt
+        }
+        computedBalance = Math.max(0, computedBalance)
+        const rowAfter = Math.max(0, Number(t.balance_after))
+        if (Math.abs(computedBalance - rowAfter) > 0.01) {
+          ledgerBalanceMismatches.push({
+            indicator_profile_id: indId,
+            ledgerBalance: rowAfter,
+            computedBalance,
+            delta: computedBalance - rowAfter,
+          })
+          break
+        }
+      }
+
+      const finalComputed = Math.max(0, computedBalance)
+      if (
+        ledgerBalanceMismatches.every((m) => m.indicator_profile_id !== indId) &&
+        Math.abs(finalComputed - ledgerBalance) > 0.01
+      ) {
+        ledgerBalanceMismatches.push({
+          indicator_profile_id: indId,
+          ledgerBalance,
+          computedBalance: finalComputed,
+          delta: finalComputed - ledgerBalance,
+        })
+      }
+
+      const openReserveTxSum = txs
+        .filter((t) => t.transaction_type === "saque_reserva")
+        .reduce((s, t) => s + Number(t.amount), 0)
+      const openPaymentsSum = pixPayments
+        .filter(
+          (p) =>
+            p.indicator_profile_id === indId &&
+            (p.status === "pendente" || p.status === "aprovado")
+        )
+        .reduce((s, p) => s + Number(p.amount), 0)
+      const reservesDelta = Math.abs(openReserveTxSum - openPaymentsSum)
+      if (reservesDelta > 0.01) {
+        openReservesVsPaymentsMismatches.push({
+          indicator_profile_id: indId,
+          openReservesSum: openReserveTxSum,
+          openPaymentsSum,
+          delta: reservesDelta,
+        })
+      }
+    }
+
+    const report: FinancialIntegrityReport = {
+      duplicateRewardsByReferral,
+      duplicateWalletCreditsByReward,
+      rewardsWithoutReferral,
+      rewardsWithoutIndicator,
+      approvedReferralsWithoutReward,
+      availableRewardsWithoutWalletTx,
+      creditWalletTxWithoutReward,
+      pendingPixWithdrawalsWithoutReserve,
+      reservesWithoutPayment,
+      approvedPixWithoutDefinitiveDebit,
+      rejectedPixWithoutReversal,
+      ledgerBalanceMismatches,
+      openReservesVsPaymentsMismatches,
+    }
+
+    console.log(FINANCIAL_INTEGRITY_LOG, {
+      indicatorProfileId: indicatorProfileId ?? "all",
+      summary: {
+        duplicateRewards: duplicateRewardsByReferral.length,
+        duplicateCredits: duplicateWalletCreditsByReward.length,
+        rewardsWithoutReferral: rewardsWithoutReferral.length,
+        rewardsWithoutIndicator: rewardsWithoutIndicator.length,
+        approvedWithoutReward: approvedReferralsWithoutReward.length,
+        disponivelSemCredito: availableRewardsWithoutWalletTx.length,
+        creditoSemRewardId: creditWalletTxWithoutReward.length,
+        pixPendenteSemReserva: pendingPixWithdrawalsWithoutReserve.length,
+        reservasSemPayment: reservesWithoutPayment.length,
+        pixPagoSemDebito: approvedPixWithoutDefinitiveDebit.length,
+        pixRejeitadoSemReversao: rejectedPixWithoutReversal.length,
+        divergenciaLedger: ledgerBalanceMismatches.length,
+        reservasVsPagamentos: openReservesVsPaymentsMismatches.length,
+      },
+      report,
+    })
+
+    return report
+  } catch (e) {
+    console.error(FINANCIAL_INTEGRITY_LOG, e)
+    return null
   }
 }
 

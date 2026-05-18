@@ -22,9 +22,15 @@ import {
   subscribeReferralDataMutated,
 } from "@/lib/client/referral-data-sync"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  REALTIME_TABLES_COMERCIAL,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { leads, historicos } from "@/lib/services/mock-data.service"
 import {
-  getAuthProfileRoleFromSupabase,
+  canConfirmFirstInvoice,
+  ensureRewardForReferralFromSupabase,
+  getAuthProfileBasicsFromSupabase,
   loadComercialLeadDetailsFromSupabase,
   markFirstInvoiceAsPaidFromSupabase,
   updateComercialLeadStatus,
@@ -86,13 +92,9 @@ export default function DetalheLeadPage({
   const [isSaving, setIsSaving] = useState(false)
   const [isConfirmingFirstInvoice, setIsConfirmingFirstInvoice] = useState(false)
   const [authRole, setAuthRole] = useState<UserRole | null>(null)
+  const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [leadHistorico, setLeadHistorico] = useState<Historico[]>([])
   const [pageLoading, setPageLoading] = useState(() => !isDataProviderMock())
-
-  const podeConfirmarPrimeiraMensalidade =
-    authRole === "comercial" ||
-    authRole === "admin_financeiro" ||
-    authRole === "admin_master"
 
   const podeEditarStatusComercial = authRole === "comercial"
 
@@ -119,6 +121,14 @@ export default function DetalheLeadPage({
     })
   }, [reloadLeadData])
 
+  useRealtimeReload(
+    () => {
+      void reloadLeadData()
+    },
+    REALTIME_TABLES_COMERCIAL,
+    { enabled: !isDataProviderMock() }
+  )
+
   const patchLeadFirstInvoicePaid = useCallback(() => {
     setLead((prev) => {
       if (!prev?.indicacao) return prev
@@ -139,6 +149,14 @@ export default function DetalheLeadPage({
   const handleConfirmFirstInvoice = async () => {
     if (!lead || isConfirmingFirstInvoice) return
     setIsConfirmingFirstInvoice(true)
+    const ensureReward = await ensureRewardForReferralFromSupabase(lead.indicacaoId, {
+      actorProfileId: authUserId,
+    })
+    if (!ensureReward.ok) {
+      toast.error(ensureReward.message)
+      setIsConfirmingFirstInvoice(false)
+      return
+    }
     const result = await markFirstInvoiceAsPaidFromSupabase(lead.indicacaoId)
     if (!result.ok) {
       toast.error(result.message)
@@ -229,17 +247,15 @@ export default function DetalheLeadPage({
 
   useEffect(() => {
     void (async () => {
-      const role = await getAuthProfileRoleFromSupabase()
-      setAuthRole(role)
+      const basics = await getAuthProfileBasicsFromSupabase()
+      setAuthRole(basics?.role ?? null)
+      setAuthUserId(basics?.id ?? null)
       if (process.env.NODE_ENV === "development") {
         console.log("[permission-check:debug]", {
           page: "/comercial/leads/[id]",
-          role,
-          podeConfirmarPrimeiraMensalidade:
-            role === "comercial" ||
-            role === "admin_financeiro" ||
-            role === "admin_master",
-          podeEditarStatusComercial: role === "comercial",
+          role: basics?.role ?? null,
+          authUserId: basics?.id ?? null,
+          podeEditarStatusComercial: basics?.role === "comercial",
         })
       }
     })()
@@ -268,14 +284,17 @@ export default function DetalheLeadPage({
   const plano = indicacao.plano
   const indicador = indicacao.indicador
 
+  const commercialProfileId =
+    lead.comercialId ?? indicacao.comercialId ?? null
+
+  const canConfirmFirstInvoiceAction = canConfirmFirstInvoice({
+    role: authRole,
+    authUserId,
+    commercialProfileId,
+  })
+
   const aptoConfirmarPrimeiraMensalidade =
-    Boolean(lead.indicacaoId) &&
-    !indicacao.primeiraFaturaPaga &&
-    (lead.status === "vendido" ||
-      lead.status === "em_atendimento" ||
-      indicacao.status === "aprovada" ||
-      indicacao.status === "paga" ||
-      indicacao.status === "em_atendimento")
+    Boolean(lead.indicacaoId) && !indicacao.primeiraFaturaPaga
 
   return (
     <div>
@@ -524,7 +543,7 @@ export default function DetalheLeadPage({
                   ? "Paga (data não registrada)"
                   : "Pendente"}
             </p>
-            {podeConfirmarPrimeiraMensalidade && aptoConfirmarPrimeiraMensalidade ? (
+            {canConfirmFirstInvoiceAction && aptoConfirmarPrimeiraMensalidade ? (
                 <Button
                   className="w-full"
                   variant="secondary"

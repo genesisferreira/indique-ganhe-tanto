@@ -16,7 +16,11 @@ export {
   countUserUnreadNotificationsFromSupabase,
   fetchActivePlansForIndicador,
   loadAdminPlansCatalogFromSupabase,
+  canConfirmFirstInvoice,
+  debugFinancialIntegrityFromSupabase,
+  ensureRewardForReferralFromSupabase,
   getAuthProfileBasicsFromSupabase,
+  markFirstInvoiceAsPaidFromSupabase,
   getCurrentUserProfile,
   insertIndicadorReferral,
   loadAdminDashboardMetricsFromSupabase,
@@ -53,6 +57,8 @@ export type {
   InsertIndicadorReferralInput,
   AdminReferralDetailResult,
   AdminReferralMutationResult,
+  EnsureRewardForReferralResult,
+  FinancialIntegrityReport,
 } from './supabase-data.service'
 export type { NotificationItem } from '@/types/notification'
 export type { AuthProfileBasics } from '@/types/auth-profile'
