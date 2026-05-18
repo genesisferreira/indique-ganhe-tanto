@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { usePathname, useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,6 +19,10 @@ import {
   leads,
   currentComercial,
 } from "@/lib/services/mock-data.service"
+import {
+  emitReferralDataMutated,
+  subscribeReferralDataMutated,
+} from "@/lib/client/referral-data-sync"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import {
   claimComercialLead,
@@ -37,9 +42,13 @@ const statusOptions = [
 ]
 
 export default function LeadsPage() {
+  const router = useRouter()
+  const pathname = usePathname()
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const [claimingLeadId, setClaimingLeadId] = useState<string | null>(null)
+  const [reloadTick, setReloadTick] = useState(0)
+  const [listVersion, setListVersion] = useState(0)
 
   const mockLeads = useMemo(
     () =>
@@ -51,31 +60,53 @@ export default function LeadsPage() {
 
   const [listaLeads, setListaLeads] = useState<Lead[]>(() => mockLeads)
 
-  useEffect(() => {
+  const loadComercialLeads = useCallback(async () => {
     if (isDataProviderMock()) {
-      setListaLeads(mockLeads)
-      return
-    }
-    void (async () => {
-      const remote = await loadComercialLeadsFromSupabase()
-      setListaLeads(remote ?? [])
-      if (process.env.NODE_ENV === "development") {
-        console.log("[flow-check:debug]", {
-          flow: "comercial-leads-list",
-          total: remote?.length ?? 0,
-        })
-      }
-    })()
-  }, [mockLeads])
-
-  const reloadLeadsFromSupabase = async () => {
-    if (isDataProviderMock()) {
-      setListaLeads(mockLeads)
+      setListaLeads([...mockLeads])
       return
     }
     const remote = await loadComercialLeadsFromSupabase()
-    setListaLeads(remote ?? [])
-  }
+    setListaLeads((remote ?? []).map((l) => structuredClone(l)))
+    if (process.env.NODE_ENV === "development") {
+      console.log("[flow-check:debug]", {
+        flow: "comercial-leads-list",
+        total: remote?.length ?? 0,
+      })
+    }
+  }, [mockLeads])
+
+  useEffect(() => {
+    void loadComercialLeads()
+  }, [loadComercialLeads, pathname, reloadTick])
+
+  useEffect(() => {
+    return subscribeReferralDataMutated(() => {
+      void loadComercialLeads().then(() => {
+        setListVersion((v) => v + 1)
+      })
+    })
+  }, [loadComercialLeads])
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        setReloadTick((t) => t + 1)
+      }
+    }
+    window.addEventListener("focus", onVisible)
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      window.removeEventListener("focus", onVisible)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
+  }, [])
+
+  const refreshAfterMutation = useCallback(async () => {
+    await loadComercialLeads()
+    setListVersion((v) => v + 1)
+    emitReferralDataMutated()
+    router.refresh()
+  }, [loadComercialLeads, router])
 
   const handleClaimLead = async (lead: Lead) => {
     if (claimingLeadId) return
@@ -84,8 +115,20 @@ export default function LeadsPage() {
     const result = await claimComercialLead(lead.id)
 
     if (result.ok) {
+      setListaLeads((prev) =>
+        prev.map((item) =>
+          item.id === lead.id
+            ? {
+                ...item,
+                status: item.status === "novo" ? "em_atendimento" : item.status,
+                updatedAt: new Date(),
+              }
+            : item
+        )
+      )
+      setListVersion((v) => v + 1)
       toast.success("Lead assumido com sucesso!")
-      await reloadLeadsFromSupabase()
+      await refreshAfterMutation()
       setClaimingLeadId(null)
       return
     }
@@ -152,7 +195,7 @@ export default function LeadsPage() {
 
             return (
               <div
-                key={lead.id}
+                key={`${lead.id}-${listVersion}`}
                 className="rounded-xl border bg-card p-5 hover:border-primary/50 transition-colors"
               >
                 <div className="flex items-start justify-between mb-4">

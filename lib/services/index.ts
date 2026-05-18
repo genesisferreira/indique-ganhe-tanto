@@ -24,6 +24,9 @@ export {
   loadAdminIndicatorDetailFromSupabase,
   loadAdminIndicatorsFromSupabase,
   loadAdminReferralsFromSupabase,
+  loadAdminReferralDetailFromSupabase,
+  assignReferralToCommercialFromSupabase,
+  updateAdminReferralStatusFromSupabase,
   loadComercialAssignedHistoryFromSupabase,
   loadComercialAvailabilityStatusFromSupabase,
   loadComercialLeadsFromSupabase,
@@ -48,6 +51,8 @@ export type {
   IndicadorHomeFromSupabase,
   IndicadorReferralDetailResult,
   InsertIndicadorReferralInput,
+  AdminReferralDetailResult,
+  AdminReferralMutationResult,
 } from './supabase-data.service'
 export type { NotificationItem } from '@/types/notification'
 export type { AuthProfileBasics } from '@/types/auth-profile'

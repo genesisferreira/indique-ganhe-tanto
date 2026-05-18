@@ -1,3 +1,4 @@
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { PAYMENT_RECEIPTS_BUCKET } from "@/lib/supabase/upload-payment-receipt"
 import type { DashboardIndicador } from "@/types/dashboard"
@@ -2158,6 +2159,615 @@ export async function loadAdminReferralsFromSupabase(): Promise<Indicacao[] | nu
   }
 }
 
+const ADMIN_REFERRAL_MUTATION_ROLES = new Set<UserRole>(["admin_master", "admin_financeiro"])
+
+const ADMIN_REFERRAL_STATUS_VALUES = new Set<string>([
+  "pendente",
+  "em_andamento",
+  "em_atendimento",
+  "em_negociacao",
+  "aprovada",
+  "recusada",
+])
+
+export type AdminReferralMutationResult =
+  | { ok: true }
+  | { ok: false; message: string }
+
+export type AdminReferralDetailResult =
+  | { kind: "ok"; indicacao: Indicacao; historico: Historico[] }
+  | { kind: "not-found" }
+  | { kind: "error" }
+
+function logAdminReferralsAssign(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log("[admin-referrals:assign]", ...args)
+}
+
+function logAdminReferralsStatus(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log("[admin-referrals:status]", ...args)
+}
+
+function logAdminAssignUpdate(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log("[admin-assign:update]", ...args)
+}
+
+function logAdminStatusUpdate(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log("[admin-status:update]", ...args)
+}
+
+function uuidEqual(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (a == null || b == null) return false
+  const na = String(a).replace(/-/g, "").toLowerCase()
+  const nb = String(b).replace(/-/g, "").toLowerCase()
+  return na.length > 0 && na === nb
+}
+
+function mapReferralHistoryRowsToHistorico(
+  referralId: string,
+  historyRows: unknown[],
+  actorById: Map<string, { full_name: string; phone: string | null }>
+): Historico[] {
+  return (historyRows ?? []).map((raw: unknown) => {
+    const h = raw as ReferralHistoryRow
+    const actor = h.actor_profile_id ? actorById.get(h.actor_profile_id) : null
+    const acaoBase = h.action_note?.trim() || "Atualização de lead"
+    const descricaoStatus =
+      h.old_status && h.old_status !== h.new_status
+        ? `Status: ${h.old_status} -> ${h.new_status}`
+        : `Status: ${h.new_status}`
+    const metadataAction =
+      h.metadata && typeof h.metadata.action === "string"
+        ? `Ação: ${h.metadata.action}`
+        : null
+
+    return {
+      id: h.id,
+      leadId: referralId,
+      comercialId: h.actor_profile_id ?? "",
+      comercial: h.actor_profile_id
+        ? stubComercialProfile(
+            h.actor_profile_id,
+            actor?.full_name ?? "Ator",
+            actor?.phone ?? ""
+          )
+        : undefined,
+      acao: acaoBase,
+      descricao: [descricaoStatus, metadataAction].filter(Boolean).join(" • "),
+      createdAt: new Date(h.created_at),
+    }
+  })
+}
+
+/**
+ * Detalhe de uma indicação para o painel admin (leitura: admin_consulta | admin_financeiro | admin_master).
+ */
+export async function loadAdminReferralDetailFromSupabase(
+  referralId: string
+): Promise<AdminReferralDetailResult> {
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) return { kind: "error" }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const role = (profile as { role?: string } | null)?.role ?? null
+    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
+      return { kind: "error" }
+    }
+
+    const { data: row, error: refError } = await db
+      .from("referrals")
+      .select(
+        `
+        id,
+        indicator_profile_id,
+        referred_name,
+        referred_phone,
+        referred_email,
+        referred_address,
+        plan_id,
+        reward_type,
+        reward_amount,
+        status,
+        commercial_profile_id,
+        notes,
+        first_invoice_paid,
+        first_invoice_paid_at,
+        approved_at,
+        rejected_at,
+        rejection_reason,
+        created_at,
+        updated_at,
+        assigned_at,
+        first_response_at,
+        last_interaction_at
+      `
+      )
+      .eq("id", referralId)
+      .maybeSingle()
+
+    if (refError || !row) {
+      if (isDev()) {
+        console.log("[admin-indicacoes:detail]", { referralId, error: refError?.message })
+      }
+      return refError ? { kind: "error" } : { kind: "not-found" }
+    }
+
+    const refRow = row as ReferralRow
+
+    const { data: planRow, error: planError } = await db
+      .from("plans")
+      .select(
+        "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+      )
+      .eq("id", refRow.plan_id)
+      .maybeSingle()
+
+    if (planError) {
+      return { kind: "error" }
+    }
+
+    const planoById = new Map<string, Plano>()
+    if (planRow) {
+      planoById.set(refRow.plan_id, mapPlanRowToPlano(planRow as PlanCatalogRow))
+    }
+
+    const profileIds = new Set<string>()
+    profileIds.add(refRow.indicator_profile_id)
+    if (refRow.commercial_profile_id) profileIds.add(refRow.commercial_profile_id)
+
+    const profileMap = new Map<string, AdminProfileShortRow>()
+    const profileList = [...profileIds]
+    if (profileList.length > 0) {
+      const { data: profData, error: profError } = await db
+        .from("profiles")
+        .select("id, full_name, email, phone, cpf, is_active, created_at")
+        .in("id", profileList)
+
+      if (profError) {
+        return { kind: "error" }
+      }
+      for (const pr of (profData ?? []) as AdminProfileShortRow[]) {
+        profileMap.set(pr.id, pr)
+      }
+    }
+
+    const ip = profileMap.get(refRow.indicator_profile_id)
+    const cp = refRow.commercial_profile_id
+      ? profileMap.get(refRow.commercial_profile_id)
+      : undefined
+
+    const indicacao: Indicacao = {
+      ...referralRowToIndicacaoMerged(refRow, refRow.indicator_profile_id, planoById),
+      indicador: ip
+        ? stubIndicadorFromAdminProfile(ip.id, {
+            full_name: ip.full_name,
+            email: ip.email,
+            phone: ip.phone,
+            cpf: ip.cpf,
+            is_active: ip.is_active,
+            created_at: ip.created_at,
+          })
+        : undefined,
+      comercial:
+        cp && refRow.commercial_profile_id
+          ? stubComercialFromAdminProfile(refRow.commercial_profile_id, {
+              full_name: cp.full_name,
+              email: cp.email,
+              phone: cp.phone,
+              is_active: cp.is_active,
+              created_at: cp.created_at,
+            })
+          : undefined,
+    }
+
+    const { data: historyRows, error: historyError } = await db
+      .from("referral_history")
+      .select(
+        "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
+      )
+      .eq("referral_id", referralId)
+      .order("created_at", { ascending: false })
+
+    if (historyError) {
+      return { kind: "error" }
+    }
+
+    const actorIds = [
+      ...new Set(
+        (historyRows ?? [])
+          .map((h: unknown) => (h as ReferralHistoryRow).actor_profile_id)
+          .filter((id: string | null): id is string => Boolean(id))
+      ),
+    ]
+
+    const actorById = new Map<string, { full_name: string; phone: string | null }>()
+    if (actorIds.length > 0) {
+      const { data: actorRows, error: actorError } = await db
+        .from("profiles")
+        .select("id, full_name, phone")
+        .in("id", actorIds)
+
+      if (actorError) {
+        return { kind: "error" }
+      }
+      for (const row of actorRows ?? []) {
+        const a = row as { id: string; full_name: string; phone: string | null }
+        actorById.set(a.id, { full_name: a.full_name, phone: a.phone })
+      }
+    }
+
+    const historico = mapReferralHistoryRowsToHistorico(
+      referralId,
+      historyRows ?? [],
+      actorById
+    )
+
+    return { kind: "ok", indicacao, historico }
+  } catch {
+    return { kind: "error" }
+  }
+}
+
+/**
+ * Admin atribui comercial ao referral. Apenas admin_master | admin_financeiro.
+ */
+export async function assignReferralToCommercialFromSupabase(
+  referralId: string,
+  commercialProfileId: string
+): Promise<AdminReferralMutationResult> {
+  if (isDataProviderMock()) {
+    logAdminReferralsAssign("bloqueado — DATA_PROVIDER/NEXT_PUBLIC_DATA_PROVIDER = mock")
+    return { ok: false, message: "Indisponível no modo mock." }
+  }
+
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) {
+      logAdminReferralsAssign("sem sessão")
+      return { ok: false, message: "Sessão inválida." }
+    }
+
+    const { data: actorProfile, error: actorProfileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const actorRole = (actorProfile as { role?: UserRole } | null)?.role ?? null
+    if (actorProfileError || !actorRole || !ADMIN_REFERRAL_MUTATION_ROLES.has(actorRole)) {
+      logAdminReferralsAssign("perfil sem permissão", { actorRole })
+      return { ok: false, message: "Sem permissão para atribuir comercial." }
+    }
+
+    const { data: target, error: targetErr } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", commercialProfileId)
+      .maybeSingle()
+    const targetRole = (target as { role?: string } | null)?.role
+    if (targetErr || !target || targetRole !== "comercial") {
+      logAdminReferralsAssign("comercial inválido", { commercialProfileId, targetErr })
+      return { ok: false, message: "Comercial inválido ou inativo." }
+    }
+
+    const { data: refRow, error: refFetchErr } = await db
+      .from("referrals")
+      .select("id, status, commercial_profile_id")
+      .eq("id", referralId)
+      .maybeSingle()
+
+    if (refFetchErr || !refRow) {
+      logAdminReferralsAssign("referral não encontrado", { referralId, refFetchErr })
+      return { ok: false, message: "Indicação não encontrada." }
+    }
+
+    const current = refRow as { id: string; status: string; commercial_profile_id: string | null }
+    const oldStatus = current.status
+    const nowIso = new Date().toISOString()
+
+    const nextStatus = oldStatus === "pendente" ? "em_atendimento" : oldStatus
+
+    logAdminAssignUpdate("request", {
+      referralId,
+      commercialProfileId,
+      nextStatus,
+      oldStatus,
+    })
+
+    const {
+      data: updated,
+      error: updateErr,
+    } = await db
+      .from("referrals")
+      .update({
+        commercial_profile_id: commercialProfileId,
+        status: nextStatus,
+        assigned_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq("id", referralId)
+      .select("id, commercial_profile_id, status, assigned_at, updated_at")
+      .single()
+
+    const updatedRow = updated as {
+      id: string
+      commercial_profile_id: string | null
+      status: string
+      assigned_at: string | null
+      updated_at: string
+    } | null
+
+    const codeAssign = (updateErr as { code?: string } | null)?.code
+    logAdminAssignUpdate("response", {
+      updateErr: updateErr?.message ?? null,
+      code: codeAssign ?? null,
+      updatedRow,
+    })
+
+    const assignConfirmed =
+      !updateErr &&
+      Boolean(updatedRow) &&
+      updatedRow!.id === referralId &&
+      uuidEqual(updatedRow!.commercial_profile_id, commercialProfileId) &&
+      updatedRow!.status === nextStatus &&
+      Boolean(updatedRow!.assigned_at) &&
+      Boolean(updatedRow!.updated_at)
+
+    const noRowOrRls = !assignConfirmed
+
+    if (noRowOrRls) {
+      const code = (updateErr as { code?: string } | null)?.code
+      logAdminReferralsAssign("update sem efeito ou divergente", {
+        updateErr: updateErr?.message ?? null,
+        code: code ?? null,
+        updatedRow,
+        esperado: { commercial_profile_id: commercialProfileId, status: nextStatus },
+      })
+      const hint =
+        code === "PGRST116" || !updatedRow
+          ? " Nenhuma linha foi atualizada (permissão RLS ou política desatualizada no Supabase)."
+          : ""
+      return {
+        ok: false,
+        message:
+          (updateErr?.message ||
+            "O banco não confirmou a atribuição (0 linhas ou valor divergente).") + hint,
+      }
+    }
+
+    logAdminAssignUpdate("validated", {
+      referralId,
+      commercialProfileId,
+      nextStatus,
+      assigned_at: updatedRow!.assigned_at,
+    })
+
+    const { error: histErr } = await db.from("referral_history").insert({
+      referral_id: referralId,
+      actor_profile_id: user.id,
+      old_status: oldStatus,
+      new_status: nextStatus,
+      action_note: "Comercial atribuído pelo admin",
+      metadata: {
+        action: "admin_assign_commercial",
+        selected_commercial_id: commercialProfileId,
+      },
+    })
+
+    if (histErr) {
+      logAdminReferralsAssign("histórico falhou (referral já atualizado)", {
+        message: histErr.message,
+      })
+      return { ok: false, message: histErr.message || "Atribuição salva, mas falhou ao registrar histórico." }
+    }
+
+    logAdminReferralsAssign("ok", { referralId, commercialProfileId, nextStatus })
+    return { ok: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logAdminReferralsAssign("exceção", { msg })
+    return { ok: false, message: "Erro inesperado ao atribuir comercial." }
+  }
+}
+
+/**
+ * Admin altera status do referral. Apenas admin_master | admin_financeiro.
+ */
+export async function updateAdminReferralStatusFromSupabase(
+  referralId: string,
+  newStatus: IndicacaoStatus
+): Promise<AdminReferralMutationResult> {
+  if (isDataProviderMock()) {
+    logAdminReferralsStatus("bloqueado — mock")
+    return { ok: false, message: "Indisponível no modo mock." }
+  }
+
+  if (newStatus === "paga") {
+    return { ok: false, message: "Status 'paga' não pode ser definido manualmente aqui." }
+  }
+
+  if (!ADMIN_REFERRAL_STATUS_VALUES.has(newStatus)) {
+    logAdminReferralsStatus("status inválido", { newStatus })
+    return { ok: false, message: "Status inválido." }
+  }
+
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) {
+      return { ok: false, message: "Sessão inválida." }
+    }
+
+    const { data: actorProfile, error: actorProfileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const actorRole = (actorProfile as { role?: UserRole } | null)?.role ?? null
+    if (actorProfileError || !actorRole || !ADMIN_REFERRAL_MUTATION_ROLES.has(actorRole)) {
+      logAdminReferralsStatus("sem permissão", { actorRole })
+      return { ok: false, message: "Sem permissão para alterar status." }
+    }
+
+    const { data: refRow, error: refFetchErr } = await db
+      .from("referrals")
+      .select("id, status, approved_at, rejected_at")
+      .eq("id", referralId)
+      .maybeSingle()
+
+    if (refFetchErr || !refRow) {
+      logAdminReferralsStatus("referral não encontrado", { referralId })
+      return { ok: false, message: "Indicação não encontrada." }
+    }
+
+    const row = refRow as {
+      id: string
+      status: string
+      approved_at: string | null
+      rejected_at: string | null
+    }
+    const oldStatus = row.status
+    const nowIso = new Date().toISOString()
+
+    const patch: Record<string, unknown> = {
+      status: newStatus,
+      updated_at: nowIso,
+    }
+
+    if (newStatus === "aprovada" && !row.approved_at) {
+      patch.approved_at = nowIso
+    }
+    if (newStatus === "recusada") {
+      patch.rejected_at = nowIso
+    }
+
+    logAdminStatusUpdate("request", { referralId, newStatus, oldStatus, patch })
+
+    const {
+      data: updated,
+      error: updateErr,
+    } = await db
+      .from("referrals")
+      .update(patch)
+      .eq("id", referralId)
+      .select("id, status, approved_at, rejected_at, updated_at")
+      .single()
+
+    const updatedRow = updated as {
+      id: string
+      status: string
+      approved_at: string | null
+      rejected_at: string | null
+      updated_at: string
+    } | null
+
+    const codeStatus = (updateErr as { code?: string } | null)?.code
+    logAdminStatusUpdate("response", {
+      updateErr: updateErr?.message ?? null,
+      code: codeStatus ?? null,
+      updatedRow,
+    })
+
+    let statusConfirmed =
+      !updateErr &&
+      Boolean(updatedRow) &&
+      updatedRow!.id === referralId &&
+      updatedRow!.status === newStatus &&
+      Boolean(updatedRow!.updated_at)
+
+    if (newStatus === "aprovada") {
+      statusConfirmed = statusConfirmed && Boolean(updatedRow!.approved_at)
+    }
+    if (newStatus === "recusada") {
+      statusConfirmed = statusConfirmed && Boolean(updatedRow!.rejected_at)
+    }
+
+    const noRowOrRls = !statusConfirmed
+
+    if (noRowOrRls) {
+      const code = (updateErr as { code?: string } | null)?.code
+      logAdminReferralsStatus("update sem efeito ou divergente", {
+        updateErr: updateErr?.message ?? null,
+        code: code ?? null,
+        updatedRow,
+        esperadoStatus: newStatus,
+      })
+      const hint =
+        code === "PGRST116" || !updatedRow
+          ? " Nenhuma linha foi atualizada (RLS). Verifique referrals_update_policy no Supabase."
+          : ""
+      return {
+        ok: false,
+        message:
+          (updateErr?.message ||
+            "O banco não confirmou a mudança de status (0 linhas ou valor divergente).") + hint,
+      }
+    }
+
+    logAdminStatusUpdate("validated", {
+      referralId,
+      newStatus,
+      approved_at: updatedRow!.approved_at,
+      rejected_at: updatedRow!.rejected_at,
+    })
+
+    const { error: histErr } = await db.from("referral_history").insert({
+      referral_id: referralId,
+      actor_profile_id: user.id,
+      old_status: oldStatus,
+      new_status: newStatus,
+      action_note: "Status alterado pelo admin",
+      metadata: {
+        action: "admin_status_change",
+        from: oldStatus,
+        to: newStatus,
+      },
+    })
+
+    if (histErr) {
+      logAdminReferralsStatus("histórico falhou", { message: histErr.message })
+      return {
+        ok: false,
+        message: histErr.message || "Status atualizado, mas falhou ao registrar histórico.",
+      }
+    }
+
+    logAdminReferralsStatus("ok", { referralId, oldStatus, newStatus })
+    return { ok: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logAdminReferralsStatus("exceção", { msg })
+    return { ok: false, message: "Erro inesperado ao alterar status." }
+  }
+}
+
 /**
  * Perfis indicador (admin). `null` só em erro / sem permissão.
  */
@@ -3396,6 +4006,55 @@ async function assertAdminFinanceOrMasterForSensitiveAction(): Promise<
   return { ok: true }
 }
 
+async function assertCanMarkFirstInvoicePaid(
+  referralId: string
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const role = await getAuthProfileRoleFromSupabase()
+  if (!role) {
+    return { ok: false, message: "Sem permissão para esta ação financeira." }
+  }
+  if (ADMIN_FINANCE_MASTER_ROLES.has(role)) {
+    return { ok: true }
+  }
+  if (role !== "comercial") {
+    return { ok: false, message: "Sem permissão para esta ação financeira." }
+  }
+
+  const supabase = getSupabaseClient()
+  const db = supabase as unknown as {
+    from: (t: string) => ReturnType<typeof supabase.from>
+  }
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return { ok: false, message: "Sessão não encontrada. Faça login novamente." }
+  }
+
+  const { data: row, error } = await db
+    .from("referrals")
+    .select("commercial_profile_id")
+    .eq("id", referralId)
+    .maybeSingle()
+
+  if (error || !row) {
+    return { ok: false, message: "Indicação não encontrada." }
+  }
+
+  const assignedTo =
+    (row as { commercial_profile_id?: string | null }).commercial_profile_id ??
+    null
+  if (assignedTo !== user.id) {
+    return {
+      ok: false,
+      message: "Apenas o comercial atribuído pode confirmar a primeira mensalidade.",
+    }
+  }
+
+  return { ok: true }
+}
+
 /**
  * Perfil do usuário autenticado (`auth.users` + `public.profiles`).
  */
@@ -3516,7 +4175,7 @@ export async function markFirstInvoiceAsPaidFromSupabase(
   referralId: string
 ): Promise<MarkFirstInvoicePaidResult> {
   try {
-    const gate = await assertAdminFinanceOrMasterForSensitiveAction()
+    const gate = await assertCanMarkFirstInvoicePaid(referralId)
     if (!gate.ok) {
       return { ok: false, code: "forbidden", message: gate.message }
     }

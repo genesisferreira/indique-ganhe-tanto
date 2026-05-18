@@ -1,7 +1,8 @@
 "use client"
 
-import { use, useEffect, useMemo, useState } from "react"
+import { use, useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,6 +17,10 @@ import {
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
+import {
+  emitReferralDataMutated,
+  subscribeReferralDataMutated,
+} from "@/lib/client/referral-data-sync"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { leads, historicos } from "@/lib/services/mock-data.service"
 import {
@@ -70,6 +75,7 @@ export default function DetalheLeadPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = use(params)
+  const router = useRouter()
   const mockLead = useMemo(
     () => (isDataProviderMock() ? leads.find((l) => l.id === id) : undefined),
     [id]
@@ -84,19 +90,51 @@ export default function DetalheLeadPage({
   const [pageLoading, setPageLoading] = useState(() => !isDataProviderMock())
 
   const podeConfirmarPrimeiraMensalidade =
-    authRole === "admin_financeiro" || authRole === "admin_master"
+    authRole === "comercial" ||
+    authRole === "admin_financeiro" ||
+    authRole === "admin_master"
 
   const podeEditarStatusComercial = authRole === "comercial"
 
-  const reloadLeadData = async () => {
+  const reloadLeadData = useCallback(async () => {
     const remote = await loadComercialLeadDetailsFromSupabase(id)
     if (remote.kind !== "ok") return false
 
-    setLead(remote.lead)
+    setLead(structuredClone(remote.lead))
     setStatus(mapLeadStatusToUpdateStatus(remote.lead.status))
-    setLeadHistorico(remote.historico)
+    setLeadHistorico([...remote.historico])
     return true
-  }
+  }, [id])
+
+  const refreshAfterMutation = useCallback(async () => {
+    const ok = await reloadLeadData()
+    emitReferralDataMutated()
+    router.refresh()
+    return ok
+  }, [reloadLeadData, router])
+
+  useEffect(() => {
+    return subscribeReferralDataMutated(() => {
+      void reloadLeadData()
+    })
+  }, [reloadLeadData])
+
+  const patchLeadFirstInvoicePaid = useCallback(() => {
+    setLead((prev) => {
+      if (!prev?.indicacao) return prev
+      const now = new Date()
+      return {
+        ...prev,
+        indicacao: {
+          ...prev.indicacao,
+          primeiraFaturaPaga: true,
+          dataPrimeiraFaturaPaga: now,
+          status: "paga",
+          updatedAt: now,
+        },
+      }
+    })
+  }, [])
 
   const handleConfirmFirstInvoice = async () => {
     if (!lead || isConfirmingFirstInvoice) return
@@ -107,14 +145,17 @@ export default function DetalheLeadPage({
       setIsConfirmingFirstInvoice(false)
       return
     }
-    const reloadOk = await reloadLeadData()
-    if (!reloadOk) {
-      toast.error("Operação concluída, mas não foi possível atualizar a visualização.")
+    patchLeadFirstInvoicePaid()
+    try {
+      const reloadOk = await refreshAfterMutation()
+      if (!reloadOk) {
+        toast.error("Operação concluída, mas não foi possível atualizar a visualização.")
+        return
+      }
+      toast.success("Primeira mensalidade confirmada e recompensa liberada.")
+    } finally {
       setIsConfirmingFirstInvoice(false)
-      return
     }
-    toast.success("Primeira mensalidade confirmada e recompensa liberada.")
-    setIsConfirmingFirstInvoice(false)
   }
 
   const handleSaveLeadUpdate = async () => {
@@ -129,7 +170,27 @@ export default function DetalheLeadPage({
       return
     }
 
-    const reloadOk = await reloadLeadData()
+    const leadStatusMap: Partial<Record<ComercialLeadUpdateStatus, LeadStatus>> = {
+      em_atendimento: "em_atendimento",
+      aguardando_instalacao: "em_negociacao",
+      vendido: "vendido",
+      recusado: "perdido",
+      sem_viabilidade: "perdido",
+    }
+    const nextLeadStatus = leadStatusMap[status]
+    if (nextLeadStatus) {
+      setLead((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: nextLeadStatus,
+              updatedAt: new Date(),
+            }
+          : prev
+      )
+    }
+
+    const reloadOk = await refreshAfterMutation()
     if (!reloadOk) {
       toast.error("Status salvo, mas não foi possível atualizar a visualização.")
       setIsSaving(false)
@@ -153,24 +214,18 @@ export default function DetalheLeadPage({
     setLead(undefined)
     setLeadHistorico([])
     void (async () => {
-      const remote = await loadComercialLeadDetailsFromSupabase(id)
-      if (remote.kind === "ok") {
-        setLead(remote.lead)
-        setStatus(mapLeadStatusToUpdateStatus(remote.lead.status))
-        setLeadHistorico(remote.historico)
-      } else {
-        setLead(undefined)
-      }
+      const ok = await reloadLeadData()
+      if (!ok) setLead(undefined)
       setPageLoading(false)
       if (process.env.NODE_ENV === "development") {
         console.log("[flow-check:debug]", {
           flow: "comercial-lead-detail",
           id,
-          result: remote.kind,
+          result: ok ? "ok" : "error",
         })
       }
     })()
-  }, [id, mockLead])
+  }, [id, mockLead, reloadLeadData])
 
   useEffect(() => {
     void (async () => {
@@ -181,7 +236,9 @@ export default function DetalheLeadPage({
           page: "/comercial/leads/[id]",
           role,
           podeConfirmarPrimeiraMensalidade:
-            role === "admin_financeiro" || role === "admin_master",
+            role === "comercial" ||
+            role === "admin_financeiro" ||
+            role === "admin_master",
           podeEditarStatusComercial: role === "comercial",
         })
       }
@@ -210,6 +267,15 @@ export default function DetalheLeadPage({
   const indicacao = lead.indicacao
   const plano = indicacao.plano
   const indicador = indicacao.indicador
+
+  const aptoConfirmarPrimeiraMensalidade =
+    Boolean(lead.indicacaoId) &&
+    !indicacao.primeiraFaturaPaga &&
+    (lead.status === "vendido" ||
+      lead.status === "em_atendimento" ||
+      indicacao.status === "aprovada" ||
+      indicacao.status === "paga" ||
+      indicacao.status === "em_atendimento")
 
   return (
     <div>
@@ -458,9 +524,7 @@ export default function DetalheLeadPage({
                   ? "Paga (data não registrada)"
                   : "Pendente"}
             </p>
-            {podeConfirmarPrimeiraMensalidade &&
-              lead.status === "vendido" &&
-              !indicacao.primeiraFaturaPaga && (
+            {podeConfirmarPrimeiraMensalidade && aptoConfirmarPrimeiraMensalidade ? (
                 <Button
                   className="w-full"
                   variant="secondary"
@@ -471,9 +535,9 @@ export default function DetalheLeadPage({
                 >
                   {isConfirmingFirstInvoice
                     ? "Confirmando..."
-                    : "Confirmar primeira mensalidade paga"}
+                    : "Primeira mensalidade paga"}
                 </Button>
-              )}
+              ) : null}
           </div>
 
           {/* Timing */}

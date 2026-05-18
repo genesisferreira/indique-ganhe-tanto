@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
@@ -17,6 +18,7 @@ import {
   ArrowRight,
   Phone,
 } from "lucide-react"
+import { subscribeReferralDataMutated } from "@/lib/client/referral-data-sync"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { dashboardComercial, leads, currentComercial } from "@/lib/services/mock-data.service"
 import {
@@ -31,54 +33,62 @@ function primeNome(nome: string): string {
   return p || "—"
 }
 
-function dashboardFromAssignedLeads(assigned: Lead[]): DashboardComercial {
-  const counts = {
+function dashboardFromComercialLeads(
+  allLeads: Lead[],
+  uid: string | null
+): DashboardComercial {
+  const base: DashboardComercial = {
     leadsNovos: 0,
     leadsEmAtendimento: 0,
     leadsSemContato: 0,
     leadsEmNegociacao: 0,
     vendasRealizadas: 0,
     leadsPerdidos: 0,
+    tempoMedioPrimeiroContato: "N/D",
   }
+  if (!uid) return base
+
   const diffMins: number[] = []
-  for (const l of assigned) {
+
+  for (const l of allLeads) {
+    const pool = !l.comercialId
+    const mine = l.comercialId === uid
+
     switch (l.status) {
       case "novo":
-        counts.leadsNovos += 1
+        if (pool || mine) base.leadsNovos += 1
         break
       case "em_atendimento":
       case "redistribuido":
-        counts.leadsEmAtendimento += 1
+        if (mine) base.leadsEmAtendimento += 1
         break
       case "sem_contato":
-        counts.leadsSemContato += 1
+        if (mine) base.leadsSemContato += 1
         break
       case "em_negociacao":
-        counts.leadsEmNegociacao += 1
+        if (mine) base.leadsEmNegociacao += 1
         break
       case "vendido":
-        counts.vendasRealizadas += 1
+        if (mine) base.vendasRealizadas += 1
         break
       case "perdido":
-        counts.leadsPerdidos += 1
+        if (mine) base.leadsPerdidos += 1
         break
       default:
         break
     }
-    if (l.primeiroContato) {
+    if (mine && l.primeiroContato) {
       const ms = l.primeiroContato.getTime() - l.createdAt.getTime()
       if (ms >= 0) diffMins.push(ms / 60000)
     }
   }
-  let tempo: string = "N/D"
+
   if (diffMins.length > 0) {
     const avg = diffMins.reduce((a, b) => a + b, 0) / diffMins.length
-    tempo = `${Math.max(0, Math.round(avg))} min`
+    base.tempoMedioPrimeiroContato = `${Math.max(0, Math.round(avg))} min`
   }
-  return {
-    ...counts,
-    tempoMedioPrimeiroContato: tempo,
-  }
+
+  return base
 }
 
 function initialMockComercialState(): {
@@ -96,41 +106,82 @@ function initialMockComercialState(): {
 }
 
 export default function ComercialDashboard() {
+  const pathname = usePathname()
   const init = initialMockComercialState()
   const [nomeCumprimento, setNomeCumprimento] = useState(init?.nome ?? "")
   const [dashboard, setDashboard] = useState<DashboardComercial | null>(init?.dashboard ?? null)
   const [leadsAtivosLista, setLeadsAtivosLista] = useState<Lead[]>(init?.leadsAtivos ?? [])
+  const [reloadTick, setReloadTick] = useState(0)
 
-  useEffect(() => {
+  const loadComercialDashboard = useCallback(async () => {
     if (isDataProviderMock()) {
+      const meus = leads.filter((l) => l.comercialId === currentComercial.id)
+      setDashboard(dashboardComercial)
+      setLeadsAtivosLista(
+        meus.filter((l) => l.status !== "vendido" && l.status !== "perdido")
+      )
       if (process.env.NODE_ENV === "development") {
-        const total = leads.filter((l) => l.comercialId === currentComercial.id).length
-        console.log("[page-data:debug]", { page: "/comercial", source: "mock", total })
+        console.log("[page-data:debug]", { page: "/comercial", source: "mock", total: meus.length })
       }
       return
     }
 
-    void (async () => {
-      const [allLeads, basics] = await Promise.all([
-        loadComercialLeadsFromSupabase(),
-        getAuthProfileBasicsFromSupabase(),
-      ])
-      const uid = basics?.id ?? null
-      setNomeCumprimento(basics?.fullName ?? "")
-      const assigned =
-        uid && allLeads ? allLeads.filter((l) => l.comercialId === uid) : []
-      setDashboard(dashboardFromAssignedLeads(assigned))
-      setLeadsAtivosLista(
-        assigned.filter((l) => l.status !== "vendido" && l.status !== "perdido")
-      )
-      if (process.env.NODE_ENV === "development") {
-        console.log("[page-data:debug]", {
-          page: "/comercial",
-          source: "supabase",
-          total: allLeads?.length ?? 0,
-        })
+    const [remote, basics] = await Promise.all([
+      loadComercialLeadsFromSupabase(),
+      getAuthProfileBasicsFromSupabase(),
+    ])
+    const uid = basics?.id ?? null
+    setNomeCumprimento(basics?.fullName ?? "")
+    const allLeads = remote ?? []
+    const poolNovos =
+      uid && allLeads.length > 0
+        ? allLeads.filter((l) => !l.comercialId && l.status === "novo")
+        : []
+    const assignedAtivos =
+      uid && allLeads.length > 0
+        ? allLeads.filter(
+            (l) =>
+              l.comercialId === uid &&
+              l.status !== "vendido" &&
+              l.status !== "perdido"
+          )
+        : []
+
+    setDashboard({ ...dashboardFromComercialLeads(allLeads, uid) })
+    setLeadsAtivosLista(
+      [...assignedAtivos, ...poolNovos].map((l) => structuredClone(l))
+    )
+    if (process.env.NODE_ENV === "development") {
+      console.log("[page-data:debug]", {
+        page: "/comercial",
+        source: "supabase",
+        total: allLeads?.length ?? 0,
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadComercialDashboard()
+  }, [loadComercialDashboard, pathname, reloadTick])
+
+  useEffect(() => {
+    return subscribeReferralDataMutated(() => {
+      setReloadTick((t) => t + 1)
+    })
+  }, [])
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        setReloadTick((t) => t + 1)
       }
-    })()
+    }
+    window.addEventListener("focus", onVisible)
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      window.removeEventListener("focus", onVisible)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
   }, [])
 
   const d =

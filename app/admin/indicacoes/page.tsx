@@ -1,6 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
+import { toast } from "sonner"
+import {
+  emitReferralDataMutated,
+  subscribeReferralDataMutated,
+} from "@/lib/client/referral-data-sync"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -11,9 +17,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { indicacoes, comerciais } from "@/lib/services/mock-data.service"
 import {
+  assignReferralToCommercialFromSupabase,
+  getAuthProfileBasicsFromSupabase,
   loadAdminComerciaisFromSupabase,
   loadAdminReferralsFromSupabase,
-} from "@/lib/services/supabase-data.service"
+  updateAdminReferralStatusFromSupabase,
+} from "@/lib/services"
 import { Search, Eye, MoreHorizontal, UserPlus, RefreshCw } from "lucide-react"
 import {
   DropdownMenu,
@@ -26,19 +35,35 @@ import {
 } from "@/components/ui/dropdown-menu"
 import Link from "next/link"
 import type { Indicacao, Comercial } from "@/types"
+import type { IndicacaoStatus } from "@/types/referral"
+import type { UserRole } from "@/types/user"
+
+const STATUS_ALTERAR_OPCOES: IndicacaoStatus[] = [
+  "pendente",
+  "em_atendimento",
+  "em_negociacao",
+  "em_andamento",
+  "aprovada",
+  "recusada",
+]
 
 export default function AdminIndicacoesPage() {
+  const router = useRouter()
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("todos")
   const [lista, setLista] = useState<Indicacao[]>([])
   const [comerciaisLista, setComerciaisLista] = useState<Comercial[]>([])
   const [carregando, setCarregando] = useState(true)
+  const [authRole, setAuthRole] = useState<UserRole | null>(null)
+  const [dataVersion, setDataVersion] = useState(0)
 
-  const recarregar = useCallback(async () => {
-    setCarregando(true)
+  const podeMutar = authRole === "admin_master" || authRole === "admin_financeiro"
+
+  const loadAdminReferrals = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setCarregando(true)
     if (isDataProviderMock()) {
-      setLista(indicacoes)
-      setComerciaisLista(comerciais)
+      setLista([...indicacoes])
+      setComerciaisLista([...comerciais])
       if (process.env.NODE_ENV === "development") {
         console.log("[page-data:debug]", {
           page: "/admin/indicacoes",
@@ -49,10 +74,12 @@ export default function AdminIndicacoesPage() {
       setCarregando(false)
       return
     }
-    const [remote, comRemoto] = await Promise.all([
+    const [remote, comRemoto, basics] = await Promise.all([
       loadAdminReferralsFromSupabase(),
       loadAdminComerciaisFromSupabase(),
+      getAuthProfileBasicsFromSupabase(),
     ])
+    setAuthRole(basics?.role ?? null)
     if (process.env.NODE_ENV === "development") {
       console.log("[page-data:debug]", {
         page: "/admin/indicacoes",
@@ -60,14 +87,29 @@ export default function AdminIndicacoesPage() {
         total: remote?.length ?? 0,
       })
     }
-    setLista(remote ?? [])
-    setComerciaisLista(comRemoto ?? [])
+    setLista([...(remote ?? [])])
+    setComerciaisLista([...(comRemoto ?? [])])
     setCarregando(false)
   }, [])
 
   useEffect(() => {
-    void recarregar()
-  }, [recarregar])
+    void loadAdminReferrals()
+  }, [loadAdminReferrals])
+
+  useEffect(() => {
+    return subscribeReferralDataMutated(() => {
+      void loadAdminReferrals({ silent: true }).then(() => {
+        setDataVersion((v) => v + 1)
+      })
+    })
+  }, [loadAdminReferrals])
+
+  const refreshAfterMutation = useCallback(async () => {
+    await loadAdminReferrals({ silent: true })
+    setDataVersion((v) => v + 1)
+    emitReferralDataMutated()
+    router.refresh()
+  }, [loadAdminReferrals, router])
 
   const filteredIndicacoes = lista.filter((indicacao: Indicacao) => {
     const matchesSearch =
@@ -85,7 +127,67 @@ export default function AdminIndicacoesPage() {
     return indicacao.comercial?.nome ?? "—"
   }
 
-  const columns = [
+  const handleAtribuirComercial = useCallback(
+    async (indicacao: Indicacao, comercialId: string) => {
+      if (isDataProviderMock()) {
+        toast.message("Indisponível no modo mock.")
+        return
+      }
+      const comercial = comerciaisLista.find((c) => c.id === comercialId)
+      setLista((prev) =>
+        prev.map((item) =>
+          item.id === indicacao.id
+            ? {
+                ...item,
+                comercialId,
+                comercial: comercial ?? item.comercial,
+                updatedAt: new Date(),
+              }
+            : item
+        )
+      )
+      setDataVersion((v) => v + 1)
+      const r = await assignReferralToCommercialFromSupabase(indicacao.id, comercialId)
+      if (r.ok) {
+        toast.success("Comercial atribuído.")
+        await refreshAfterMutation()
+      } else {
+        toast.error(r.message)
+        await loadAdminReferrals({ silent: true })
+        setDataVersion((v) => v + 1)
+      }
+    },
+    [comerciaisLista, loadAdminReferrals, refreshAfterMutation]
+  )
+
+  const handleAlterarStatus = useCallback(
+    async (indicacao: Indicacao, novo: IndicacaoStatus) => {
+      if (isDataProviderMock()) {
+        toast.message("Indisponível no modo mock.")
+        return
+      }
+      setLista((prev) =>
+        prev.map((item) =>
+          item.id === indicacao.id
+            ? { ...item, status: novo, updatedAt: new Date() }
+            : item
+        )
+      )
+      setDataVersion((v) => v + 1)
+      const r = await updateAdminReferralStatusFromSupabase(indicacao.id, novo)
+      if (r.ok) {
+        toast.success("Status atualizado.")
+        await refreshAfterMutation()
+      } else {
+        toast.error(r.message)
+        await loadAdminReferrals({ silent: true })
+        setDataVersion((v) => v + 1)
+      }
+    },
+    [loadAdminReferrals, refreshAfterMutation]
+  )
+
+  const columns = useMemo(() => [
     {
       key: "indicado",
       header: "Indicado",
@@ -141,7 +243,11 @@ export default function AdminIndicacoesPage() {
     {
       key: "acoes",
       header: "Ações",
-      cell: (indicacao: Indicacao) => (
+      cell: (indicacao: Indicacao) => {
+        const comerciaisAtribuicao = comerciaisLista.filter(
+          (c: Comercial) => c.disponibilidade === "disponivel" && c.ativo !== false
+        )
+        return (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon">
@@ -156,35 +262,52 @@ export default function AdminIndicacoesPage() {
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger disabled={!podeMutar || isDataProviderMock()}>
                 <UserPlus className="mr-2 h-4 w-4" />
                 Atribuir Comercial
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {comerciaisLista
-                  .filter((c: Comercial) => c.disponibilidade === "disponivel")
-                  .map((comercial: Comercial) => (
-                    <DropdownMenuItem key={comercial.id}>{comercial.nome}</DropdownMenuItem>
+                {comerciaisAtribuicao.map((comercial: Comercial) => (
+                    <DropdownMenuItem
+                      key={comercial.id}
+                      onSelect={(e) => {
+                        e.preventDefault()
+                        void handleAtribuirComercial(indicacao, comercial.id)
+                      }}
+                    >
+                      {comercial.nome}
+                    </DropdownMenuItem>
                   ))}
+                {comerciaisAtribuicao.length === 0 ? (
+                  <DropdownMenuItem disabled>Nenhum comercial disponível</DropdownMenuItem>
+                ) : null}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger disabled={!podeMutar || isDataProviderMock()}>
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Alterar Status
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                <DropdownMenuItem>Pendente</DropdownMenuItem>
-                <DropdownMenuItem>Em Andamento</DropdownMenuItem>
-                <DropdownMenuItem>Aprovada</DropdownMenuItem>
-                <DropdownMenuItem>Recusada</DropdownMenuItem>
+                {STATUS_ALTERAR_OPCOES.map((st) => (
+                  <DropdownMenuItem
+                    key={st}
+                    onSelect={(e) => {
+                      e.preventDefault()
+                      void handleAlterarStatus(indicacao, st)
+                    }}
+                  >
+                    {st}
+                  </DropdownMenuItem>
+                ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           </DropdownMenuContent>
         </DropdownMenu>
-      ),
+        )
+      },
     },
-  ]
+  ], [podeMutar, comerciaisLista, handleAtribuirComercial, handleAlterarStatus])
 
   return (
     <div className="space-y-6">
@@ -219,6 +342,8 @@ export default function AdminIndicacoesPage() {
                   <SelectItem value="todos">Todos</SelectItem>
                   <SelectItem value="pendente">Pendentes</SelectItem>
                   <SelectItem value="em_andamento">Em Andamento</SelectItem>
+                  <SelectItem value="em_atendimento">Em Atendimento</SelectItem>
+                  <SelectItem value="em_negociacao">Em Negociação</SelectItem>
                   <SelectItem value="aprovada">Aprovadas</SelectItem>
                   <SelectItem value="recusada">Recusadas</SelectItem>
                   <SelectItem value="paga">Pagas</SelectItem>
@@ -232,7 +357,9 @@ export default function AdminIndicacoesPage() {
             <p className="text-sm text-muted-foreground">Carregando…</p>
           ) : (
             <DataTable
+              key={dataVersion}
               data={filteredIndicacoes}
+              getRowKey={(i) => i.id}
               columns={columns}
               emptyMessage="Nenhuma indicação encontrada"
             />

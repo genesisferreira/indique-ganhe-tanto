@@ -14,6 +14,8 @@ interface Column<T> {
 interface DataTableProps<T> {
   data: T[]
   columns: Column<T>[]
+  /** Chave estável por linha (evita bugs com DropdownMenu em tabelas). */
+  getRowKey?: (item: T) => string | number
   searchable?: boolean
   searchPlaceholder?: string
   searchValue?: string
@@ -25,6 +27,7 @@ interface DataTableProps<T> {
 export function DataTable<T>({
   data,
   columns,
+  getRowKey,
   searchable,
   searchPlaceholder = "Buscar...",
   searchValue,
@@ -76,7 +79,7 @@ export function DataTable<T>({
               ) : (
                 data.map((item, index) => (
                   <tr
-                    key={index}
+                    key={getRowKey != null ? String(getRowKey(item)) : index}
                     className="hover:bg-muted/20 transition-colors"
                   >
                     {columns.map((column) => (
