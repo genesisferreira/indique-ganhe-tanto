@@ -57,6 +57,7 @@ export default function PagamentosPage() {
 
   useRealtimeReload(loadPagamentos, REALTIME_TABLES_INDICADOR, {
     enabled: !isDataProviderMock(),
+    logPrefix: "[indicador:realtime]",
   })
 
   const meusPagamentos = useMemo(() => {

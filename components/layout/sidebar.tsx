@@ -30,6 +30,8 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useEffect, useMemo, useState } from "react"
+import { NotificationCenter } from "@/components/layout/notification-center"
+import { useNotificationsContextOptional } from "@/components/notifications/notifications-provider"
 import {
   countAdminActiveIndicadoresFromSupabase,
   countAdminPendingPixWithdrawalsFromSupabase,
@@ -191,6 +193,7 @@ export function Sidebar({
   policyRole = null,
 }: SidebarProps) {
   const pathname = usePathname()
+  const notifCtx = useNotificationsContextOptional()
   const [isOpen, setIsOpen] = useState(false)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [pendingPixWithdrawals, setPendingPixWithdrawals] = useState<number | null>(
@@ -208,6 +211,12 @@ export function Sidebar({
   )
 
   useEffect(() => {
+    if (notifCtx) {
+      setUnreadNotifications(notifCtx.unreadCount)
+    }
+  }, [notifCtx?.unreadCount])
+
+  useEffect(() => {
     let cancelled = false
     void (async () => {
       const useMock = isSidebarDataProviderMock()
@@ -215,7 +224,7 @@ export function Sidebar({
       if (useMock) {
         const m = getSidebarBadgeCountsFromMock(variant)
         if (cancelled) return
-        setUnreadNotifications(m.unreadNotifications)
+        if (!notifCtx) setUnreadNotifications(m.unreadNotifications)
         setComercialPipelineCount(
           variant === "comercial" ? m.comercialPipelineReferrals : null
         )
@@ -261,7 +270,9 @@ export function Sidebar({
         indicadoresRes,
         pixRes,
       ] = await Promise.all([
-        countUserUnreadNotificationsFromSupabase(),
+        notifCtx
+          ? Promise.resolve(notifCtx.unreadCount)
+          : countUserUnreadNotificationsFromSupabase(),
         supabase.auth.getUser().then(({ data }) => data.user?.id ?? null),
         variant === "comercial"
           ? countComercialPipelineReferralsFromSupabase()
@@ -282,8 +293,10 @@ export function Sidebar({
 
       if (cancelled) return
 
-      if (unreadRes !== null) {
+      if (!notifCtx && unreadRes !== null) {
         setUnreadNotifications(unreadRes)
+      } else if (notifCtx) {
+        setUnreadNotifications(notifCtx.unreadCount)
       }
       setComercialPipelineCount(pipelineRes)
       setComercialReturnsCount(returnsRes)
@@ -309,7 +322,7 @@ export function Sidebar({
     return () => {
       cancelled = true
     }
-  }, [variant, pathname, userRole, policyRole])
+  }, [variant, pathname, userRole, policyRole, notifCtx])
 
   const navigation = useMemo(() => {
     const base =
@@ -341,14 +354,17 @@ export function Sidebar({
           </div>
           <span className="font-semibold text-foreground">Tanto Telecom</span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setIsOpen(!isOpen)}
-          className="text-foreground"
-        >
-          {isOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-        </Button>
+        <div className="flex items-center gap-1">
+          {!isSidebarDataProviderMock() && <NotificationCenter />}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsOpen(!isOpen)}
+            className="text-foreground"
+          >
+            {isOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </Button>
+        </div>
       </div>
 
       {/* Mobile Overlay */}
@@ -369,13 +385,16 @@ export function Sidebar({
       >
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 py-5 border-b border-sidebar-border">
-          <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary">
+          <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary shrink-0">
             <Zap className="w-6 h-6 text-primary-foreground" />
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <h1 className="font-bold text-foreground">Tanto Telecom</h1>
             <p className="text-xs text-muted-foreground">Indique e Ganhe</p>
           </div>
+          {!isSidebarDataProviderMock() && (
+            <NotificationCenter className="shrink-0" />
+          )}
         </div>
 
         {/* Navigation */}

@@ -157,3 +157,13 @@
 ::-webkit-scrollbar-thumb:hover {
   background: oklch(0.40 0.01 250);
 }
+
+/* Sonner — acima do mobile header (z-50) e sidebar */
+[data-sonner-toaster] {
+  z-index: 999999 !important;
+  pointer-events: none;
+}
+
+[data-sonner-toaster] [data-sonner-toast] {
+  pointer-events: auto;
+}

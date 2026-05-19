@@ -20,6 +20,19 @@ import type { UserRole } from "@/types/user"
 import type { Pagamento, PagamentoKind, PagamentoStatus } from "@/types/payment"
 import type { Plano } from "@/types/plan"
 import type { NotificationItem } from "@/types/notification"
+import {
+  NOTIFICATIONS_SELECT,
+  NOTIFICATIONS_DB,
+  buildNotificationInsertRow,
+  buildNotificationMarkReadUpdate,
+  mapNotificationRowFromDb,
+} from "@/lib/notifications-db-map"
+import {
+  createNotificationForProfileFromSupabase,
+  notifyAdminsOfNewReferralFromSupabase,
+  notifyIndicatorReferralProgressFromSupabase,
+  notifyIndicatorRewardReleasedFromSupabase,
+} from "@/lib/services/notification.service"
 import type { AuthProfileBasics } from "@/types/auth-profile"
 
 type ProfileRow = {
@@ -672,16 +685,7 @@ type ExpiredReferralSlaRow = {
   admin_alerted: boolean | null
 }
 
-type NotificationRow = {
-  id: string
-  profile_id: string
-  notification_type: string
-  title: string
-  message: string
-  data: Record<string, unknown> | null
-  is_read: boolean
-  created_at: string
-}
+type NotificationRow = Record<string, unknown>
 
 const SLA_REDISTRIBUTION_LOG_PREFIX = "[sla-redistribution:supabase]"
 const ADMIN_NOTIFICATIONS_LOG_PREFIX = "[admin-notifications:supabase]"
@@ -931,25 +935,25 @@ export async function processExpiredLeadAssignments(): Promise<
       if (!adminsError && (adminRows?.length ?? 0) > 0) {
         const notificationsPayload = (adminRows ?? []).map((row: unknown) => {
           const admin = row as { id: string }
-          return {
+          return buildNotificationInsertRow({
             profile_id: admin.id,
-            notification_type: "sistema",
             title: "Lead vencido por SLA sem comercial disponível",
             message:
               "Um lead está sem resposta há mais de 15 minutos e não há comercial alternativo disponível para redistribuição.",
-            data: {
+            notificationType: "sistema",
+            metadata: {
               action: "sla_no_commercial_available",
               referral_id: lead.id,
               previous_commercial_id: currentCommercialId,
               reason: "no_response_15_minutes",
             },
-          }
+          })
         })
 
         const { data: notificationRows, error: notificationError } = await db
           .from("notifications")
           .insert(notificationsPayload)
-          .select("id, profile_id, notification_type, created_at")
+          .select(`id, profile_id, ${NOTIFICATIONS_DB.notificationType}, created_at`)
 
         devLogSlaRedistribution("resultado notification/admin alert", {
           referralId: lead.id,
@@ -1097,10 +1101,8 @@ export async function loadAdminNotificationsFromSupabase(): Promise<
 
     const { data: rows, error: notificationsError } = await db
       .from("notifications")
-      .select(
-        "id, profile_id, notification_type, title, message, data, is_read, created_at"
-      )
-      .order("created_at", { ascending: false })
+      .select(NOTIFICATIONS_SELECT)
+      .order(NOTIFICATIONS_DB.createdAt, { ascending: false })
 
     devLogAdminNotifications("query notifications", {
       error: notificationsError?.message ?? null,
@@ -1117,14 +1119,15 @@ export async function loadAdminNotificationsFromSupabase(): Promise<
 
     return (rows ?? []).map((raw: unknown) => {
       const row = raw as NotificationRow
-      const referralIdRaw = row.data?.referral_id
+      const mapped = mapNotificationRowFromDb(row, null)
+      const referralIdRaw = mapped.metadata?.referral_id
       return {
-        id: row.id,
-        title: row.title,
-        message: row.message,
-        type: row.notification_type,
-        isRead: row.is_read,
-        createdAt: new Date(row.created_at),
+        id: mapped.id,
+        title: mapped.title,
+        message: mapped.message,
+        type: mapped.type,
+        isRead: mapped.read,
+        createdAt: mapped.createdAt,
         referralId:
           typeof referralIdRaw === "string" && referralIdRaw.trim() !== ""
             ? referralIdRaw
@@ -1278,7 +1281,7 @@ export async function loadAdminDashboardMetricsFromSupabase(): Promise<AdminDash
       db
         .from("notifications")
         .select("id", { count: "exact", head: true })
-        .eq("is_read", false)
+        .eq(NOTIFICATIONS_DB.isRead, false)
     )
     if (unreadNotifications === null) return null
 
@@ -1566,12 +1569,9 @@ export async function markNotificationAsRead(
 
     const { data: updatedRows, error: updateError } = await db
       .from("notifications")
-      .update({
-        is_read: true,
-        read_at: new Date().toISOString(),
-      })
+      .update(buildNotificationMarkReadUpdate())
       .eq("id", notificationId)
-      .select("id, is_read, read_at")
+      .select(`id, ${NOTIFICATIONS_DB.isRead}, ${NOTIFICATIONS_DB.readAt}`)
 
     devLogAdminNotifications("resultado markAsRead", {
       notificationId,
@@ -1802,6 +1802,16 @@ export async function insertIndicadorReferral(
 
     const insertedReferralId =
       (insertedRows?.[0] as { id: string } | undefined)?.id ?? null
+
+    if (insertedReferralId) {
+      devLogInsertReferral("notify admins — disparo", { insertedReferralId })
+      void notifyAdminsOfNewReferralFromSupabase({ referralId: insertedReferralId })
+    } else {
+      devLogInsertReferral("notify admins omitido — insert sem id retornado", {
+        rowCount: insertedRows?.length ?? 0,
+        insertError: insertError?.message ?? null,
+      })
+    }
 
     if (insertedReferralId && selectedCommercialId) {
       const { data: histRows, error: histError } = await db
@@ -2583,6 +2593,19 @@ export async function assignReferralToCommercialFromSupabase(
     }
 
     logAdminReferralsAssign("ok", { referralId, commercialProfileId, nextStatus })
+
+    void createNotificationForProfileFromSupabase({
+      profileId: commercialProfileId,
+      notificationType: "indicacao",
+      title: "Novo lead atribuído",
+      message: "Um novo lead foi atribuído para você.",
+      data: {
+        action: "admin_assign_commercial",
+        referral_id: referralId,
+      },
+      actionUrl: `/comercial/leads/${referralId}`,
+    })
+
     return { ok: true }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -2769,6 +2792,10 @@ export async function updateAdminReferralStatusFromSupabase(
         })
         return { ok: false, message: ensureReward.message }
       }
+    }
+
+    if (oldStatus !== newStatus) {
+      void notifyIndicatorReferralProgressFromSupabase(referralId)
     }
 
     logAdminReferralsStatus("ok", { referralId, oldStatus, newStatus })
@@ -4511,34 +4538,16 @@ export async function markFirstInvoiceAsPaidFromSupabase(
           (data as Record<string, unknown>).idempotent === true
       )
 
-    if (result.ok && indicatorProfileId && !isIdempotentSuccess) {
-      // Evento 2 — primeira mensalidade confirmada
-      void insertNotification({
-        profile_id: indicatorProfileId,
-        notification_type: "recompensa",
-        title: "Primeira mensalidade confirmada",
-        message: "A primeira mensalidade do indicado foi confirmada.",
-        data: {
-          action: "first_invoice_paid",
-          referral_id: referralId,
-          reward_id: result.rewardId,
-          wallet_transaction_id: result.transactionId,
-        },
-      })
-
-      // Evento 3 — recompensa disponível (mark_first_invoice_paid libera a reward para 'disponivel')
-      void insertNotification({
-        profile_id: indicatorProfileId,
-        notification_type: "recompensa",
-        title: "Recompensa liberada",
-        message: "Sua recompensa já está disponível para saque ou desconto.",
-        data: {
-          action: "reward_available",
-          referral_id: referralId,
-          reward_id: result.rewardId,
-          balance_after: result.balanceAfter,
-        },
-      })
+    if (result.ok && !isIdempotentSuccess) {
+      if (isDev()) {
+        console.log("[indicador:reward-release]", {
+          referralId,
+          rewardId: result.rewardId,
+          transactionId: result.transactionId,
+          balanceAfter: result.balanceAfter,
+        })
+      }
+      void notifyIndicatorRewardReleasedFromSupabase(referralId)
     }
 
     return result
@@ -4755,6 +4764,18 @@ export async function updateComercialLeadStatus(
         ok: false,
         message: "Não foi possível atualizar o status do lead.",
       }
+    }
+
+    if (oldStatus !== nextReferralStatus) {
+      if (isDev()) {
+        console.log("[indicator:trigger]", {
+          source: "updateComercialLeadStatus",
+          referralId,
+          oldStatus,
+          nextReferralStatus,
+        })
+      }
+      void notifyIndicatorReferralProgressFromSupabase(referralId)
     }
 
     const historyNote = noteTrimmed || `Status alterado para ${newStatus}`
@@ -5191,6 +5212,7 @@ type NotificationPayload = {
   title: string
   message: string
   data?: Record<string, unknown>
+  action_url?: string | null
 }
 
 /**
@@ -5203,14 +5225,14 @@ async function insertNotification(payload: NotificationPayload): Promise<void> {
     const db = supabase as unknown as {
       from: (t: string) => ReturnType<typeof supabase.from>
     }
-    const row = {
+    const row = buildNotificationInsertRow({
       profile_id: payload.profile_id,
-      notification_type: payload.notification_type,
       title: payload.title,
       message: payload.message,
-      data: payload.data ?? {},
-      is_read: false,
-    }
+      notificationType: payload.notification_type,
+      metadata: payload.data ?? {},
+      actionUrl: payload.action_url ?? null,
+    })
     const { error } = await db.from("notifications").insert(row)
     if (error) {
       devLogNotification("falha ao inserir notificação", {
@@ -5289,11 +5311,19 @@ export async function loadUserNotificationsFromSupabase(): Promise<NotificationI
       devWarnUserNotifications(`load: sem usuário (${authError?.message ?? "auth"})`)
       return null
     }
+    const { data: profileRow } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+    const userRole = (profileRow as { role?: import("@/types/user").UserRole } | null)
+      ?.role ?? null
+
     const { data: rows, error } = await db
       .from("notifications")
-      .select("id, title, message, notification_type, data, is_read, read_at, created_at")
-      .eq("profile_id", user.id)
-      .order("created_at", { ascending: false })
+      .select(NOTIFICATIONS_SELECT)
+      .eq(NOTIFICATIONS_DB.profileId, user.id)
+      .order(NOTIFICATIONS_DB.createdAt, { ascending: false })
       .limit(200)
 
     if (error) {
@@ -5301,30 +5331,11 @@ export async function loadUserNotificationsFromSupabase(): Promise<NotificationI
       return null
     }
 
-    const list: NotificationItem[] = (rows ?? []).map((raw: unknown) => {
-      const row = raw as {
-        id: string
-        title: string
-        message: string
-        notification_type: string
-        data: Record<string, unknown> | null
-        is_read: boolean
-        read_at: string | null
-        created_at: string
-      }
-      return {
-        id: row.id,
-        title: row.title,
-        message: row.message,
-        notificationType: row.notification_type,
-        data: row.data ?? {},
-        isRead: row.is_read,
-        readAt: row.read_at ? new Date(row.read_at) : null,
-        createdAt: new Date(row.created_at),
-      }
-    })
+    const list: NotificationItem[] = (rows ?? []).map((raw: unknown) =>
+      mapNotificationRowFromDb(raw as Record<string, unknown>, userRole)
+    )
 
-    const unreadCount = list.filter((n) => !n.isRead).length
+    const unreadCount = list.filter((n) => !n.read).length
     devLogUserNotifications("load", {
       total: list.length,
       unreadCount,
@@ -5354,8 +5365,8 @@ export async function countUserUnreadNotificationsFromSupabase(): Promise<number
     const { count, error } = await db
       .from("notifications")
       .select("id", { count: "exact", head: true })
-      .eq("profile_id", user.id)
-      .eq("is_read", false)
+      .eq(NOTIFICATIONS_DB.profileId, user.id)
+      .eq(NOTIFICATIONS_DB.isRead, false)
 
     if (error) {
       devWarnUserNotifications(`count falhou: ${error.message}`)
@@ -5388,13 +5399,12 @@ export async function markUserNotificationAsRead(
     if (authError || !user) {
       return { ok: false, message: "Sessão inválida. Faça login novamente." }
     }
-    const now = new Date().toISOString()
     const { data: updated, error } = await db
       .from("notifications")
-      .update({ is_read: true, read_at: now })
+      .update(buildNotificationMarkReadUpdate())
       .eq("id", notificationId)
-      .eq("profile_id", user.id)
-      .select("id, is_read, read_at")
+      .eq(NOTIFICATIONS_DB.profileId, user.id)
+      .select(`id, ${NOTIFICATIONS_DB.isRead}, ${NOTIFICATIONS_DB.readAt}`)
 
     devLogUserNotifications("markUserNotificationAsRead", {
       notificationId,
@@ -5437,12 +5447,11 @@ export async function markAllUserNotificationsAsRead(): Promise<
     if (authError || !user) {
       return { ok: false, message: "Sessão inválida. Faça login novamente." }
     }
-    const now = new Date().toISOString()
     const { data: updatedRows, error } = await db
       .from("notifications")
-      .update({ is_read: true, read_at: now })
-      .eq("profile_id", user.id)
-      .eq("is_read", false)
+      .update(buildNotificationMarkReadUpdate())
+      .eq(NOTIFICATIONS_DB.profileId, user.id)
+      .eq(NOTIFICATIONS_DB.isRead, false)
       .select("id")
 
     devLogUserNotifications("markAllUserNotificationsAsRead", {

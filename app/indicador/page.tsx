@@ -1,5 +1,7 @@
 "use client"
 
+import { useEffect } from "react"
+import { toast } from "sonner"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
@@ -20,6 +22,18 @@ import { useIndicadorHome } from "./indicador-home-provider"
 
 export default function IndicadorDashboard() {
   const { indicador, dashboard, recentIndicacoes } = useIndicadorHome()
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return
+    const timer = window.setTimeout(() => {
+      toast.success("TESTE INDICADOR", {
+        id: "dev-test-indicador-toast",
+        duration: 6000,
+      })
+      console.log("[toast:indicator]", "toast manual TESTE INDICADOR disparado")
+    }, 1200)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   return (
     <div>

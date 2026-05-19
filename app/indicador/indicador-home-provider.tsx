@@ -12,6 +12,7 @@ import {
   REALTIME_TABLES_INDICADOR,
   useRealtimeReload,
 } from "@/hooks/use-supabase-realtime"
+import { subscribeReferralDataMutated } from "@/lib/client/referral-data-sync"
 import { mockDataService } from "@/lib/services/mock-data.service"
 import {
   getIndicadorHomeLoadFailureReasonForDev,
@@ -104,10 +105,7 @@ export function IndicadorHomeProvider({ children }: { children: ReactNode }) {
   const loadHome = useCallback(async () => {
     if (isDataProviderMock()) return
     if (isDev()) {
-      console.log(
-        "[indicador-home:provider]",
-        "buscando dados Supabase (estado inicial vazio até carregar)"
-      )
+      console.log("[indicador:realtime]", "loadHome — buscando Supabase")
     }
     const remote = await loadIndicadorHomeFromSupabase()
     if (!remote) {
@@ -140,8 +138,18 @@ export function IndicadorHomeProvider({ children }: { children: ReactNode }) {
     void loadHome()
   }, [loadHome])
 
+  useEffect(() => {
+    return subscribeReferralDataMutated(() => {
+      if (isDev()) {
+        console.log("[indicador:realtime]", "referral-data-mutated — reload home")
+      }
+      void loadHome()
+    })
+  }, [loadHome])
+
   useRealtimeReload(loadHome, REALTIME_TABLES_INDICADOR, {
     enabled: !isDataProviderMock(),
+    logPrefix: "[indicador:realtime]",
   })
 
   return (

@@ -343,6 +343,7 @@ create table if not exists public.notifications (
   data jsonb not null default '{}'::jsonb,
   is_read boolean not null default false,
   read_at timestamptz,
+  action_url text,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );

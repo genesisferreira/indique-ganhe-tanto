@@ -1,6 +1,10 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  REALTIME_TABLES_INDICADOR,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -43,21 +47,23 @@ export default function MinhasIndicacoesPage() {
   const [listaIndicacoes, setListaIndicacoes] =
     useState<Indicacao[]>(mockIndicacoes)
 
-  useEffect(() => {
+  const loadLista = useCallback(async () => {
     if (isDataProviderMock()) {
       setListaIndicacoes(mockIndicacoes)
       return
     }
-    let cancelled = false
-    void (async () => {
-      const remote = await loadIndicadorReferralsListFromSupabase()
-      if (cancelled) return
-      setListaIndicacoes(remote ?? [])
-    })()
-    return () => {
-      cancelled = true
-    }
+    const remote = await loadIndicadorReferralsListFromSupabase()
+    setListaIndicacoes(remote ?? [])
   }, [mockIndicacoes])
+
+  useEffect(() => {
+    void loadLista()
+  }, [loadLista])
+
+  useRealtimeReload(loadLista, REALTIME_TABLES_INDICADOR, {
+    enabled: !isDataProviderMock(),
+    logPrefix: "[indicador:realtime]",
+  })
 
   const filteredIndicacoes = listaIndicacoes.filter((indicacao) => {
     const matchesSearch = indicacao.nomeIndicado

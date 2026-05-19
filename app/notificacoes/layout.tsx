@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react"
 import { usePathname, useRouter } from "next/navigation"
-import { Toaster } from "sonner"
 import { AuthenticatedDashboardShell } from "@/components/layout/authenticated-dashboard-shell"
 import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
 import { mockDataService } from "@/lib/services/mock-data.service"
@@ -90,7 +89,6 @@ export default function NotificacoesLayout({
       <AuthenticatedDashboardShell variant={shell.variant} lockedProfile={shell.profile}>
         {children}
       </AuthenticatedDashboardShell>
-      <Toaster richColors closeButton />
     </>
   )
 }

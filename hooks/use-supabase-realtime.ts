@@ -17,11 +17,15 @@ export type SupabaseRealtimeFilter = {
   value: string
 }
 
+/**
+ * Indicador: referrals (status), rewards, wallet, payments.
+ * Notificações: canal dedicado em `useNotifications` (`notifications:{profileId}`).
+ */
 export const REALTIME_TABLES_INDICADOR: SupabaseRealtimeTable[] = [
+  "referrals",
   "rewards",
   "wallet_transactions",
   "payments",
-  "notifications",
 ]
 
 export const REALTIME_TABLES_COMERCIAL: SupabaseRealtimeTable[] = [
@@ -29,12 +33,12 @@ export const REALTIME_TABLES_COMERCIAL: SupabaseRealtimeTable[] = [
   "referral_history",
 ]
 
+/** Notificações: apenas `useNotifications` (canal dedicado `notifications:{profileId}`). */
 export const REALTIME_TABLES_ADMIN: SupabaseRealtimeTable[] = [
   "referrals",
   "rewards",
   "wallet_transactions",
   "payments",
-  "notifications",
 ]
 
 type UseSupabaseRealtimeOptions = {
@@ -69,18 +73,42 @@ export function useSupabaseRealtime({
 }: UseSupabaseRealtimeOptions): void {
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const channelRef = useRef<RealtimeChannel | null>(null)
+  const channelKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!enabled) return
 
-    let channel: RealtimeChannel | null = null
+    const filterSuffix = filter ? `${filter.column}=${filter.value}` : "all"
+    const channelName = `realtime:${table}:${filterSuffix}`
+
+    if (channelRef.current && channelKeyRef.current === channelName) {
+      devLogRealtime("skip — canal já ativo", { channelName })
+      return
+    }
+
     let disposed = false
 
-    const subscribe = () => {
+    const teardown = async () => {
+      const ch = channelRef.current
+      if (!ch) return
+      channelRef.current = null
+      channelKeyRef.current = null
       try {
         const supabase = getSupabaseClient()
-        const filterSuffix = filter ? `${filter.column}=${filter.value}` : "all"
-        const channelName = `realtime:${table}:${filterSuffix}`
+        await supabase.removeChannel(ch)
+        devLogRealtime("unsubscribe", { table, channelName })
+      } catch {
+        // cleanup silencioso
+      }
+    }
+
+    const subscribe = async () => {
+      await teardown()
+      if (disposed) return
+
+      try {
+        const supabase = getSupabaseClient()
 
         const config: {
           event: "*"
@@ -96,7 +124,7 @@ export function useSupabaseRealtime({
           config.filter = `${filter.column}=eq.${filter.value}`
         }
 
-        channel = supabase
+        const channel = supabase
           .channel(channelName)
           .on("postgres_changes", config, (payload) => {
             devLogRealtime("evento", {
@@ -110,10 +138,14 @@ export function useSupabaseRealtime({
             if (disposed) return
             devLogRealtime("status", {
               table,
+              channelName,
               status,
               error: err?.message ?? null,
             })
           })
+
+        channelRef.current = channel
+        channelKeyRef.current = channelName
       } catch (e) {
         devLogRealtime("falha ao subscrever (ignorado)", {
           table,
@@ -122,18 +154,11 @@ export function useSupabaseRealtime({
       }
     }
 
-    subscribe()
+    void subscribe()
 
     return () => {
       disposed = true
-      if (!channel) return
-      try {
-        const supabase = getSupabaseClient()
-        void supabase.removeChannel(channel)
-        devLogRealtime("unsubscribe", { table })
-      } catch {
-        // cleanup silencioso
-      }
+      void teardown()
     }
   }, [table, filter?.column, filter?.value, enabled])
 }
@@ -148,6 +173,8 @@ export function useSupabaseRealtimeTables(
 ): void {
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const channelRef = useRef<RealtimeChannel | null>(null)
+  const channelKeyRef = useRef<string | null>(null)
   const enabled = options?.enabled ?? true
   const filter = options?.filter
   const key = tablesKey(tables)
@@ -155,14 +182,36 @@ export function useSupabaseRealtimeTables(
   useEffect(() => {
     if (!enabled || tables.length === 0) return
 
-    let channel: RealtimeChannel | null = null
+    const filterSuffix = filter ? `${filter.column}=${filter.value}` : "all"
+    const channelName = `realtime:multi:${key}:${filterSuffix}`
+
+    if (channelRef.current && channelKeyRef.current === channelName) {
+      devLogRealtime("skip multi — canal já ativo", { channelName })
+      return
+    }
+
     let disposed = false
 
-    const subscribe = () => {
+    const teardown = async () => {
+      const ch = channelRef.current
+      if (!ch) return
+      channelRef.current = null
+      channelKeyRef.current = null
       try {
         const supabase = getSupabaseClient()
-        const filterSuffix = filter ? `${filter.column}=${filter.value}` : "all"
-        const channelName = `realtime:multi:${key}:${filterSuffix}`
+        await supabase.removeChannel(ch)
+        devLogRealtime("unsubscribe multi", { tables: key, channelName })
+      } catch {
+        // cleanup silencioso
+      }
+    }
+
+    const subscribe = async () => {
+      await teardown()
+      if (disposed) return
+
+      try {
+        const supabase = getSupabaseClient()
 
         let ch = supabase.channel(channelName)
 
@@ -190,14 +239,18 @@ export function useSupabaseRealtimeTables(
           })
         }
 
-        channel = ch.subscribe((status, err) => {
+        const channel = ch.subscribe((status, err) => {
           if (disposed) return
           devLogRealtime("status multi", {
             tables: key,
+            channelName,
             status,
             error: err?.message ?? null,
           })
         })
+
+        channelRef.current = channel
+        channelKeyRef.current = channelName
       } catch (e) {
         devLogRealtime("falha ao subscrever multi (ignorado)", {
           tables: key,
@@ -206,18 +259,11 @@ export function useSupabaseRealtimeTables(
       }
     }
 
-    subscribe()
+    void subscribe()
 
     return () => {
       disposed = true
-      if (!channel) return
-      try {
-        const supabase = getSupabaseClient()
-        void supabase.removeChannel(channel)
-        devLogRealtime("unsubscribe multi", { tables: key })
-      } catch {
-        // cleanup silencioso
-      }
+      void teardown()
     }
   }, [key, enabled, filter?.column, filter?.value, tables])
 }
@@ -271,9 +317,28 @@ export function useDebouncedRealtimeReload(
 export function useRealtimeReload(
   reload: () => void | Promise<void>,
   tables: SupabaseRealtimeTable[],
-  options?: { enabled?: boolean; debounceMs?: number }
+  options?: {
+    enabled?: boolean
+    debounceMs?: number
+    filter?: SupabaseRealtimeFilter
+    /** Prefixo de log em dev (ex.: `[indicador:realtime]`). */
+    logPrefix?: string
+  }
 ): void {
   const enabled = options?.enabled ?? true
-  const debounced = useDebouncedRealtimeReload(reload, options?.debounceMs ?? 300)
-  useSupabaseRealtimeTables(tables, debounced, { enabled })
+  const logPrefix = options?.logPrefix
+
+  const tableKey = tablesKey(tables)
+  const reloadWithLog = useCallback(() => {
+    if (logPrefix && isDev()) {
+      console.log(logPrefix, "reload", { tables: tableKey })
+    }
+    return reload()
+  }, [reload, logPrefix, tableKey])
+
+  const debounced = useDebouncedRealtimeReload(reloadWithLog, options?.debounceMs ?? 300)
+  useSupabaseRealtimeTables(tables, debounced, {
+    enabled,
+    filter: options?.filter,
+  })
 }

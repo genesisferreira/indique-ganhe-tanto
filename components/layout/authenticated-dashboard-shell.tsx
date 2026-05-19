@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react"
 import { usePathname, useRouter } from "next/navigation"
+import { AppToaster } from "@/components/notifications/app-toaster"
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
+import { NotificationsProvider } from "@/components/notifications/notifications-provider"
 import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
 import { mockDataService } from "@/lib/services/mock-data.service"
 import type { AuthProfileBasics } from "@/types/auth-profile"
@@ -126,26 +128,37 @@ export function AuthenticatedDashboardShell({
   if (!ready) {
     if (redirecting) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">
-          Redirecionando…
-        </div>
+        <>
+          <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">
+            Redirecionando…
+          </div>
+          <AppToaster variant={variant} />
+        </>
       )
     }
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">
-        Carregando…
-      </div>
+      <>
+        <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">
+          Carregando…
+        </div>
+        <AppToaster variant={variant} />
+      </>
     )
   }
 
   return (
-    <DashboardLayout
-      variant={variant}
-      userName={userName}
-      userRole={userRoleLabel}
-      policyRole={policyRole}
-    >
-      {children}
-    </DashboardLayout>
+    <>
+      <NotificationsProvider>
+        <DashboardLayout
+          variant={variant}
+          userName={userName}
+          userRole={userRoleLabel}
+          policyRole={policyRole}
+        >
+          {children}
+        </DashboardLayout>
+      </NotificationsProvider>
+      <AppToaster variant={variant} />
+    </>
   )
 }

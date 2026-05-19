@@ -14,7 +14,6 @@ import {
   markUserNotificationAsRead,
 } from "@/lib/services/supabase-data.service"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
-import { useRealtimeReload } from "@/hooks/use-supabase-realtime"
 import type { NotificationItem } from "@/types/notification"
 import type { UserRole } from "@/types/user"
 import { ExternalLink } from "lucide-react"
@@ -25,11 +24,12 @@ const MOCK_FALLBACK: NotificationItem[] = [
     title: "Recompensa gerada (exemplo)",
     message:
       "Sua indicação foi aprovada e uma recompensa foi gerada. Ela será liberada após confirmação da primeira mensalidade.",
-    notificationType: "recompensa",
-    data: {},
-    isRead: false,
+    type: "recompensa",
+    metadata: {},
+    read: false,
     readAt: null,
     createdAt: new Date(),
+    actionUrl: null,
   },
 ]
 
@@ -118,15 +118,11 @@ export default function NotificacoesPage() {
     void reload()
   }, [reload])
 
-  useRealtimeReload(reload, ["notifications"], {
-    enabled: !isDataProviderMock(),
-  })
-
   const onMarkOne = async (id: string) => {
     if (source === "mock" && id.startsWith("mock-")) {
       setItems((prev) =>
         prev.map((n) =>
-          n.id === id ? { ...n, isRead: true, readAt: new Date() } : n
+          n.id === id ? { ...n, read: true, readAt: new Date() } : n
         )
       )
       toast.success("Marcada como lida (demonstração).")
@@ -144,7 +140,7 @@ export default function NotificacoesPage() {
   const onMarkAll = async () => {
     if (source === "mock") {
       setItems((prev) =>
-        prev.map((n) => ({ ...n, isRead: true, readAt: new Date() }))
+        prev.map((n) => ({ ...n, read: true, readAt: new Date() }))
       )
       toast.success("Todas marcadas como lidas (demonstração).")
       return
@@ -162,7 +158,7 @@ export default function NotificacoesPage() {
     await reload()
   }
 
-  const unread = items.filter((n) => !n.isRead).length
+  const unread = items.filter((n) => !n.read).length
 
   return (
     <div className="space-y-6">
@@ -197,27 +193,34 @@ export default function NotificacoesPage() {
       ) : (
         <ul className="space-y-3">
           {items.map((n) => {
-            const referralId = strData(n.data, "referral_id")
-            const paymentId = strData(n.data, "payment_id")
-            const rewardId = strData(n.data, "reward_id")
-            const refLink = referralId ? referralHref(role, referralId) : null
-            const payLink = paymentId ? paymentHref(role) : null
+            const referralId = strData(n.metadata, "referral_id")
+            const paymentId = strData(n.metadata, "payment_id")
+            const rewardId = strData(n.metadata, "reward_id")
+            const refLink =
+              n.actionUrl ??
+              (referralId ? referralHref(role, referralId) : null)
+            const payLink =
+              n.actionUrl && n.actionUrl.includes("pagamento")
+                ? n.actionUrl
+                : paymentId
+                  ? paymentHref(role)
+                  : null
 
             return (
               <li key={n.id}>
-                <Card className={!n.isRead ? "border-primary/30" : undefined}>
+                <Card className={!n.read ? "border-primary/30" : undefined}>
                   <CardContent className="p-4 space-y-2">
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="space-y-1 min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="font-semibold text-foreground">{n.title}</h3>
-                          {!n.isRead && (
+                          {!n.read && (
                             <Badge variant="default" className="text-xs shrink-0">
                               Não lida
                             </Badge>
                           )}
                           <Badge variant="outline" className="text-xs shrink-0">
-                            {tipoLabel(n.notificationType)}
+                            {tipoLabel(n.type)}
                           </Badge>
                         </div>
                         <p className="text-sm text-muted-foreground whitespace-pre-wrap">
@@ -234,7 +237,7 @@ export default function NotificacoesPage() {
                         variant="secondary"
                         size="sm"
                         className="shrink-0"
-                        disabled={n.isRead}
+                        disabled={n.read}
                         onClick={() => void onMarkOne(n.id)}
                       >
                         Marcar como lida

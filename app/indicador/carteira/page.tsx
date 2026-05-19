@@ -60,6 +60,9 @@ export default function CarteiraPage() {
   const [enviandoSaque, setEnviandoSaque] = useState(false)
 
   const recarregar = useCallback(async () => {
+    if (process.env.NODE_ENV === "development") {
+      console.log("[indicador:wallet-refresh]", "recarregar carteira")
+    }
     const payload = await loadIndicadorCarteiraFromSupabase()
     if (payload) {
       setSaldoDisponivel(payload.availableBalance)
@@ -97,6 +100,7 @@ export default function CarteiraPage() {
 
   useRealtimeReload(recarregar, REALTIME_TABLES_INDICADOR, {
     enabled: !isDataProviderMock(),
+    logPrefix: "[indicador:realtime]",
   })
 
   const handleSolicitarSaque = async () => {

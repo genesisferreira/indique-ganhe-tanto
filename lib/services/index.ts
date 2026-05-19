@@ -41,7 +41,6 @@ export {
   loadIndicadorReferralsListFromSupabase,
   loadUserNotificationsFromSupabase,
   markAllUserNotificationsAsRead,
-  markNotificationAsRead,
   markUserNotificationAsRead,
   processExpiredLeadAssignments,
 } from './supabase-data.service'
@@ -60,5 +59,22 @@ export type {
   EnsureRewardForReferralResult,
   FinancialIntegrityReport,
 } from './supabase-data.service'
-export type { NotificationItem } from '@/types/notification'
+export type {
+  NotificationItem,
+  NotificationToastPayload,
+} from '@/types/notification'
+export type { CreateNotificationForProfileInput } from './notification.service'
+export {
+  loadUnreadNotificationsCount,
+  loadRecentNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  createNotificationFromSupabase,
+  createNotificationForProfileFromSupabase,
+  notifyAdminsOfNewReferralFromSupabase,
+  notifyIndicatorReferralProgressFromSupabase,
+  notifyIndicatorRewardReleasedFromSupabase,
+  createRealtimeToastPayload,
+  NOTIFICATION_RECENT_LIMIT,
+} from './notification.service'
 export type { AuthProfileBasics } from '@/types/auth-profile'
