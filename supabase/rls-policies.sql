@@ -281,11 +281,11 @@ for update
 to authenticated
 using (
   commercial_profile_id = auth.uid() -- comercial atualiza apenas atribuídas a ele
-  or public.is_admin_master()
+  or public.is_admin_write_any()
 )
 with check (
   commercial_profile_id = auth.uid()
-  or public.is_admin_master()
+  or public.is_admin_write_any()
 );
 
 drop policy if exists referrals_delete_policy on public.referrals;
@@ -354,6 +354,10 @@ to authenticated
 using (
   commercial_profile_id = auth.uid()
   or public.is_admin_read_any()
+  or (
+    public.is_indicator()
+    and availability_status = 'disponivel'
+  )
 );
 
 drop policy if exists commercial_availability_insert_policy on public.commercial_availability;
@@ -411,6 +415,15 @@ for insert
 to authenticated
 with check (
   public.is_admin_write_any()
+  or (
+    public.is_comercial()
+    and exists (
+      select 1
+      from public.referrals r
+      where r.id = rewards.referral_id
+        and r.commercial_profile_id = auth.uid()
+    )
+  )
 );
 
 drop policy if exists rewards_update_policy on public.rewards;

@@ -1814,11 +1814,23 @@ export async function insertIndicadorReferral(
     }
 
     if (insertedReferralId && selectedCommercialId) {
+      void createNotificationForProfileFromSupabase({
+        profileId: selectedCommercialId,
+        notificationType: "indicacao",
+        title: "Novo lead atribuído",
+        message: "Um novo lead foi atribuído automaticamente para você.",
+        data: {
+          action: "auto_assign",
+          referral_id: insertedReferralId,
+        },
+        actionUrl: `/comercial/leads/${insertedReferralId}`,
+      })
+
       const { data: histRows, error: histError } = await db
         .from("referral_history")
         .insert({
           referral_id: insertedReferralId,
-          actor_profile_id: selectedCommercialId,
+          actor_profile_id: user.id,
           old_status: "pendente",
           new_status: "em_atendimento",
           action_note: "Lead atribuído automaticamente",
@@ -1837,13 +1849,12 @@ export async function insertIndicadorReferral(
         rows: histRows ?? [],
       })
 
-      if (histError) {
-        return {
-          ok: false,
-          message:
-            histError.message ||
-            "Indicação criada, mas não foi possível registrar o histórico.",
-        }
+      if (histError && isDev()) {
+        console.warn(
+          "[insert-referral:supabase]",
+          "histórico auto_assign falhou (indicação já criada)",
+          histError.message
+        )
       }
     } else {
       devLogInsertReferral("sem autoatribuição; histórico não criado", {
@@ -2775,11 +2786,9 @@ export async function updateAdminReferralStatusFromSupabase(
     })
 
     if (histErr) {
-      logAdminReferralsStatus("histórico falhou", { message: histErr.message })
-      return {
-        ok: false,
-        message: histErr.message || "Status atualizado, mas falhou ao registrar histórico.",
-      }
+      logAdminReferralsStatus("histórico falhou (status já persistido)", {
+        message: histErr.message,
+      })
     }
 
     if (newStatus === "aprovada") {
@@ -4705,12 +4714,7 @@ export async function updateComercialLeadStatus(
     })
     const noteTrimmed = note?.trim() ?? ""
     const nowIso = new Date().toISOString()
-    const updatePayload: {
-      status: string
-      notes?: string
-      last_interaction_at: string
-      first_response_at: string
-    } = {
+    const updatePayload: Record<string, unknown> = {
       status: nextReferralStatus,
       last_interaction_at: nowIso,
       first_response_at: before.first_response_at ?? nowIso,
@@ -4718,11 +4722,18 @@ export async function updateComercialLeadStatus(
     if (noteTrimmed) {
       updatePayload.notes = noteTrimmed
     }
+    if (finalStatus === "aprovada" && oldStatus !== "aprovada") {
+      updatePayload.approved_at = nowIso
+    }
+    if (finalStatus === "recusada") {
+      updatePayload.rejected_at = nowIso
+    }
 
     const { data: updateRows, error: updateError } = await db
       .from("referrals")
       .update(updatePayload)
       .eq("id", referralId)
+      .eq("commercial_profile_id", user.id)
       .select(
         "id, status, notes, updated_at, first_response_at, last_interaction_at, assigned_at"
       )
@@ -4766,6 +4777,30 @@ export async function updateComercialLeadStatus(
       }
     }
 
+    const updatedRow = (updateRows?.[0] ?? null) as {
+      id?: string
+      status?: string
+    } | null
+    const updateConfirmed =
+      Boolean(updatedRow) &&
+      updatedRow!.id === referralId &&
+      updatedRow!.status === nextReferralStatus
+
+    if (!updateConfirmed) {
+      devLogComercialLeadUpdate("update sem efeito (RLS ou lead não atribuído ao comercial)", {
+        referralId,
+        commercialProfileId: user.id,
+        rowCount: updateRows?.length ?? 0,
+        updatedRow,
+        esperadoStatus: nextReferralStatus,
+      })
+      return {
+        ok: false,
+        message:
+          "Não foi possível atualizar o lead. Verifique se o lead está atribuído a você ou assuma o lead antes.",
+      }
+    }
+
     if (oldStatus !== nextReferralStatus) {
       if (isDev()) {
         console.log("[indicator:trigger]", {
@@ -4803,23 +4838,11 @@ export async function updateComercialLeadStatus(
       rows: historyRows ?? [],
     })
 
-    if (historyError) {
-      if (isDev()) {
-        console.warn(
-          COMERCIAL_LEAD_UPDATE_LOG_PREFIX,
-          "falha insert referral_history",
-          {
-            message: historyError.message,
-            code: historyError.code ?? null,
-            details: (historyError as { details?: string }).details ?? null,
-            hint: (historyError as { hint?: string }).hint ?? null,
-          }
-        )
-      }
-      return {
-        ok: false,
-        message: "Status atualizado, mas houve falha ao registrar histórico.",
-      }
+    if (historyError && isDev()) {
+      console.warn(COMERCIAL_LEAD_UPDATE_LOG_PREFIX, "falha insert referral_history", {
+        message: historyError.message,
+        code: historyError.code ?? null,
+      })
     }
 
     if (
@@ -5028,6 +5051,30 @@ function devLogWalletLedger(...args: unknown[]): void {
 function devWarnPixWithdrawal(reason: string): void {
   if (!isDev()) return
   console.warn(PIX_WITHDRAWAL_LOG_PREFIX, "fallback / aviso →", reason)
+}
+
+const PIX_KEY_TYPES_ALLOWED: TipoChavePix[] = [
+  "cpf",
+  "cnpj",
+  "email",
+  "telefone",
+  "aleatoria",
+]
+
+function devLogPixKey(tag: string, payload?: unknown): void {
+  if (!isDev()) return
+  const label = `[pix-key:${tag}]`
+  if (payload !== undefined) {
+    console.log(label, payload)
+  } else {
+    console.log(label)
+  }
+}
+
+function normalizePixKeyType(keyType: string): TipoChavePix {
+  return PIX_KEY_TYPES_ALLOWED.includes(keyType as TipoChavePix)
+    ? (keyType as TipoChavePix)
+    : "cpf"
 }
 
 function isPixWithdrawalRpcIdempotent(raw: unknown): boolean {
@@ -5488,6 +5535,18 @@ async function rpcPixWithdrawal(
     devLogPixWithdrawal("rpc", fn, args)
     const { data, error } = await dbRpc.rpc(fn, args)
     devLogPixWithdrawal("rpc resultado", fn, { error: error?.message ?? null, data })
+    if (
+      fn === "request_pix_withdrawal" &&
+      isDev() &&
+      data &&
+      typeof data === "object"
+    ) {
+      const o = data as Record<string, unknown>
+      console.log("[pix-withdrawal:notification]", {
+        admin_notifications_created: o.admin_notifications_created ?? null,
+        payment_id: o.payment_id ?? null,
+      })
+    }
     if (error) {
       const err = error as { message?: string; details?: string; hint?: string }
       const parts = [err.message, err.details, err.hint].filter(
@@ -5551,17 +5610,9 @@ export async function requestPixWithdrawalFromSupabase(
           payment_id: result.paymentId ?? null,
           amount,
         },
+        action_url: "/indicador/pagamentos",
       })
     }
-    void insertNotificationForAdmins({
-      notification_type: "carteira",
-      title: "Novo saque Pix solicitado",
-      message: "Um indicador solicitou saque Pix e aguarda análise.",
-      data: {
-        action: "pix_withdrawal_requested",
-        payment_id: result.paymentId ?? null,
-      },
-    })
   }
 
   return result
@@ -5926,6 +5977,13 @@ export async function loadIndicadorCarteiraFromSupabase(): Promise<IndicadorCart
       !pixRes.error && pixRes.data
         ? String((pixRes.data as { key_value: string }).key_value)
         : null
+
+    devLogPixKey("wallet-load", {
+      profileId: uid,
+      error: pixRes.error?.message ?? null,
+      hasPrimaryKey: Boolean(chavePix),
+      keyPreview: chavePix ? `${chavePix.slice(0, 4)}…` : null,
+    })
 
     const rewardsCount = rewards.length
 
@@ -6355,6 +6413,8 @@ export async function loadIndicadorPrimaryPixKeyFromSupabase(): Promise<{
   keyValue: string
 } | null> {
   try {
+    devLogPixKey("load", { status: "start" })
+
     const supabase = getSupabaseClient()
     const db = supabase as unknown as {
       from: (t: string) => ReturnType<typeof supabase.from>
@@ -6363,7 +6423,10 @@ export async function loadIndicadorPrimaryPixKeyFromSupabase(): Promise<{
       data: { user },
       error: authErr,
     } = await supabase.auth.getUser()
-    if (authErr || !user) return null
+    if (authErr || !user) {
+      devLogPixKey("load", { status: "no_session" })
+      return null
+    }
 
     const { data: profile, error: profileError } = await db
       .from("profiles")
@@ -6371,8 +6434,14 @@ export async function loadIndicadorPrimaryPixKeyFromSupabase(): Promise<{
       .eq("id", user.id)
       .maybeSingle()
 
-    if (profileError || !profile) return null
-    if ((profile as { role: string }).role !== "indicador") return null
+    if (profileError || !profile) {
+      devLogPixKey("load", { status: "profile_error", message: profileError?.message })
+      return null
+    }
+    if ((profile as { role: string }).role !== "indicador") {
+      devLogPixKey("load", { status: "not_indicador", role: (profile as { role: string }).role })
+      return null
+    }
 
     const { data, error } = await db
       .from("pix_keys")
@@ -6382,24 +6451,175 @@ export async function loadIndicadorPrimaryPixKeyFromSupabase(): Promise<{
       .maybeSingle()
 
     if (error) {
-      devWarnPixWithdrawal(`pix_keys chave-pix: ${error.message}`)
+      devLogPixKey("load", { status: "error", message: error.message, code: error.code })
       return null
     }
 
     if (!data) {
+      devLogPixKey("load", { status: "empty", profileId: user.id })
       return { keyType: "cpf", keyValue: "" }
     }
 
     const row = data as { key_type: string; key_value: string }
-    const allowed: TipoChavePix[] = ["cpf", "cnpj", "email", "telefone", "aleatoria"]
-    const keyType = (allowed.includes(row.key_type as TipoChavePix)
-      ? row.key_type
-      : "cpf") as TipoChavePix
-
-    return { keyType, keyValue: row.key_value ?? "" }
+    const result = {
+      keyType: normalizePixKeyType(row.key_type),
+      keyValue: row.key_value ?? "",
+    }
+    devLogPixKey("load", {
+      status: "success",
+      profileId: user.id,
+      keyType: result.keyType,
+      hasValue: Boolean(result.keyValue),
+    })
+    return result
   } catch (e) {
-    devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
+    const msg = e instanceof Error ? e.message : String(e)
+    devLogPixKey("load", { status: "exception", message: msg })
     return null
+  }
+}
+
+/**
+ * Grava ou atualiza a chave Pix primária do indicador (UPSERT lógico em pix_keys).
+ */
+export async function saveIndicadorPrimaryPixKeyFromSupabase(
+  keyType: TipoChavePix,
+  keyValue: string
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const trimmed = keyValue.trim()
+  if (!trimmed) {
+    return { ok: false, message: "Informe a chave Pix." }
+  }
+  if (!PIX_KEY_TYPES_ALLOWED.includes(keyType)) {
+    return { ok: false, message: "Tipo de chave Pix inválido." }
+  }
+
+  try {
+    devLogPixKey("save:start", { keyType, valueLength: trimmed.length })
+
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+    if (authErr || !user) {
+      devLogPixKey("save:error", { reason: "no_session" })
+      return { ok: false, message: "Sessão não encontrada. Faça login novamente." }
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    if (profileError || !profile) {
+      devLogPixKey("save:error", { reason: "profile", message: profileError?.message })
+      return { ok: false, message: "Perfil não encontrado." }
+    }
+    if ((profile as { role: string }).role !== "indicador") {
+      devLogPixKey("save:error", { reason: "not_indicador" })
+      return { ok: false, message: "Apenas indicadores podem cadastrar chave Pix." }
+    }
+
+    const nowIso = new Date().toISOString()
+    const { data: existing, error: fetchErr } = await db
+      .from("pix_keys")
+      .select("id")
+      .eq("profile_id", user.id)
+      .eq("is_primary", true)
+      .maybeSingle()
+
+    if (fetchErr) {
+      devLogPixKey("save:error", { reason: "fetch_primary", message: fetchErr.message })
+      return { ok: false, message: "Não foi possível verificar a chave existente." }
+    }
+
+    const existingId = (existing as { id?: string } | null)?.id ?? null
+    const payload = {
+      profile_id: user.id,
+      key_type: keyType,
+      key_value: trimmed,
+      is_primary: true,
+      updated_at: nowIso,
+    }
+
+    if (existingId) {
+      const { data: updated, error: updateErr } = await db
+        .from("pix_keys")
+        .update({
+          key_type: keyType,
+          key_value: trimmed,
+          is_primary: true,
+          updated_at: nowIso,
+        })
+        .eq("id", existingId)
+        .eq("profile_id", user.id)
+        .select("id, key_type, key_value, is_primary")
+        .maybeSingle()
+
+      if (updateErr || !updated) {
+        devLogPixKey("save:error", {
+          reason: "update",
+          message: updateErr?.message ?? "no_row",
+          code: updateErr?.code ?? null,
+        })
+        const hint =
+          updateErr?.code === "23505"
+            ? " Esta chave Pix já está cadastrada para outro usuário."
+            : ""
+        return {
+          ok: false,
+          message: (updateErr?.message || "Não foi possível atualizar a chave Pix.") + hint,
+        }
+      }
+    } else {
+      const { data: inserted, error: insertErr } = await db
+        .from("pix_keys")
+        .insert(payload)
+        .select("id, key_type, key_value, is_primary")
+        .maybeSingle()
+
+      if (insertErr || !inserted) {
+        devLogPixKey("save:error", {
+          reason: "insert",
+          message: insertErr?.message ?? "no_row",
+          code: insertErr?.code ?? null,
+        })
+        const hint =
+          insertErr?.code === "23505"
+            ? " Esta chave Pix já está cadastrada para outro usuário."
+            : ""
+        return {
+          ok: false,
+          message: (insertErr?.message || "Não foi possível cadastrar a chave Pix.") + hint,
+        }
+      }
+    }
+
+    const verify = await loadIndicadorPrimaryPixKeyFromSupabase()
+    if (!verify || verify.keyValue !== trimmed || verify.keyType !== keyType) {
+      devLogPixKey("save:error", {
+        reason: "verify_failed",
+        expected: { keyType, keyValue: trimmed },
+        got: verify,
+      })
+      return {
+        ok: false,
+        message:
+          "A chave foi enviada, mas não foi confirmada no banco. Verifique permissões (RLS) de pix_keys.",
+      }
+    }
+
+    devLogPixKey("save:success", { profileId: user.id, keyType, existingId })
+    return { ok: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    devLogPixKey("save:error", { reason: "exception", message: msg })
+    return { ok: false, message: msg || "Erro inesperado ao salvar chave Pix." }
   }
 }
 
@@ -6830,8 +7050,38 @@ export async function loadAdminAllPaymentsFromSupabase(): Promise<Pagamento[] | 
       devWarnPixWithdrawal(`admin all payments: ${error.message}`)
       return null
     }
-    const mapped = ((data ?? []) as PaymentRowDb[]).map(paymentRowToPagamento)
-    return await expandPaymentReceiptUrlsInPagamentos(mapped)
+
+    const rows = (data ?? []) as PaymentRowDb[]
+    const indicatorIds = [...new Set(rows.map((r) => r.indicator_profile_id))]
+    const profileMap = new Map<string, AdminProfileShortRow>()
+    if (indicatorIds.length > 0) {
+      const { data: profs, error: pErr } = await db
+        .from("profiles")
+        .select("id, full_name, email, phone, cpf, is_active, created_at")
+        .in("id", indicatorIds)
+      if (!pErr && profs) {
+        for (const pr of profs as AdminProfileShortRow[]) {
+          profileMap.set(pr.id, pr)
+        }
+      }
+    }
+
+    const mappedBase = rows.map((row) => {
+      const p = paymentRowToPagamento(row)
+      const pr = profileMap.get(row.indicator_profile_id)
+      if (pr) {
+        p.indicador = stubIndicadorFromAdminProfile(row.indicator_profile_id, {
+          full_name: pr.full_name,
+          email: pr.email,
+          phone: pr.phone,
+          cpf: pr.cpf,
+          is_active: pr.is_active,
+          created_at: pr.created_at,
+        })
+      }
+      return p
+    })
+    return await expandPaymentReceiptUrlsInPagamentos(mappedBase)
   } catch (e) {
     devWarnPixWithdrawal(e instanceof Error ? e.message : String(e))
     return null

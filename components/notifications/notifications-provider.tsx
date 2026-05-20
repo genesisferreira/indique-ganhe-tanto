@@ -3,13 +3,22 @@
 import { createContext, useContext, type ReactNode } from "react"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { useNotifications, type UseNotificationsResult } from "@/hooks/use-notifications"
+import type { AuthProfileBasics } from "@/types/auth-profile"
 
 const NotificationsContext = createContext<UseNotificationsResult | null>(null)
 
-export function NotificationsProvider({ children }: { children: ReactNode }) {
+export function NotificationsProvider({
+  children,
+  initialProfile = null,
+}: {
+  children: ReactNode
+  /** Perfil já resolvido no shell — evita subscribe com profileId atrasado. */
+  initialProfile?: AuthProfileBasics | null
+}) {
   const value = useNotifications({
     enabled: !isDataProviderMock(),
     showToasts: true,
+    initialProfile,
   })
 
   return (

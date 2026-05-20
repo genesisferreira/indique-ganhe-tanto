@@ -47,6 +47,9 @@ create unique index if not exists payments_one_open_pix_withdrawal_per_indicator
   where payment_kind = 'pix_withdrawal'
     and status in ('pendente'::public.payment_status, 'aprovado'::public.payment_status);
 
+-- Notificação admins: preferir supabase/patch-notifications-pix-withdrawal.sql (loop + debug).
+-- Se reaplicar só este arquivo, execute patch-notifications-pix-withdrawal.sql antes.
+
 create or replace function public.request_pix_withdrawal(p_amount numeric)
 returns jsonb
 language plpgsql
@@ -64,6 +67,7 @@ declare
   v_payment_id uuid;
   v_reserve_tx uuid;
   v_now timestamptz := timezone('utc', now());
+  v_notify_count int;
 begin
   select p.role into v_role from public.profiles p where p.id = v_uid;
   if v_role is distinct from 'indicador'::public.user_role then
@@ -133,9 +137,12 @@ begin
     jsonb_build_object('flow', 'pix_withdrawal_request')
   );
 
+  v_notify_count := public.notify_admins_pix_withdrawal_requested(v_payment_id, v_uid, p_amount);
+
   return jsonb_build_object(
     'ok', true, 'payment_id', v_payment_id, 'status', 'pendente',
-    'wallet_transaction_id', v_reserve_tx, 'balance_after', v_after
+    'wallet_transaction_id', v_reserve_tx, 'balance_after', v_after,
+    'admin_notifications_created', v_notify_count
   );
 exception
   when unique_violation then

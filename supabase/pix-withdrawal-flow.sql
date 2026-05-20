@@ -142,6 +142,8 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- Notificação admins: definida em patch-notifications-pix-withdrawal.sql (aplicar antes deste fluxo).
+
 -- 1) Solicitação de saque (indicador)
 -- ---------------------------------------------------------------------------
 
@@ -255,6 +257,8 @@ begin
     ),
     jsonb_build_object('flow', 'pix_withdrawal_request')
   );
+
+  perform public.notify_admins_pix_withdrawal_requested(v_payment_id, v_uid, p_amount);
 
   return jsonb_build_object(
     'ok', true,

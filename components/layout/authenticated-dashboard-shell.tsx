@@ -38,6 +38,9 @@ export function AuthenticatedDashboardShell({
   const [userName, setUserName] = useState("")
   const [userRoleLabel, setUserRoleLabel] = useState("")
   const [policyRole, setPolicyRole] = useState<UserRole | null>(null)
+  const [sessionProfile, setSessionProfile] = useState<AuthProfileBasics | null>(
+    lockedProfile ?? null
+  )
   const [redirecting, setRedirecting] = useState(false)
 
   useEffect(() => {
@@ -49,15 +52,42 @@ export function AuthenticatedDashboardShell({
           setUserName(snap.currentIndicador.nome)
           setUserRoleLabel(formatUserRoleLabel("indicador"))
           setPolicyRole("indicador")
+          setSessionProfile({
+            id: "mock-indicador",
+            fullName: snap.currentIndicador.nome,
+            email: snap.currentIndicador.email,
+            phone: snap.currentIndicador.telefone,
+            role: "indicador",
+            avatarUrl: null,
+            createdAt: null,
+          })
         } else if (variant === "comercial") {
           setUserName(snap.currentComercial.nome)
           setUserRoleLabel(formatUserRoleLabel("comercial"))
           setPolicyRole("comercial")
+          setSessionProfile({
+            id: "mock-comercial",
+            fullName: snap.currentComercial.nome,
+            email: snap.currentComercial.email,
+            phone: snap.currentComercial.telefone,
+            role: "comercial",
+            avatarUrl: null,
+            createdAt: null,
+          })
         } else {
           const admin = snap.currentAdmin
           setUserName(admin.nome)
           setUserRoleLabel(formatUserRoleLabel(admin.role))
           setPolicyRole(admin.role)
+          setSessionProfile({
+            id: "mock-admin",
+            fullName: admin.nome,
+            email: admin.email,
+            phone: admin.telefone,
+            role: admin.role,
+            avatarUrl: null,
+            createdAt: null,
+          })
         }
         if (process.env.NODE_ENV === "development") {
           console.log("[auth-profile:debug]", {
@@ -75,6 +105,7 @@ export function AuthenticatedDashboardShell({
         setUserName(lockedProfile.fullName)
         setUserRoleLabel(formatUserRoleLabel(lockedProfile.role))
         setPolicyRole(lockedProfile.role)
+        setSessionProfile(lockedProfile)
         if (!isRoleAllowedOnDashboardVariant(variant, lockedProfile.role)) {
           if (process.env.NODE_ENV === "development") {
             console.warn("[permission-check:debug]", {
@@ -118,6 +149,7 @@ export function AuthenticatedDashboardShell({
       setUserName(profile.fullName)
       setUserRoleLabel(formatUserRoleLabel(profile.role))
       setPolicyRole(profile.role)
+      setSessionProfile(profile)
       setReady(true)
     })()
     return () => {
@@ -148,7 +180,7 @@ export function AuthenticatedDashboardShell({
 
   return (
     <>
-      <NotificationsProvider>
+      <NotificationsProvider initialProfile={sessionProfile}>
         <DashboardLayout
           variant={variant}
           userName={userName}

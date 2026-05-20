@@ -8,7 +8,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Zap, Eye, EyeOff, ArrowLeft } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { getDashboardHomeForRole } from "@/lib/auth/auth-audit"
 import { getSupabaseAuthNetworkHint, getSupabaseClient } from "@/lib/supabase/client"
+import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
+import type { UserRole } from "@/types/user"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -42,7 +45,9 @@ export default function LoginPage() {
         return
       }
 
-      router.push("/indicador")
+      const basics = await getAuthProfileBasicsFromSupabase()
+      const role = (basics?.role ?? null) as UserRole | null
+      router.push(role ? getDashboardHomeForRole(role) : "/indicador")
     } catch (err) {
       if (process.env.NODE_ENV === "development" && err instanceof Error) {
         console.error("[login] auth:", err.name, err.message)

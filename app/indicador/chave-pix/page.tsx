@@ -14,7 +14,11 @@ import {
 import { PageHeader } from "@/components/ui/page-header"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { currentIndicador } from "@/lib/services/mock-data.service"
-import { loadIndicadorPrimaryPixKeyFromSupabase } from "@/lib/services/supabase-data.service"
+import {
+  loadIndicadorPrimaryPixKeyFromSupabase,
+  saveIndicadorPrimaryPixKeyFromSupabase,
+} from "@/lib/services/supabase-data.service"
+import { toast } from "sonner"
 import type { TipoChavePix } from "@/types/profile"
 import { Key, AlertTriangle, CheckCircle2, Pencil } from "lucide-react"
 
@@ -72,11 +76,38 @@ export default function ChavePixPage() {
     })()
   }, [])
 
+  const reloadFromSupabase = async () => {
+    const row = await loadIndicadorPrimaryPixKeyFromSupabase()
+    if (row) {
+      setTipoChave(row.keyType)
+      setChave(row.keyValue)
+      setBaselineTipo(row.keyType)
+      setBaselineChave(row.keyValue)
+    }
+  }
+
   const handleSave = async () => {
+    if (isDataProviderMock()) {
+      setBaselineTipo(tipoChave)
+      setBaselineChave(chave)
+      setIsEditing(false)
+      toast.success("Chave Pix salva (modo demonstração).")
+      return
+    }
+
     setIsLoading(true)
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    setIsLoading(false)
-    setIsEditing(false)
+    try {
+      const result = await saveIndicadorPrimaryPixKeyFromSupabase(tipoChave, chave)
+      if (!result.ok) {
+        toast.error(result.message)
+        return
+      }
+      await reloadFromSupabase()
+      setIsEditing(false)
+      toast.success("Chave Pix salva com sucesso.")
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const tipoLabel = pixTypes.find((t) => t.value === tipoChave)?.label

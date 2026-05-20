@@ -37,6 +37,7 @@ export {
   loadAdminNotificationsFromSupabase,
   loadIndicadorHomeFromSupabase,
   loadIndicadorPrimaryPixKeyFromSupabase,
+  saveIndicadorPrimaryPixKeyFromSupabase,
   loadIndicadorReferralDetailFromSupabase,
   loadIndicadorReferralsListFromSupabase,
   loadUserNotificationsFromSupabase,
