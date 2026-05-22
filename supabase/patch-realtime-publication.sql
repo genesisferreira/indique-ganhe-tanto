@@ -42,3 +42,10 @@ begin
 exception
   when duplicate_object then null;
 end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.commercial_lead_settings;
+exception
+  when duplicate_object then null;
+end $$;

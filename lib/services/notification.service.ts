@@ -112,7 +112,9 @@ export async function loadRecentNotifications(
 ): Promise<NotificationItem[]> {
   const { rows, role } = await queryRecentRows(limit)
   if (!rows) return []
-  return rows.map((row) => mapNotificationRowFromDb(row, role))
+  return rows
+    .map((row) => mapNotificationRowFromDb(row, role))
+    .filter((item): item is NotificationItem => item != null)
 }
 
 export async function markNotificationAsRead(
@@ -428,6 +430,8 @@ const LOG_INDICATOR_TRIGGER = "[indicator:trigger]"
 const LOG_INDICATOR_INSERT = "[indicator:notification-insert]"
 const LOG_INDICATOR_REWARD_TRIGGER = "[indicator:reward-trigger]"
 const LOG_INDICATOR_SQL_TRIGGER = "[indicator:sql-trigger]"
+const LOG_STATUS_CHANGE = "[notification:status-change]"
+const LOG_STATUS_CHANGE_RPC = "[notification:status-change:rpc]"
 
 function logIndicadorNotification(...args: unknown[]): void {
   if (!isDev()) return
@@ -505,8 +509,117 @@ async function callIndicatorNotificationRpc(
   return !error
 }
 
+export type NotifyReferralStatusChangedParams = {
+  referralId: string
+  oldStatus: string
+  newStatus: string
+  lostReason?: string | null
+  lostNotes?: string | null
+}
+
 /**
- * Notifica indicador que o lead avançou no funil (RPC security definer).
+ * Dispara RPC notify_referral_status_changed (security definer).
+ * Em produção o trigger AFTER UPDATE em referrals já chama a mesma RPC — use só como fallback/diagnóstico.
+ */
+export async function notifyReferralStatusChangedFromSupabase(
+  params: NotifyReferralStatusChangedParams
+): Promise<boolean> {
+  const referralId = params.referralId?.trim()
+  const oldStatus = params.oldStatus?.trim()
+  const newStatus = params.newStatus?.trim()
+  if (!referralId || !oldStatus || !newStatus) {
+    if (isDev()) {
+      console.warn(LOG_STATUS_CHANGE, { skip: "params_incompletos", params })
+    }
+    return false
+  }
+
+  if (oldStatus === newStatus) {
+    if (isDev()) {
+      console.log(LOG_STATUS_CHANGE, { skip: "same_status", referralId, oldStatus, newStatus })
+    }
+    return true
+  }
+
+  try {
+    const supabase = getSupabaseClient()
+    const dbRpc = supabase as unknown as {
+      rpc: (
+        name: string,
+        args: Record<string, unknown>
+      ) => Promise<{
+        data: unknown
+        error: { message: string; code?: string } | null
+      }>
+    }
+
+    const { data, error } = await dbRpc.rpc("notify_referral_status_changed", {
+      p_referral_id: referralId,
+      p_old_status: oldStatus,
+      p_new_status: newStatus,
+      p_lost_reason: params.lostReason ?? null,
+      p_lost_notes: params.lostNotes ?? null,
+    })
+
+    const rpcMissing =
+      Boolean(error) &&
+      (error?.code === "PGRST202" ||
+        error?.code === "42883" ||
+        /could not find the function/i.test(error?.message ?? "") ||
+        /notify_referral_status_changed/i.test(error?.message ?? ""))
+
+    if (isDev()) {
+      console.log(LOG_STATUS_CHANGE_RPC, {
+        referralId,
+        oldStatus,
+        newStatus,
+        ok: !error,
+        data: data ?? null,
+        error: error
+          ? { message: error.message, code: error.code ?? null }
+          : null,
+      })
+    }
+
+    if (rpcMissing) {
+      logIndicatorSqlTrigger(
+        "RPC notify_referral_status_changed ausente — aplicar supabase/patch-notifications-referral-status-change.sql",
+        { referralId, code: error?.code ?? null }
+      )
+      return false
+    }
+
+    if (error) {
+      logIndicadorNotificationError("notify_referral_status_changed falhou", {
+        referralId,
+        message: error.message,
+        code: error.code ?? null,
+      })
+      return false
+    }
+
+    if (isDev()) {
+      console.log(LOG_STATUS_CHANGE, {
+        referralId,
+        oldStatus,
+        newStatus,
+        via: "rpc",
+        result: data,
+      })
+    }
+
+    return true
+  } catch (e) {
+    logIndicadorNotificationError("notify_referral_status_changed exceção", {
+      referralId,
+      error: e instanceof Error ? e.message : String(e),
+    })
+    return false
+  }
+}
+
+/**
+ * @deprecated Preferir trigger DB notify_referral_status_changed. Mantido para chamadas legadas.
  */
 export async function notifyIndicatorReferralProgressFromSupabase(
   referralId: string
@@ -675,13 +788,5 @@ export function mapRealtimePayloadToNotificationItem(
   raw: Record<string, unknown>,
   role: UserRole | null = null
 ): NotificationItem | null {
-  if (raw.id == null) return null
-  if (isDev()) {
-    console.log("[notification:realtime]", {
-      id: raw.id,
-      notification_type: raw.notification_type,
-      is_read: raw.is_read,
-    })
-  }
   return mapNotificationRowFromDb(raw, role)
 }

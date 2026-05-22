@@ -49,6 +49,8 @@ function iconForType(type: string) {
       return CreditCard
     case "indicacao":
       return Users
+    case "lead":
+      return Users
     case "seguranca":
       return Shield
     default:
@@ -114,6 +116,26 @@ export function NotificationCenter({ className }: { className?: string }) {
     }
     prevUnreadRef.current = unreadCount
   }, [unreadCount])
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development" || !ctx) return
+    console.log("[notifications:center]", {
+      items: ctx.items.length,
+      unreadCount: ctx.unreadCount,
+      loading: ctx.loading,
+      latest: ctx.items[0]
+        ? {
+            id: ctx.items[0].id,
+            title: ctx.items[0].title,
+            type: ctx.items[0].type,
+            action:
+              typeof ctx.items[0].metadata?.action === "string"
+                ? ctx.items[0].metadata.action
+                : null,
+          }
+        : null,
+    })
+  }, [ctx?.items, ctx?.unreadCount, ctx?.loading])
 
   const handleOpenItem = async (item: NotificationItem) => {
     if (!item.read && ctx) {

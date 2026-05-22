@@ -64,6 +64,70 @@ function readDataColumn(raw: Record<string, unknown>): Record<string, unknown> {
   return {}
 }
 
+/** Realtime/postgREST podem enviar UUID como string; normaliza para comparação. */
+export function normalizeNotificationId(value: unknown): string | null {
+  if (typeof value === "string") {
+    const t = value.trim()
+    return t.length > 0 ? t : null
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value)
+  }
+  return null
+}
+
+export function extractNotificationFieldsFromRow(raw: Record<string, unknown>): {
+  id: string | null
+  profileId: string | null
+  notificationType: string | null
+  title: string | null
+  action: string | null
+  isRead: boolean
+  actionUrl: string | null
+} {
+  const metadata = readDataColumn(raw)
+  const action =
+    typeof metadata.action === "string" ? metadata.action : null
+  const explicitActionUrl =
+    typeof raw[NOTIFICATIONS_DB.actionUrl] === "string"
+      ? (raw[NOTIFICATIONS_DB.actionUrl] as string)
+      : null
+
+  return {
+    id: normalizeNotificationId(raw[NOTIFICATIONS_DB.id]),
+    profileId: normalizeNotificationId(raw[NOTIFICATIONS_DB.profileId]),
+    notificationType:
+      typeof raw[NOTIFICATIONS_DB.notificationType] === "string"
+        ? (raw[NOTIFICATIONS_DB.notificationType] as string)
+        : null,
+    title:
+      typeof raw[NOTIFICATIONS_DB.title] === "string"
+        ? (raw[NOTIFICATIONS_DB.title] as string)
+        : null,
+    action,
+    isRead: parseNotificationIsRead(raw),
+    actionUrl:
+      explicitActionUrl && explicitActionUrl.startsWith("/")
+        ? explicitActionUrl
+        : null,
+  }
+}
+
+const LOG_MAPPED = "[notifications:event:mapped]"
+
+function logMapped(...args: unknown[]): void {
+  if (!isDev()) return
+  console.log(LOG_MAPPED, ...args)
+}
+
+/** Realtime pode enviar boolean, string ou número em `is_read`. */
+export function parseNotificationIsRead(raw: Record<string, unknown>): boolean {
+  const v = raw[NOTIFICATIONS_DB.isRead]
+  if (v === true || v === "true" || v === 1 || v === "t") return true
+  if (v === false || v === "false" || v === 0 || v === "f") return false
+  return false
+}
+
 export function parseNotificationCreatedAt(raw: Record<string, unknown>): Date {
   const value = raw[NOTIFICATIONS_DB.createdAt]
   if (typeof value === "string" && value.length > 0) {
@@ -79,35 +143,32 @@ export function parseNotificationCreatedAt(raw: Record<string, unknown>): Date {
 export function mapNotificationRowFromDb(
   raw: Record<string, unknown>,
   role: UserRole | null
-): NotificationItem {
+): NotificationItem | null {
+  const fields = extractNotificationFieldsFromRow(raw)
+  if (!fields.id) {
+    logError("map sem id", { rawKeys: Object.keys(raw) })
+    return null
+  }
+
   const metadata = readDataColumn(raw)
   const type =
-    typeof raw[NOTIFICATIONS_DB.notificationType] === "string"
-      ? (raw[NOTIFICATIONS_DB.notificationType] as string)
-      : typeof metadata.type === "string"
-        ? metadata.type
-        : "sistema"
+    fields.notificationType ??
+    (typeof metadata.type === "string" ? metadata.type : "sistema")
 
   const title = String(raw[NOTIFICATIONS_DB.title] ?? "")
   const message = String(raw[NOTIFICATIONS_DB.message] ?? "")
 
-  const explicitAction =
-    typeof raw[NOTIFICATIONS_DB.actionUrl] === "string"
-      ? (raw[NOTIFICATIONS_DB.actionUrl] as string)
-      : null
-
   const actionUrl =
-    (explicitAction && explicitAction.startsWith("/") ? explicitAction : null) ??
-    resolveNotificationActionUrl(role, metadata)
+    fields.actionUrl ?? resolveNotificationActionUrl(role, metadata)
 
   const readAtRaw = raw[NOTIFICATIONS_DB.readAt]
   const item: NotificationItem = {
-    id: String(raw[NOTIFICATIONS_DB.id] ?? ""),
+    id: fields.id,
     title,
     message,
     type,
     metadata,
-    read: Boolean(raw[NOTIFICATIONS_DB.isRead]),
+    read: fields.isRead,
     readAt:
       typeof readAtRaw === "string" && readAtRaw.length > 0
         ? new Date(readAtRaw)
@@ -119,7 +180,20 @@ export function mapNotificationRowFromDb(
   logMap("row mapeada", {
     id: item.id,
     type: item.type,
+    action: fields.action,
     read: item.read,
+    actionUrl: item.actionUrl,
+  })
+
+  logMapped({
+    id: item.id,
+    profileId: fields.profileId,
+    notificationType: type,
+    action: fields.action,
+    title: item.title,
+    read: item.read,
+    actionUrl: item.actionUrl,
+    role,
   })
 
   return item

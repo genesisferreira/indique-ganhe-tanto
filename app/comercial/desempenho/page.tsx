@@ -91,8 +91,12 @@ export default function DesempenhoPage() {
         loadComercialLeadsFromSupabase(),
         getAuthProfileBasicsFromSupabase(),
       ])
+      if (!all.ok) {
+        console.error("[commercial-leads:error]", all.error, all.meta)
+      }
       const uid = basics?.id ?? null
-      setAssigned(uid && all ? all.filter((l) => l.comercialId === uid) : [])
+      const rows = all.ok ? all.data : []
+      setAssigned(uid ? rows.filter((l) => l.comercialId === uid) : [])
     })()
   }, [mockAssigned])
 

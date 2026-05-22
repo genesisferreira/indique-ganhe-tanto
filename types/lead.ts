@@ -1,3 +1,4 @@
+import type { CommercialSlaLevel } from '@/lib/commercial-sla'
 import type { Indicacao } from './referral'
 import type { Comercial } from './profile'
 
@@ -15,6 +16,19 @@ export interface Lead {
   retornoAgendado?: Date
   observacoes: string[]
   tentativasContato?: number
+  /** Momento da atribuição ao comercial (referrals.assigned_at) */
+  assignedAt?: Date | null
+  /** Primeiro contato registrado (referrals.first_response_at) */
+  firstResponseAt?: Date | null
+  /** Nível SLA escalonado (15 / 30 / 45 min) */
+  slaLevel?: CommercialSlaLevel
+  /** Legado: true se slaLevel !== 'none' */
+  slaOverdue?: boolean
+  redistributionCount?: number
+  lastRedistributedAt?: Date
+  previousCommercialId?: string
+  previousCommercialNome?: string
+  slaRedistributed?: boolean
   createdAt: Date
   updatedAt: Date
 }

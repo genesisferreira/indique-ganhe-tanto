@@ -11,6 +11,7 @@ export type SupabaseRealtimeTable =
   | "wallet_transactions"
   | "payments"
   | "notifications"
+  | "commercial_lead_settings"
 
 export type SupabaseRealtimeFilter = {
   column: string
@@ -31,6 +32,7 @@ export const REALTIME_TABLES_INDICADOR: SupabaseRealtimeTable[] = [
 export const REALTIME_TABLES_COMERCIAL: SupabaseRealtimeTable[] = [
   "referrals",
   "referral_history",
+  "commercial_lead_settings",
 ]
 
 /** Notificações: apenas `useNotifications` (canal dedicado `notifications:{profileId}`). */

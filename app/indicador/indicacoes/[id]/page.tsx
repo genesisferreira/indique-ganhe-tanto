@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import { isIndicacaoRejectedStatus } from "@/lib/referral-lost-reasons"
 import { indicacoes } from "@/lib/services/mock-data.service"
 import { loadIndicadorReferralDetailFromSupabase } from "@/lib/services/supabase-data.service"
+import type { Historico } from "@/types/lead"
 import type { Indicacao } from "@/types/referral"
 import {
   ArrowLeft,
@@ -20,6 +22,7 @@ import {
   Receipt,
   CheckCircle2,
   Clock,
+  XCircle,
 } from "lucide-react"
 
 function statusEmFluxo(s: Indicacao["status"]) {
@@ -43,11 +46,13 @@ export default function DetalheIndicacaoPage({
   )
 
   const [indicacao, setIndicacao] = useState<Indicacao | undefined>(undefined)
+  const [historico, setHistorico] = useState<Historico[]>([])
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
     if (isDataProviderMock()) {
       setIndicacao(mockIndicacao)
+      setHistorico([])
       setReady(true)
       return
     }
@@ -56,8 +61,13 @@ export default function DetalheIndicacaoPage({
     void (async () => {
       const r = await loadIndicadorReferralDetailFromSupabase(id)
       if (cancelled) return
-      if (r.kind === "ok") setIndicacao(r.indicacao)
-      else setIndicacao(undefined)
+      if (r.kind === "ok") {
+        setIndicacao(r.indicacao)
+        setHistorico([...r.historico])
+      } else {
+        setIndicacao(undefined)
+        setHistorico([])
+      }
       setReady(true)
     })()
     return () => {
@@ -84,6 +94,8 @@ export default function DetalheIndicacaoPage({
     )
   }
 
+  const recusada = isIndicacaoRejectedStatus(indicacao.status)
+
   const timeline = [
     {
       title: "Indicação Cadastrada",
@@ -107,18 +119,23 @@ export default function DetalheIndicacaoPage({
       icon: Clock,
     },
     {
-      title: "Venda Realizada",
-      date: indicacao.dataAprovacao || null,
-      completed:
-        indicacao.status === "aprovada" || indicacao.status === "paga",
-      icon: CheckCircle2,
+      title: recusada ? "Indicação Recusada" : "Venda Realizada",
+      date: recusada
+        ? indicacao.dataRecusa ?? indicacao.updatedAt
+        : indicacao.dataAprovacao || null,
+      completed: recusada || indicacao.status === "aprovada" || indicacao.status === "paga",
+      icon: recusada ? XCircle : CheckCircle2,
     },
-    {
-      title: "Recompensa Liberada",
-      date: indicacao.status === "paga" ? indicacao.updatedAt : null,
-      completed: indicacao.status === "paga",
-      icon: Wallet,
-    },
+    ...(recusada
+      ? []
+      : [
+          {
+            title: "Recompensa Liberada",
+            date: indicacao.status === "paga" ? indicacao.updatedAt : null,
+            completed: indicacao.status === "paga",
+            icon: Wallet,
+          },
+        ]),
   ]
 
   return (
@@ -141,9 +158,35 @@ export default function DetalheIndicacaoPage({
       </PageHeader>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Main Info */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Dados do Indicado */}
+          {recusada && (indicacao.motivoRecusa || indicacao.observacoesRecusa) ? (
+            <div className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-6">
+              <h2 className="text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                <XCircle className="w-5 h-5 text-rose-500" />
+                Motivo da recusa
+              </h2>
+              {indicacao.motivoRecusa ? (
+                <p className="text-sm font-medium text-foreground">
+                  {indicacao.motivoRecusa}
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Motivo não informado pelo comercial.
+                </p>
+              )}
+              {indicacao.observacoesRecusa ? (
+                <p className="text-sm text-muted-foreground mt-3 whitespace-pre-wrap border-t border-rose-500/15 pt-3">
+                  {indicacao.observacoesRecusa}
+                </p>
+              ) : null}
+              {indicacao.dataRecusa ? (
+                <p className="text-xs text-muted-foreground mt-3">
+                  Em {indicacao.dataRecusa.toLocaleString("pt-BR")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="rounded-xl border bg-card p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">
               Dados do Indicado
@@ -211,7 +254,6 @@ export default function DetalheIndicacaoPage({
             </div>
           ) : null}
 
-          {/* Plano */}
           <div className="rounded-xl border bg-card p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">
               Plano de Interesse
@@ -241,11 +283,26 @@ export default function DetalheIndicacaoPage({
             </div>
           </div>
 
-          {/* Timeline */}
           <div className="rounded-xl border bg-card p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">
               Histórico
             </h2>
+            {historico.length > 0 ? (
+              <ul className="space-y-4 mb-6">
+                {historico.map((h) => (
+                  <li
+                    key={h.id}
+                    className="rounded-lg border border-border/60 p-4 text-sm"
+                  >
+                    <p className="font-medium text-foreground">{h.acao}</p>
+                    <p className="text-muted-foreground mt-1">{h.descricao}</p>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      {h.createdAt.toLocaleString("pt-BR")}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             <div className="space-y-4">
               {timeline.map((item, index) => (
                 <div key={index} className="flex gap-4">
@@ -286,6 +343,13 @@ export default function DetalheIndicacaoPage({
                         })}
                       </p>
                     )}
+                    {recusada &&
+                      item.title === "Indicação Recusada" &&
+                      indicacao.motivoRecusa && (
+                        <p className="text-sm text-rose-600 dark:text-rose-400 mt-1">
+                          Motivo: {indicacao.motivoRecusa}
+                        </p>
+                      )}
                   </div>
                 </div>
               ))}
@@ -293,9 +357,7 @@ export default function DetalheIndicacaoPage({
           </div>
         </div>
 
-        {/* Sidebar */}
         <div className="space-y-6">
-          {/* Recompensa */}
           <div className="rounded-xl border bg-card p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">
               Recompensa
@@ -348,9 +410,13 @@ export default function DetalheIndicacaoPage({
                 Venda realizada! Aguardando primeira fatura.
               </p>
             )}
+            {recusada && (
+              <p className="mt-4 p-3 rounded-lg bg-rose-500/10 text-rose-700 dark:text-rose-300 text-sm">
+                Esta indicação foi recusada ou perdida no funil comercial.
+              </p>
+            )}
           </div>
 
-          {/* Vendedor */}
           {indicacao.comercial && (
             <div className="rounded-xl border bg-card p-6">
               <h2 className="text-lg font-semibold text-foreground mb-4">

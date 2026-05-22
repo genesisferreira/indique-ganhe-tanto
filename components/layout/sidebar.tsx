@@ -16,6 +16,7 @@ import {
   Clock,
   History,
   Gauge,
+  LayoutGrid,
   Settings,
   CreditCard,
   Upload,
@@ -29,7 +30,7 @@ import {
   Bell,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { NotificationCenter } from "@/components/layout/notification-center"
 import { useNotificationsContextOptional } from "@/components/notifications/notifications-provider"
 import {
@@ -42,6 +43,10 @@ import {
 } from "@/lib/services/supabase-data.service"
 import { getSidebarBadgeCountsFromMock } from "@/lib/services/mock-data.service"
 import { getSupabaseClient } from "@/lib/supabase/client"
+import {
+  REALTIME_TABLES_COMERCIAL,
+  useRealtimeReload,
+} from "@/hooks/use-supabase-realtime"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import type { UserRole } from "@/types/user"
@@ -103,6 +108,7 @@ const comercialNav: NavGroup[] = [
       { label: "Dashboard", href: "/comercial", icon: Home },
       { label: "Notificações", href: "/notificacoes", icon: Bell },
       { label: "Meus Leads", href: "/comercial/leads", icon: Users },
+      { label: "Pipeline", href: "/comercial/pipeline", icon: LayoutGrid },
       { label: "Retornos Agendados", href: "/comercial/retornos", icon: Clock },
     ],
   },
@@ -129,6 +135,7 @@ const adminNav: NavGroup[] = [
       { label: "Dashboard", href: "/admin", icon: Home },
       { label: "Notificações", href: "/notificacoes", icon: Bell },
       { label: "Indicações", href: "/admin/indicacoes", icon: Users },
+      { label: "Pipeline", href: "/admin/pipeline", icon: LayoutGrid },
       { label: "Indicadores", href: "/admin/indicadores", icon: UserPlus },
     ],
   },
@@ -209,6 +216,7 @@ export function Sidebar({
   const [adminIndicadoresCount, setAdminIndicadoresCount] = useState<number | null>(
     null
   )
+  const [badgeReloadTick, setBadgeReloadTick] = useState(0)
 
   useEffect(() => {
     if (notifCtx) {
@@ -322,7 +330,16 @@ export function Sidebar({
     return () => {
       cancelled = true
     }
-  }, [variant, pathname, userRole, policyRole, notifCtx])
+  }, [variant, pathname, userRole, policyRole, notifCtx, badgeReloadTick])
+
+  const reloadSidebarCounts = useCallback(() => {
+    setBadgeReloadTick((t) => t + 1)
+  }, [])
+
+  useRealtimeReload(reloadSidebarCounts, REALTIME_TABLES_COMERCIAL, {
+    enabled: variant === "comercial" && !isSidebarDataProviderMock(),
+    logPrefix: "[commercial-realtime]",
+  })
 
   const navigation = useMemo(() => {
     const base =

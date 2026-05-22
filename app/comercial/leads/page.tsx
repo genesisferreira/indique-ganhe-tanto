@@ -34,6 +34,9 @@ import {
 } from "@/lib/services/supabase-data.service"
 import type { Lead } from "@/types/lead"
 import { Search, Filter, Eye, Phone, Clock } from "lucide-react"
+import { CommercialSlaOverdueBadge } from "@/components/commercial/commercial-sla-overdue-badge"
+import { CommercialRedistributedBadge } from "@/components/commercial/commercial-redistributed-badge"
+import { devLogCommercialSla } from "@/lib/commercial-sla"
 
 const statusOptions = [
   { value: "all", label: "Todos os status" },
@@ -70,13 +73,24 @@ export default function LeadsPage() {
       return
     }
     const remote = await loadComercialLeadsFromSupabase()
-    setListaLeads((remote ?? []).map((l) => structuredClone(l)))
-    if (process.env.NODE_ENV === "development") {
-      console.log("[flow-check:debug]", {
-        flow: "comercial-leads-list",
-        total: remote?.length ?? 0,
-      })
+    if (!remote.ok) {
+      console.error("[commercial-leads:error]", remote.error, remote.meta)
+      toast.error(
+        remote.error ||
+          "Não foi possível carregar os leads. Veja o console do servidor/navegador."
+      )
+      setListaLeads([])
+      return
     }
+    const cloned = remote.data.map((l) => structuredClone(l))
+    setListaLeads(cloned)
+    const byLevel = {
+      warning: cloned.filter((l) => l.slaLevel === "warning").length,
+      critical: cloned.filter((l) => l.slaLevel === "critical").length,
+      redistribution_ready: cloned.filter((l) => l.slaLevel === "redistribution_ready")
+        .length,
+    }
+    devLogCommercialSla("lista leads", { total: cloned.length, byLevel })
   }, [mockLeads])
 
   useEffect(() => {
@@ -224,7 +238,15 @@ export default function LeadsPage() {
                       </p>
                     </div>
                   </div>
-                  <StatusBadge status={lead.status} />
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <StatusBadge status={lead.status} />
+                    <CommercialRedistributedBadge
+                      redistributionCount={lead.redistributionCount}
+                      previousCommercialName={lead.previousCommercialNome}
+                      variant="compact"
+                    />
+                    <CommercialSlaOverdueBadge level={lead.slaLevel} variant="compact" />
+                  </div>
                 </div>
 
                 <div className="space-y-2 mb-4">

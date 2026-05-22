@@ -13,7 +13,10 @@ import {
   markNotificationAsRead,
   NOTIFICATION_RECENT_LIMIT,
 } from "@/lib/services/notification.service"
-import { NOTIFICATIONS_SELECT } from "@/lib/notifications-db-map"
+import {
+  extractNotificationFieldsFromRow,
+  NOTIFICATIONS_SELECT,
+} from "@/lib/notifications-db-map"
 import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import type { AuthProfileBasics } from "@/types/auth-profile"
@@ -24,16 +27,16 @@ import type { RealtimeChannel } from "@supabase/supabase-js"
 const LOG_ERROR = "[notification:error]"
 const LOG_SUBSCRIBE = "[notifications:subscribe]"
 const LOG_UNSUBSCRIBE = "[notifications:unsubscribe]"
-const LOG_EVENT = "[notifications:event]"
-const LOG_PROFILE_CHECK = "[notifications:profile-check]"
+const LOG_EVENT_RAW = "[notifications:event:raw]"
+const LOG_EVENT_MAPPED = "[notifications:event:mapped]"
+const LOG_PROFILE_MATCH = "[notifications:profile-match]"
+const LOG_EVENT_ACCEPTED = "[notifications:event:accepted]"
+const LOG_EVENT_IGNORED = "[notifications:event:ignored]"
+const LOG_TOAST = "[notifications:toast]"
+const LOG_STATE_INSERT = "[notifications:state-insert]"
+const LOG_STATE_UPDATE = "[notifications:state-update]"
 const LOG_CHANNEL_STATUS = "[notifications:channel-status]"
 const LOG_PAYMENTS_BRIDGE = "[notifications:payments-bridge]"
-const LOG_TOAST_SHOW = "[toast:show]"
-const LOG_TOAST_SKIP = "[toast:skip]"
-const LOG_TOAST_DUPLICATE = "[toast:duplicate]"
-const LOG_TOAST_ROLE = "[toast:role]"
-const LOG_TOAST_CREATED = "[toast:created-at]"
-const LOG_TOAST_PROFILE = "[toast:profile-match]"
 
 /** Tolerância de relógio servidor × cliente (ms). */
 const CREATED_AT_SKEW_MS = 5_000
@@ -54,6 +57,45 @@ function devLogError(...args: unknown[]): void {
 
 function createdAtMs(item: NotificationItem): number {
   return new Date(item.createdAt).getTime()
+}
+
+/** Preserva itens recebidos via realtime quando o poll ainda não os enxerga. */
+function mergeNotificationLists(
+  remote: NotificationItem[],
+  local: NotificationItem[],
+  limit: number
+): NotificationItem[] {
+  const byId = new Map<string, NotificationItem>()
+  for (const item of remote) byId.set(item.id, item)
+  for (const item of local) {
+    if (!byId.has(item.id)) byId.set(item.id, item)
+  }
+  return [...byId.values()]
+    .sort((a, b) => createdAtMs(b) - createdAtMs(a))
+    .slice(0, limit)
+}
+
+function countUnread(items: NotificationItem[]): number {
+  return items.filter((n) => !n.read).length
+}
+
+function profileIdsMatch(
+  payloadProfileId: string | null,
+  currentProfileId: string | null,
+  authUserId: string | null
+): boolean {
+  if (!payloadProfileId || !currentProfileId) return false
+  const a = payloadProfileId.toLowerCase()
+  const b = currentProfileId.toLowerCase()
+  if (a === b) return true
+  if (authUserId && a === authUserId.toLowerCase()) return true
+  return false
+}
+
+type SubscribeMode = "filtered"
+
+function subscribeModeForRole(_role: UserRole | null): SubscribeMode {
+  return "filtered"
 }
 
 export type UseNotificationsOptions = {
@@ -98,7 +140,7 @@ export function useNotifications(
   const channelRef = useRef<RealtimeChannel | null>(null)
   const paymentsBridgeRef = useRef<RealtimeChannel | null>(null)
   const subscribedProfileRef = useRef<string | null>(null)
-  const processedNotificationIdsRef = useRef(new Set<string>())
+  const subscribedModeRef = useRef<SubscribeMode | null>(null)
 
   const profileIdRef = useRef<string | null>(initialProfile?.id ?? null)
   const authUserIdRef = useRef<string | null>(null)
@@ -125,58 +167,37 @@ export function useNotifications(
   showToastForRef.current = (item: NotificationItem, source: "realtime" | "poll" = "poll") => {
       const authProfileId = profileIdRef.current
 
-      devLog(LOG_TOAST_ROLE, {
-        role: roleRef.current,
-        source,
-        notificationId: item.id,
-      })
-
       if (!showToastsRef.current) {
-        devLog(LOG_TOAST_SKIP, { reason: "showToasts desligado", id: item.id })
+        devLog(LOG_TOAST, { action: "skip", reason: "showToasts desligado", id: item.id, source })
         return
       }
 
       if (item.read) {
-        devLog(LOG_TOAST_SKIP, { reason: "já lida", id: item.id })
+        devLog(LOG_TOAST, { action: "skip", reason: "já lida", id: item.id, source })
         return
       }
 
       if (toastedIdsRef.current.has(item.id)) {
-        devLog(LOG_TOAST_DUPLICATE, { id: item.id })
+        devLog(LOG_TOAST, { action: "skip", reason: "duplicate", id: item.id, source })
         return
-      }
-
-      if (authProfileId) {
-        devLog(LOG_TOAST_PROFILE, {
-          ok: true,
-          authProfileId,
-          source,
-        })
       }
 
       const createdMs = createdAtMs(item)
       const mountAt = mountAtRef.current
 
-      devLog(LOG_TOAST_CREATED, {
-        id: item.id,
-        source,
-        createdMs,
-        mountAt,
-        deltaMs: createdMs - mountAt,
-        valid: Number.isFinite(createdMs),
-      })
-
       if (source === "poll") {
         if (!Number.isFinite(createdMs)) {
-          devLog(LOG_TOAST_SKIP, { reason: "createdAt inválido", id: item.id })
+          devLog(LOG_TOAST, { action: "skip", reason: "createdAt inválido", id: item.id, source })
           return
         }
         if (createdMs < mountAt - CREATED_AT_SKEW_MS) {
-          devLog(LOG_TOAST_SKIP, {
+          devLog(LOG_TOAST, {
+            action: "skip",
             reason: "anterior ao mount (poll)",
             id: item.id,
             createdMs,
             mountAt,
+            source,
           })
           return
         }
@@ -197,25 +218,15 @@ export function useNotifications(
       })
 
       toastedIdsRef.current.add(item.id)
-      devLog(LOG_TOAST_SHOW, {
+      devLog(LOG_TOAST, {
+        action: "show",
         id: item.id,
         title: payload.title,
         actionUrl: payload.actionUrl,
         source,
+        profileId: authProfileId,
+        role: roleRef.current,
       })
-
-      if (process.env.NODE_ENV === "development") {
-        requestAnimationFrame(() => {
-          const toastEl = document.querySelector(
-            `[data-sonner-toast][data-id="notification-${item.id}"], [data-sonner-toast]`
-          )
-          console.log("[toast:dom]", {
-            source,
-            notificationId: item.id,
-            toastInDom: Boolean(toastEl),
-          })
-        })
-      }
   }
 
   const refreshInternal = useCallback(async () => {
@@ -234,15 +245,30 @@ export function useNotifications(
         loadUnreadNotificationsCount(),
         getAuthProfileBasicsFromSupabase(),
       ])
-      setItems(recent)
-      setUnreadCount(unread)
+      let mergedSnapshot: NotificationItem[] = []
+      setItems((prev) => {
+        mergedSnapshot = mergeNotificationLists(
+          recent,
+          prev,
+          NOTIFICATION_RECENT_LIMIT
+        )
+        devLog(LOG_STATE_UPDATE, {
+          source: "refresh",
+          remote: recent.length,
+          local: prev.length,
+          merged: mergedSnapshot.length,
+          unreadFromServer: unread,
+          unreadMerged: countUnread(mergedSnapshot),
+        })
+        return mergedSnapshot
+      })
+      setUnreadCount(Math.max(unread, countUnread(mergedSnapshot)))
       if (basics) {
         setRole(basics.role)
         setProfileId(basics.id)
         profileIdRef.current = basics.id
         roleRef.current = basics.role
       }
-      devLog(LOG_EVENT, "refresh", { total: recent.length, unread })
     } catch (e) {
       devLogError("refresh falhou", e instanceof Error ? e.message : String(e))
     } finally {
@@ -264,6 +290,14 @@ export function useNotifications(
   }, [])
 
   useEffect(() => {
+    if (!initialProfile?.id) return
+    setProfileId(initialProfile.id)
+    setRole(initialProfile.role)
+    profileIdRef.current = initialProfile.id
+    roleRef.current = initialProfile.role
+  }, [initialProfile?.id, initialProfile?.role])
+
+  useEffect(() => {
     if (!enabled) return
     let cancelled = false
     void (async () => {
@@ -282,10 +316,11 @@ export function useNotifications(
       profileIdRef.current = basics.id
       roleRef.current = basics.role
       if (user) {
-        devLog(LOG_PROFILE_CHECK, {
+        devLog(LOG_PROFILE_MATCH, {
           currentProfileId: basics.id,
           authUserId: user.id,
           profilesMatchAuth: basics.id === user.id,
+          role: basics.role,
         })
       }
     })()
@@ -307,97 +342,127 @@ export function useNotifications(
     row: Record<string, unknown>,
     source: "realtime" | "payments-bridge"
   ) => {
-    const rowProfileId =
-      typeof row.profile_id === "string" ? row.profile_id : null
+    const fields = extractNotificationFieldsFromRow(row)
     const currentProfileId = profileIdRef.current
     const authUserId = authUserIdRef.current
-    const matches =
-      Boolean(rowProfileId) &&
-      Boolean(currentProfileId) &&
-      (rowProfileId === currentProfileId ||
-        (authUserId != null && rowProfileId === authUserId))
-
-    devLog(LOG_PROFILE_CHECK, {
-      source,
-      payloadProfileId: rowProfileId,
+    const matches = profileIdsMatch(
+      fields.profileId,
       currentProfileId,
+      authUserId
+    )
+
+    devLog(LOG_PROFILE_MATCH, {
+      source,
+      payloadProfileId: fields.profileId,
+      expectedProfileId: currentProfileId,
       authUserId,
+      profilesMatchAuth:
+        currentProfileId?.toLowerCase() === authUserId?.toLowerCase(),
       matches,
+      notificationType: fields.notificationType,
+      action: fields.action,
+      title: fields.title,
     })
 
     if (!matches) {
-      devLog(LOG_EVENT, "INSERT ignorado — profile_id não é do usuário atual", {
-        rowProfileId,
-        currentProfileId,
-        authUserId,
-      })
-      return
-    }
-
-    const notificationId = typeof row.id === "string" ? row.id : null
-    if (notificationId && processedNotificationIdsRef.current.has(notificationId)) {
-      devLog(LOG_EVENT, "INSERT ignorado — já processado", { notificationId, source })
-      return
-    }
-
-    devLog(LOG_EVENT, "INSERT", {
-      source,
-      id: row.id,
-      notification_type: row.notification_type,
-      is_read: row.is_read,
-    })
-
-    const rowData =
-      row.data && typeof row.data === "object" && !Array.isArray(row.data)
-        ? (row.data as Record<string, unknown>)
-        : {}
-    if (
-      isDev() &&
-      rowData.action === "pix_withdrawal_requested" &&
-      isAdminFinanceRole(roleRef.current)
-    ) {
-      console.log("[notification:pix-admin]", {
+      devLog(LOG_EVENT_IGNORED, {
+        reason: "profile_id mismatch",
         source,
-        id: row.id,
-        notification_type: row.notification_type,
-        payment_id: rowData.payment_id ?? null,
-        action_url: row.action_url ?? null,
+        payloadProfileId: fields.profileId,
+        expectedProfileId: currentProfileId,
+        notificationType: fields.notificationType,
+        action: fields.action,
+        title: fields.title,
       })
+      return
     }
 
     const item = mapRealtimePayloadToNotificationItem(row, roleRef.current)
     if (!item) {
-      devLog(LOG_EVENT, "INSERT sem map — refresh", { source })
+      devLog(LOG_EVENT_IGNORED, {
+        reason: "map failed (id ausente ou inválido)",
+        source,
+        id: fields.id,
+        notificationType: fields.notificationType,
+        action: fields.action,
+        rawKeys: Object.keys(row),
+      })
       void refreshRef.current()
       return
     }
 
-    if (notificationId) {
-      processedNotificationIdsRef.current.add(notificationId)
-    }
+    devLog(LOG_EVENT_MAPPED, {
+      source,
+      id: item.id,
+      type: item.type,
+      action: fields.action,
+      read: item.read,
+      actionUrl: item.actionUrl,
+      title: item.title,
+    })
 
     const alreadyInList = itemsRef.current.some((n) => n.id === item.id)
+    const wasUnreadInList = itemsRef.current.some(
+      (n) => n.id === item.id && !n.read
+    )
+
     setItems((prev) => {
       const without = prev.filter((n) => n.id !== item.id)
-      return [item, ...without].slice(0, NOTIFICATION_RECENT_LIMIT)
+      const next = [item, ...without].slice(0, NOTIFICATION_RECENT_LIMIT)
+      devLog(LOG_STATE_INSERT, {
+        source,
+        id: item.id,
+        notificationType: item.type,
+        action: fields.action,
+        is_read: item.read,
+        alreadyInList,
+        total: next.length,
+        title: item.title,
+      })
+      return next
     })
 
     if (!item.read) {
-      if (!alreadyInList) {
+      if (!alreadyInList || !wasUnreadInList) {
         setUnreadCount((c) => c + 1)
       }
       showToastForRef.current(item, "realtime")
+    } else {
+      devLog(LOG_TOAST, {
+        action: "skip",
+        reason: "is_read=true no payload",
+        id: item.id,
+        source,
+      })
     }
+
+    const metadataAction =
+      item.metadata && typeof item.metadata.action === "string"
+        ? item.metadata.action
+        : null
+
+    devLog(LOG_EVENT_ACCEPTED, {
+      source,
+      id: item.id,
+      type: item.type,
+      read: item.read,
+      actionUrl: item.actionUrl,
+      metadataAction,
+      notificationType: fields.notificationType,
+      title: item.title,
+    })
   }
 
   useEffect(() => {
     if (!enabled || !profileId) return
 
+    const mode = subscribeModeForRole(role)
     if (
       channelRef.current &&
-      subscribedProfileRef.current === profileId
+      subscribedProfileRef.current === profileId &&
+      subscribedModeRef.current === mode
     ) {
-      devLog(LOG_SUBSCRIBE, "skip — canal já ativo", { profileId })
+      devLog(LOG_SUBSCRIBE, "skip — canal já ativo", { profileId, mode })
       return
     }
 
@@ -408,6 +473,7 @@ export function useNotifications(
       if (!ch) return
       channelRef.current = null
       subscribedProfileRef.current = null
+      subscribedModeRef.current = null
       try {
         const supabase = getSupabaseClient()
         await supabase.removeChannel(ch)
@@ -436,13 +502,13 @@ export function useNotifications(
         }
 
         const channelName = `notifications:${profileId}`
-        const useBroadSubscribe = isAdminFinanceRole(roleRef.current)
-
         devLog(LOG_SUBSCRIBE, {
           channelName,
           profileId,
           authUserId: authUserIdRef.current,
-          useBroadSubscribe,
+          role: roleRef.current,
+          filter: `profile_id=eq.${profileId}`,
+          mode,
         })
 
         const insertConfig: {
@@ -454,9 +520,7 @@ export function useNotifications(
           event: "INSERT",
           schema: "public",
           table: "notifications",
-        }
-        if (!useBroadSubscribe) {
-          insertConfig.filter = `profile_id=eq.${profileId}`
+          filter: `profile_id=eq.${profileId}`,
         }
 
         const channel = supabase
@@ -466,10 +530,22 @@ export function useNotifications(
             insertConfig,
             (payload) => {
               if (disposed) return
-              processNotificationRowRef.current(
-                payload.new as Record<string, unknown>,
-                "realtime"
-              )
+              const row = payload.new as Record<string, unknown>
+              const fields = extractNotificationFieldsFromRow(row)
+              devLog(LOG_EVENT_RAW, {
+                eventType: payload.eventType,
+                table: payload.table,
+                id: fields.id,
+                profile_id: fields.profileId,
+                notification_type: fields.notificationType,
+                title: fields.title,
+                is_read: fields.isRead,
+                action: fields.action,
+                action_url: fields.actionUrl,
+                data: row.data ?? null,
+                expectedProfileId: profileIdRef.current,
+              })
+              processNotificationRowRef.current(row, "realtime")
             }
           )
           .on(
@@ -483,12 +559,29 @@ export function useNotifications(
             (payload) => {
               if (disposed) return
               const row = payload.new as Record<string, unknown>
-              const rowProfileId =
-                typeof row.profile_id === "string" ? row.profile_id : null
+              const fields = extractNotificationFieldsFromRow(row)
 
-              if (rowProfileId !== profileIdRef.current) return
+              if (
+                !profileIdsMatch(
+                  fields.profileId,
+                  profileIdRef.current,
+                  authUserIdRef.current
+                )
+              ) {
+                devLog(LOG_EVENT_IGNORED, {
+                  reason: "profile_id mismatch (UPDATE)",
+                  id: fields.id,
+                  payloadProfileId: fields.profileId,
+                })
+                return
+              }
 
-              devLog(LOG_EVENT, "UPDATE", { id: row.id, is_read: row.is_read })
+              devLog(LOG_EVENT_RAW, {
+                eventType: "UPDATE",
+                id: row.id ?? null,
+                profile_id: row.profile_id ?? null,
+                is_read: row.is_read ?? null,
+              })
 
               const item = mapRealtimePayloadToNotificationItem(row, roleRef.current)
               if (!item) {
@@ -523,6 +616,7 @@ export function useNotifications(
 
         channelRef.current = channel
         subscribedProfileRef.current = profileId
+        subscribedModeRef.current = mode
       } catch (e) {
         devLogError("subscribe falhou", e instanceof Error ? e.message : String(e))
       }
@@ -661,7 +755,7 @@ export function useNotifications(
       void refreshRef.current()
       return
     }
-    devLog(LOG_EVENT, "markAsRead", { id })
+    devLog(LOG_STATE_UPDATE, { source: "markAsRead", id })
   }, [])
 
   const markAllAsRead = useCallback(async () => {
@@ -676,7 +770,7 @@ export function useNotifications(
       void refreshRef.current()
       return
     }
-    devLog(LOG_EVENT, "markAllAsRead", { updated: result.updated })
+    devLog(LOG_STATE_UPDATE, { source: "markAllAsRead", updated: result.updated })
   }, [])
 
   return {

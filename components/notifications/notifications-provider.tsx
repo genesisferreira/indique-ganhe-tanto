@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, type ReactNode } from "react"
+import { createContext, useContext, useEffect, type ReactNode } from "react"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { useNotifications, type UseNotificationsResult } from "@/hooks/use-notifications"
 import type { AuthProfileBasics } from "@/types/auth-profile"
@@ -20,6 +20,24 @@ export function NotificationsProvider({
     showToasts: true,
     initialProfile,
   })
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return
+    console.log("[notifications:provider]", {
+      enabled: !isDataProviderMock(),
+      initialProfileId: initialProfile?.id ?? null,
+      initialRole: initialProfile?.role ?? null,
+      items: value.items.length,
+      unreadCount: value.unreadCount,
+      loading: value.loading,
+    })
+  }, [
+    initialProfile?.id,
+    initialProfile?.role,
+    value.items.length,
+    value.unreadCount,
+    value.loading,
+  ])
 
   return (
     <NotificationsContext.Provider value={value}>

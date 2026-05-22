@@ -28,6 +28,9 @@ import {
   updateAdminReferralStatusFromSupabase,
 } from "@/lib/services"
 import { Search, Eye, MoreHorizontal, UserPlus, RefreshCw } from "lucide-react"
+import { CommercialSlaOverdueBadge } from "@/components/commercial/commercial-sla-overdue-badge"
+import { CommercialRedistributedBadge } from "@/components/commercial/commercial-redistributed-badge"
+import { devLogCommercialSla } from "@/lib/commercial-sla"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -84,15 +87,38 @@ export default function AdminIndicacoesPage() {
       getAuthProfileBasicsFromSupabase(),
     ])
     setAuthRole(basics?.role ?? null)
+    if (!remote.ok) {
+      console.error("[admin-indicacoes:error]", remote.error, remote.meta)
+      toast.error(
+        remote.error ||
+          "Não foi possível carregar as indicações. Veja o console."
+      )
+      setLista([])
+      setComerciaisLista([...(comRemoto ?? [])])
+      setCarregando(false)
+      return
+    }
     if (process.env.NODE_ENV === "development") {
       console.log("[page-data:debug]", {
         page: "/admin/indicacoes",
         source: "supabase",
-        total: remote?.length ?? 0,
+        total: remote.data.length,
+        meta: remote.meta,
       })
     }
-    setLista([...(remote ?? [])])
+    const listaRemota = [...remote.data]
+    setLista(listaRemota)
     setComerciaisLista([...(comRemoto ?? [])])
+    devLogCommercialSla("admin indicacoes", {
+      total: listaRemota.length,
+      sla: {
+        warning: listaRemota.filter((i) => i.slaLevel === "warning").length,
+        critical: listaRemota.filter((i) => i.slaLevel === "critical").length,
+        redistribution_ready: listaRemota.filter(
+          (i) => i.slaLevel === "redistribution_ready"
+        ).length,
+      },
+    })
     setCarregando(false)
   }, [])
 
@@ -243,7 +269,20 @@ export default function AdminIndicacoesPage() {
     {
       key: "status",
       header: "Status",
-      cell: (indicacao: Indicacao) => <StatusBadge status={indicacao.status} />,
+      cell: (indicacao: Indicacao) => (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <StatusBadge status={indicacao.status} />
+          <CommercialRedistributedBadge
+            redistributionCount={indicacao.redistributionCount}
+            previousCommercialName={indicacao.previousCommercialNome}
+            variant="compact"
+          />
+          <CommercialSlaOverdueBadge
+            level={indicacao.slaLevel}
+            variant="compact"
+          />
+        </div>
+      ),
     },
     {
       key: "data",

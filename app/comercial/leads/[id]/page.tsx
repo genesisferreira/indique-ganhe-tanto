@@ -28,6 +28,10 @@ import {
 } from "@/hooks/use-supabase-realtime"
 import { leads, historicos } from "@/lib/services/mock-data.service"
 import {
+  LOST_REASON_OPTIONS,
+  isComercialLeadRejectStatus,
+} from "@/lib/referral-lost-reasons"
+import {
   canConfirmFirstInvoice,
   ensureRewardForReferralFromSupabase,
   getAuthProfileBasicsFromSupabase,
@@ -89,23 +93,54 @@ export default function DetalheLeadPage({
   const [lead, setLead] = useState<Lead | undefined>(undefined)
   const [novaObservacao, setNovaObservacao] = useState("")
   const [status, setStatus] = useState<ComercialLeadUpdateStatus>("em_atendimento")
+  const [lostReason, setLostReason] = useState("")
+  const [lostNotes, setLostNotes] = useState("")
   const [isSaving, setIsSaving] = useState(false)
   const [isConfirmingFirstInvoice, setIsConfirmingFirstInvoice] = useState(false)
   const [authRole, setAuthRole] = useState<UserRole | null>(null)
   const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [leadHistorico, setLeadHistorico] = useState<Historico[]>([])
   const [pageLoading, setPageLoading] = useState(() => !isDataProviderMock())
+  const [loadKind, setLoadKind] = useState<
+    "ok" | "not-found" | "unauthorized" | "error" | null
+  >(null)
+  const [loadMessage, setLoadMessage] = useState<string>("")
 
   const podeEditarStatusComercial = authRole === "comercial"
 
   const reloadLeadData = useCallback(async () => {
     const remote = await loadComercialLeadDetailsFromSupabase(id)
-    if (remote.kind !== "ok") return false
+    if (remote.kind === "ok") {
+      setLoadKind("ok")
+      setLoadMessage("")
+      setLead(structuredClone(remote.lead))
+      setStatus(mapLeadStatusToUpdateStatus(remote.lead.status))
+      setLeadHistorico([...remote.historico])
+      return true
+    }
 
-    setLead(structuredClone(remote.lead))
-    setStatus(mapLeadStatusToUpdateStatus(remote.lead.status))
-    setLeadHistorico([...remote.historico])
-    return true
+    setLead(undefined)
+    setLeadHistorico([])
+    setLoadKind(remote.kind)
+    setLoadMessage(
+      remote.kind === "error"
+        ? remote.message
+        : remote.kind === "unauthorized"
+          ? remote.message
+          : remote.kind === "not-found"
+            ? remote.message ?? "Lead não encontrado."
+            : ""
+    )
+
+    if (remote.kind === "error") {
+      console.error("[commercial-lead-detail:error]", remote)
+      toast.error(remote.message)
+    } else if (remote.kind === "unauthorized") {
+      console.error("[commercial-lead-detail:error]", remote)
+      toast.error(remote.message)
+    }
+
+    return false
   }, [id])
 
   const refreshAfterMutation = useCallback(async () => {
@@ -181,7 +216,11 @@ export default function DetalheLeadPage({
     if (isSaving) return
 
     setIsSaving(true)
-    const result = await updateComercialLeadStatus(lead.id, status, novaObservacao)
+    const result = await updateComercialLeadStatus(lead.id, status, {
+      note: novaObservacao,
+      lostReason: isComercialLeadRejectStatus(status) ? lostReason : undefined,
+      lostNotes: isComercialLeadRejectStatus(status) ? lostNotes : undefined,
+    })
     if (!result.ok) {
       toast.error(result.message)
       setIsSaving(false)
@@ -269,10 +308,38 @@ export default function DetalheLeadPage({
     )
   }
 
-  if (!lead || !lead.indicacao) {
+  if (loadKind === "unauthorized") {
     return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <p className="text-muted-foreground mb-4">Lead não encontrado</p>
+      <div className="flex flex-col items-center justify-center py-20 gap-4">
+        <p className="text-muted-foreground text-center max-w-md">
+          {loadMessage || "Lead não autorizado para este comercial."}
+        </p>
+        <Button asChild>
+          <Link href="/comercial/leads">Voltar para leads</Link>
+        </Button>
+      </div>
+    )
+  }
+
+  if (loadKind === "error") {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4">
+        <p className="text-muted-foreground text-center max-w-md">
+          {loadMessage || "Não foi possível carregar o lead."}
+        </p>
+        <Button asChild>
+          <Link href="/comercial/leads">Voltar para leads</Link>
+        </Button>
+      </div>
+    )
+  }
+
+  if (!lead || !lead.indicacao || loadKind === "not-found") {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4">
+        <p className="text-muted-foreground text-center max-w-md">
+          {loadMessage || "Lead não encontrado"}
+        </p>
         <Button asChild>
           <Link href="/comercial/leads">Voltar</Link>
         </Button>
@@ -283,6 +350,11 @@ export default function DetalheLeadPage({
   const indicacao = lead.indicacao
   const plano = indicacao.plano
   const indicador = indicacao.indicador
+  const indicadorNome =
+    indicador?.nome?.trim() || "Indicador não identificado"
+  const exigeMotivoRecusa = isComercialLeadRejectStatus(status)
+  const podeSalvarStatus =
+    !isSaving && (!exigeMotivoRecusa || Boolean(lostReason.trim()))
 
   const commercialProfileId =
     lead.comercialId ?? indicacao.comercialId ?? null
@@ -484,7 +556,14 @@ export default function DetalheLeadPage({
             </h2>
             <Select
               value={status}
-              onValueChange={(v) => setStatus(v as ComercialLeadUpdateStatus)}
+              onValueChange={(v) => {
+                const next = v as ComercialLeadUpdateStatus
+                setStatus(next)
+                if (!isComercialLeadRejectStatus(next)) {
+                  setLostReason("")
+                  setLostNotes("")
+                }
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -497,9 +576,37 @@ export default function DetalheLeadPage({
                 ))}
               </SelectContent>
             </Select>
+            {exigeMotivoRecusa ? (
+              <div className="mt-4 space-y-3">
+                <div className="space-y-2">
+                  <Label>Motivo da recusa / perda *</Label>
+                  <Select value={lostReason || undefined} onValueChange={setLostReason}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o motivo" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LOST_REASON_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Observação (opcional)</Label>
+                  <Textarea
+                    placeholder="Detalhes adicionais sobre a recusa..."
+                    value={lostNotes}
+                    onChange={(e) => setLostNotes(e.target.value)}
+                    rows={2}
+                  />
+                </div>
+              </div>
+            ) : null}
             <Button
               className="w-full mt-4"
-              disabled={isSaving}
+              disabled={!podeSalvarStatus}
               onClick={() => {
                 void handleSaveLeadUpdate()
               }}
@@ -510,26 +617,42 @@ export default function DetalheLeadPage({
           )}
 
           {/* Indicador */}
-          {indicador && (
-            <div className="rounded-xl border bg-card p-6">
-              <h2 className="text-lg font-semibold text-foreground mb-4">
-                Indicado por
-              </h2>
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">
-                  {indicador.nome.charAt(0)}
-                </div>
-                <div>
-                  <p className="font-medium text-foreground">
-                    {indicador.nome}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    {indicador.telefone}
-                  </p>
-                </div>
+          <div className="rounded-xl border bg-card p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">
+              Indicado por
+            </h2>
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">
+                {indicadorNome.charAt(0)}
+              </div>
+              <div>
+                <p className="font-medium text-foreground">{indicadorNome}</p>
+                <p className="text-sm text-muted-foreground">
+                  {indicador?.telefone?.trim() || "—"}
+                </p>
+                {indicador?.email ? (
+                  <p className="text-xs text-muted-foreground">{indicador.email}</p>
+                ) : null}
               </div>
             </div>
-          )}
+          </div>
+
+          {(lead.status === "perdido" || indicacao.status === "recusada") &&
+          (indicacao.motivoRecusa || indicacao.observacoesRecusa) ? (
+            <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-6">
+              <h2 className="text-lg font-semibold text-foreground mb-2">
+                Motivo da recusa
+              </h2>
+              {indicacao.motivoRecusa ? (
+                <p className="text-sm text-foreground">{indicacao.motivoRecusa}</p>
+              ) : null}
+              {indicacao.observacoesRecusa ? (
+                <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">
+                  {indicacao.observacoesRecusa}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           {/* Primeira mensalidade */}
           <div className="rounded-xl border bg-card p-6">

@@ -64,8 +64,18 @@ export function resolveNotificationActionUrl(
     if (pay) return pay
   }
 
-  if (action === "referral_progress" && role === "indicador" && referralId) {
-    return `/indicador/indicacoes/${referralId}`
+  if (action === "referral_progress" && referralId) {
+    const ref = referralDetailHref(role, referralId)
+    if (ref) return ref
+  }
+
+  if (action === "referral_rejected" && referralId) {
+    const ref = referralDetailHref(role, referralId)
+    if (ref) return ref
+  }
+
+  if (action === "commercial_status_changed" && referralId) {
+    return referralDetailHref(role, referralId) ?? `/admin/indicacoes/${referralId}`
   }
 
   if (action === "reward_released" && role === "indicador") {
@@ -81,7 +91,12 @@ export function resolveNotificationActionUrl(
     if (referralId) return referralDetailHref(role, referralId)
   }
 
-  if (action === "status_change" || action === "admin_assign_commercial") {
+  if (
+    action === "status_change" ||
+    action === "admin_status_change" ||
+    action === "lead_lost" ||
+    action === "admin_assign_commercial"
+  ) {
     if (referralId) return referralDetailHref(role, referralId)
     if (role === "comercial") return "/comercial/leads"
     if (role?.startsWith("admin")) return "/admin/indicacoes"
@@ -89,6 +104,28 @@ export function resolveNotificationActionUrl(
 
   if (action === "pix_withdrawal_requested" && role?.startsWith("admin")) {
     return "/admin/pagamentos-pendentes"
+  }
+
+  if (
+    (action === "commercial_assigned" || action === "auto_assign") &&
+    role === "comercial"
+  ) {
+    if (referralId) return `/comercial/leads/${referralId}`
+    return "/comercial/leads"
+  }
+
+  if (
+    action === "commercial_sla_overdue" ||
+    action === "commercial_sla_warning" ||
+    action === "commercial_sla_critical" ||
+    action === "commercial_sla_redistribution_ready" ||
+    action === "commercial_sla_redistributed_admin" ||
+    action === "commercial_sla_redistributed_removed" ||
+    action === "commercial_sla_redistributed_assigned"
+  ) {
+    if (referralId) return referralDetailHref(role, referralId)
+    if (role === "comercial") return "/comercial/leads"
+    if (role?.startsWith("admin")) return "/admin/indicacoes"
   }
 
   return null

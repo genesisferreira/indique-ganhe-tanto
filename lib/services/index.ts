@@ -28,11 +28,14 @@ export {
   loadAdminIndicatorDetailFromSupabase,
   loadAdminIndicatorsFromSupabase,
   loadAdminReferralsFromSupabase,
+  type ReferralsLoadMeta,
+  type ReferralsLoadResult,
   loadAdminReferralDetailFromSupabase,
   assignReferralToCommercialFromSupabase,
   updateAdminReferralStatusFromSupabase,
   loadComercialAssignedHistoryFromSupabase,
   loadComercialAvailabilityStatusFromSupabase,
+  saveComercialAvailabilityStatusFromSupabase,
   loadComercialLeadsFromSupabase,
   loadAdminNotificationsFromSupabase,
   loadIndicadorHomeFromSupabase,
@@ -45,6 +48,21 @@ export {
   markUserNotificationAsRead,
   processExpiredLeadAssignments,
 } from './supabase-data.service'
+export {
+  loadComercialLeadSettingsFromSupabase,
+  saveComercialLeadSettingsFromSupabase,
+  setComercialReceivingLeadsFromSupabase,
+  devLogCommercialAvailability,
+  devLogCommercialRealtime,
+  devLogLeadAssignment,
+} from './commercial-lead.service'
+export type { ComercialLeadSettings } from './commercial-lead.service'
+export {
+  loadPipelineBoardFromSupabase,
+  loadPipelineCardsFromSupabase,
+  moveReferralPipelineStageFromSupabase,
+} from './pipeline.service'
+export type { MovePipelineStageResult } from './pipeline.service'
 export type { SidebarBadgeCountsMock } from './mock-data.service'
 export { getSidebarBadgeCountsFromMock } from './mock-data.service'
 export type {
@@ -74,6 +92,7 @@ export {
   createNotificationForProfileFromSupabase,
   notifyAdminsOfNewReferralFromSupabase,
   notifyIndicatorReferralProgressFromSupabase,
+  notifyReferralStatusChangedFromSupabase,
   notifyIndicatorRewardReleasedFromSupabase,
   createRealtimeToastPayload,
   NOTIFICATION_RECENT_LIMIT,

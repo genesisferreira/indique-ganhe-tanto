@@ -1,3 +1,4 @@
+import type { CommercialSlaLevel } from '@/lib/commercial-sla'
 import type { Indicador, Comercial } from './profile'
 import type { Plano } from './plan'
 
@@ -27,6 +28,20 @@ export interface Indicacao {
   dataAprovacao?: Date
   dataRecusa?: Date
   motivoRecusa?: string
+  /** Observação livre ao perder/recusar (referrals.lost_notes) */
+  observacoesRecusa?: string
+  /** Atribuição ao comercial */
+  atribuidoEm?: Date
+  primeiroContatoEm?: Date
+  /** Nível SLA escalonado */
+  slaLevel?: CommercialSlaLevel
+  /** Legado: true se slaLevel !== 'none' */
+  slaOverdue?: boolean
+  redistributionCount?: number
+  lastRedistributedAt?: Date
+  previousCommercialId?: string
+  previousCommercialNome?: string
+  slaRedistributed?: boolean
   createdAt: Date
   updatedAt: Date
 }

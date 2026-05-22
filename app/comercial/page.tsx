@@ -29,8 +29,17 @@ import {
   getAuthProfileBasicsFromSupabase,
   loadComercialLeadsFromSupabase,
 } from "@/lib/services/supabase-data.service"
+import {
+  loadComercialLeadSettingsFromSupabase,
+  mapSettingsToDisponibilidade,
+  devLogCommercialRealtime,
+} from "@/lib/services/commercial-lead.service"
+import type { ComercialDisponibilidade } from "@/types/profile"
 import type { DashboardComercial } from "@/types/dashboard"
 import type { Lead } from "@/types/lead"
+import { CommercialSlaOverdueBadge } from "@/components/commercial/commercial-sla-overdue-badge"
+import { CommercialRedistributedBadge } from "@/components/commercial/commercial-redistributed-badge"
+import { devLogCommercialSla } from "@/lib/commercial-sla"
 
 function primeNome(nome: string): string {
   const p = (nome ?? "").trim().split(/\s+/)[0]
@@ -116,6 +125,8 @@ export default function ComercialDashboard() {
   const [dashboard, setDashboard] = useState<DashboardComercial | null>(init?.dashboard ?? null)
   const [leadsAtivosLista, setLeadsAtivosLista] = useState<Lead[]>(init?.leadsAtivos ?? [])
   const [reloadTick, setReloadTick] = useState(0)
+  const [disponibilidade, setDisponibilidade] = useState<ComercialDisponibilidade>("disponivel")
+  const [leadsHoje, setLeadsHoje] = useState("0/20")
 
   const loadComercialDashboard = useCallback(async () => {
     if (isDataProviderMock()) {
@@ -130,13 +141,27 @@ export default function ComercialDashboard() {
       return
     }
 
-    const [remote, basics] = await Promise.all([
+    const [remote, basics, settings] = await Promise.all([
       loadComercialLeadsFromSupabase(),
       getAuthProfileBasicsFromSupabase(),
+      loadComercialLeadSettingsFromSupabase(),
     ])
+    if (!remote.ok) {
+      console.error("[commercial-leads:error]", remote.error, remote.meta)
+    }
     const uid = basics?.id ?? null
+    if (settings) {
+      setDisponibilidade(
+        mapSettingsToDisponibilidade(settings.isAvailable, settings.receivingLeads)
+      )
+      setLeadsHoje(`${settings.totalReceivedToday}/${settings.dailyLimit}`)
+      devLogCommercialRealtime("dashboard settings", {
+        activeLeads: settings.activeLeads,
+        leadsHoje: settings.totalReceivedToday,
+      })
+    }
     setNomeCumprimento(basics?.fullName ?? "")
-    const allLeads = remote ?? []
+    const allLeads = remote.ok ? remote.data : []
     const poolNovos =
       uid && allLeads.length > 0
         ? allLeads.filter((l) => !l.comercialId && l.status === "novo")
@@ -152,16 +177,18 @@ export default function ComercialDashboard() {
         : []
 
     setDashboard({ ...dashboardFromComercialLeads(allLeads, uid) })
-    setLeadsAtivosLista(
-      [...assignedAtivos, ...poolNovos].map((l) => structuredClone(l))
-    )
-    if (process.env.NODE_ENV === "development") {
-      console.log("[page-data:debug]", {
-        page: "/comercial",
-        source: "supabase",
-        total: allLeads?.length ?? 0,
-      })
-    }
+    const ativos = [...assignedAtivos, ...poolNovos].map((l) => structuredClone(l))
+    setLeadsAtivosLista(ativos)
+    devLogCommercialSla("dashboard leads ativos", {
+      total: allLeads?.length ?? 0,
+      ativos: ativos.length,
+      sla: {
+        warning: ativos.filter((l) => l.slaLevel === "warning").length,
+        critical: ativos.filter((l) => l.slaLevel === "critical").length,
+        redistribution_ready: ativos.filter((l) => l.slaLevel === "redistribution_ready")
+          .length,
+      },
+    })
   }, [])
 
   useEffect(() => {
@@ -214,9 +241,40 @@ export default function ComercialDashboard() {
         title={`Olá, ${primeNome(nomeCumprimento)}!`}
         description="Gerencie seus leads e acompanhe seu desempenho"
       >
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-success/10 border border-success/20">
-          <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-          <span className="text-sm font-medium text-success">Disponível</span>
+        <div
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${
+            disponibilidade === "disponivel"
+              ? "bg-success/10 border-success/20"
+              : disponibilidade === "em_pausa"
+                ? "bg-warning/10 border-warning/20"
+                : "bg-muted border-muted"
+          }`}
+        >
+          <span
+            className={`w-2 h-2 rounded-full ${
+              disponibilidade === "disponivel"
+                ? "bg-success animate-pulse"
+                : disponibilidade === "em_pausa"
+                  ? "bg-warning"
+                  : "bg-muted-foreground"
+            }`}
+          />
+          <span
+            className={`text-sm font-medium ${
+              disponibilidade === "disponivel"
+                ? "text-success"
+                : disponibilidade === "em_pausa"
+                  ? "text-warning"
+                  : "text-muted-foreground"
+            }`}
+          >
+            {disponibilidade === "disponivel"
+              ? "Disponível"
+              : disponibilidade === "em_pausa"
+                ? "Em pausa"
+                : "Offline"}
+          </span>
+          <span className="text-xs text-muted-foreground">· {leadsHoje} hoje</span>
         </div>
       </PageHeader>
 
@@ -269,9 +327,23 @@ export default function ComercialDashboard() {
       {/* Active Leads */}
       <div className="rounded-xl border bg-card p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-foreground">
-            Leads Ativos
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-foreground">
+              Leads Ativos
+            </h2>
+            {leadsAtivosLista.some((l) => l.slaLevel && l.slaLevel !== "none") ? (
+              <CommercialSlaOverdueBadge
+                level={
+                  leadsAtivosLista.some((l) => l.slaLevel === "redistribution_ready")
+                    ? "redistribution_ready"
+                    : leadsAtivosLista.some((l) => l.slaLevel === "critical")
+                      ? "critical"
+                      : "warning"
+                }
+                variant="compact"
+              />
+            ) : null}
+          </div>
           <Button variant="ghost" size="sm" asChild>
             <Link href="/comercial/leads">
               Ver todos
@@ -309,7 +381,13 @@ export default function ComercialDashboard() {
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <CommercialRedistributedBadge
+                    redistributionCount={lead.redistributionCount}
+                    previousCommercialName={lead.previousCommercialNome}
+                    variant="compact"
+                  />
+                  <CommercialSlaOverdueBadge level={lead.slaLevel} variant="compact" />
                   <StatusBadge status={lead.status} />
                   <Button variant="ghost" size="icon" asChild>
                     <span>

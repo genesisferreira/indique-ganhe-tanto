@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/commercial-sla",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/brbyte-sync",
+      "schedule": "0 */6 * * *"
+    }
+  ]
+}

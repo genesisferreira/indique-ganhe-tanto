@@ -35,9 +35,12 @@ export default function RetornosPage() {
         loadComercialLeadsFromSupabase(),
         getAuthProfileBasicsFromSupabase(),
       ])
+      if (!all.ok) {
+        console.error("[commercial-leads:error]", all.error, all.meta)
+      }
       const uid = basics?.id ?? null
-      const assigned =
-        uid && all ? all.filter((l) => l.comercialId === uid) : []
+      const rows = all.ok ? all.data : []
+      const assigned = uid ? rows.filter((l) => l.comercialId === uid) : []
       setListaLeads(assigned)
     })()
   }, [mockLeads])

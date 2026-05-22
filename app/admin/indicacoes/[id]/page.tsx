@@ -16,6 +16,12 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  LOST_REASON_OPTIONS,
+  isIndicacaoRejectedStatus,
+} from "@/lib/referral-lost-reasons"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { indicacoes, comerciais } from "@/lib/services/mock-data.service"
 import {
   assignReferralToCommercialFromSupabase,
@@ -70,6 +76,8 @@ export default function AdminIndicacaoDetalhePage({
   const [comerciaisLista, setComerciaisLista] = useState<Comercial[]>([])
   const [selectedComercialId, setSelectedComercialId] = useState<string>("")
   const [selectedStatus, setSelectedStatus] = useState<IndicacaoStatus | "">("")
+  const [lostReason, setLostReason] = useState("")
+  const [lostNotes, setLostNotes] = useState("")
   const [savingAssign, setSavingAssign] = useState(false)
   const [savingStatus, setSavingStatus] = useState(false)
   const [isConfirmingFirstInvoice, setIsConfirmingFirstInvoice] = useState(false)
@@ -223,6 +231,10 @@ export default function AdminIndicacaoDetalhePage({
 
   const handleStatus = async () => {
     if (!selectedStatus || !indicacao) return
+    if (selectedStatus === "recusada" && !lostReason.trim()) {
+      toast.error("Selecione o motivo da recusa.")
+      return
+    }
     setSavingStatus(true)
     const novoStatus = selectedStatus
     try {
@@ -231,10 +243,15 @@ export default function AdminIndicacaoDetalhePage({
           ? { ...prev, status: novoStatus, updatedAt: new Date() }
           : prev
       )
-      const r = await updateAdminReferralStatusFromSupabase(indicacao.id, novoStatus)
+      const r = await updateAdminReferralStatusFromSupabase(indicacao.id, novoStatus, {
+        lostReason: novoStatus === "recusada" ? lostReason : undefined,
+        lostNotes: novoStatus === "recusada" ? lostNotes : undefined,
+      })
       if (r.ok) {
         toast.success("Status atualizado.")
         setSelectedStatus("")
+        setLostReason("")
+        setLostNotes("")
         await refreshAfterMutation()
       } else {
         toast.error(r.message)
@@ -378,6 +395,20 @@ export default function AdminIndicacaoDetalhePage({
                 Recusada em {indicacao.dataRecusa.toLocaleString("pt-BR")}
               </p>
             ) : null}
+            {isIndicacaoRejectedStatus(indicacao.status) &&
+            (indicacao.motivoRecusa || indicacao.observacoesRecusa) ? (
+              <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3 space-y-1">
+                <p className="text-sm font-medium text-foreground">Motivo da recusa</p>
+                {indicacao.motivoRecusa ? (
+                  <p className="text-sm">{indicacao.motivoRecusa}</p>
+                ) : null}
+                {indicacao.observacoesRecusa ? (
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                    {indicacao.observacoesRecusa}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       </div>
@@ -427,7 +458,14 @@ export default function AdminIndicacaoDetalhePage({
               <div className="flex-1 space-y-2">
                 <Select
                   value={selectedStatus || undefined}
-                  onValueChange={(v) => setSelectedStatus(v as IndicacaoStatus)}
+                  onValueChange={(v) => {
+                    const next = v as IndicacaoStatus
+                    setSelectedStatus(next)
+                    if (next !== "recusada") {
+                      setLostReason("")
+                      setLostNotes("")
+                    }
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Novo status" />
@@ -440,9 +478,44 @@ export default function AdminIndicacaoDetalhePage({
                     ))}
                   </SelectContent>
                 </Select>
+                {selectedStatus === "recusada" ? (
+                  <div className="space-y-3 pt-2">
+                    <div className="space-y-2">
+                      <Label>Motivo da recusa *</Label>
+                      <Select
+                        value={lostReason || undefined}
+                        onValueChange={setLostReason}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione o motivo" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {LOST_REASON_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Observação (opcional)</Label>
+                      <Textarea
+                        value={lostNotes}
+                        onChange={(e) => setLostNotes(e.target.value)}
+                        rows={2}
+                        placeholder="Detalhes adicionais..."
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
               <Button
-                disabled={!selectedStatus || savingStatus}
+                disabled={
+                  !selectedStatus ||
+                  savingStatus ||
+                  (selectedStatus === "recusada" && !lostReason.trim())
+                }
                 onClick={() => void handleStatus()}
               >
                 {savingStatus ? "Salvando…" : "Aplicar"}

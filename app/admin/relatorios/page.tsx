@@ -178,15 +178,18 @@ export default function AdminRelatoriosPage() {
         loadAdminComerciaisFromSupabase(),
         loadAdminAllPaymentsFromSupabase(),
       ])
-      setIndicacoesS(a ?? [])
+      if (a && !a.ok) {
+        console.error("[admin-indicacoes:error]", a.error, a.meta)
+      }
+      setIndicacoesS(a?.ok ? a.data : [])
       setIndicadoresS(b ?? [])
       setComerciaisS(c ?? [])
       setPagamentosS(d ?? [])
       if (isDev()) {
-        const anyNull = a === null || b === null || c === null || d === null
+        const anyNull = !a?.ok || b === null || c === null || d === null
         console.log("[supabase-query:debug]", {
           query: "admin-relatorios-bundle",
-          referrals: a?.length ?? "null",
+          referrals: a?.ok ? a.data.length : "error",
           indicators: b?.length ?? "null",
           commercials: c?.length ?? "null",
           payments: d?.length ?? "null",

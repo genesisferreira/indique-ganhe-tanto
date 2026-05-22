@@ -1,4 +1,8 @@
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import {
+  getCommercialSlaLevel,
+  devLogCommercialSlaLevel,
+} from "@/lib/commercial-sla"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { PAYMENT_RECEIPTS_BUCKET } from "@/lib/supabase/upload-payment-receipt"
 import type { DashboardIndicador } from "@/types/dashboard"
@@ -30,10 +34,18 @@ import {
 import {
   createNotificationForProfileFromSupabase,
   notifyAdminsOfNewReferralFromSupabase,
-  notifyIndicatorReferralProgressFromSupabase,
   notifyIndicatorRewardReleasedFromSupabase,
 } from "@/lib/services/notification.service"
 import type { AuthProfileBasics } from "@/types/auth-profile"
+import {
+  getLostReasonLabel,
+  isComercialLeadRejectStatus,
+  logCommercialLeadDetail,
+  logIndicatorReferralDetail,
+  logLeadLostReason,
+  logLeadReject,
+} from "@/lib/referral-lost-reasons"
+import { moveReferralPipelineStageFromSupabase } from "@/lib/services/pipeline.service"
 
 type ProfileRow = {
   id: string
@@ -65,12 +77,19 @@ type ReferralRow = {
   approved_at: string | null
   rejected_at: string | null
   rejection_reason: string | null
+  lost_reason?: string | null
+  lost_notes?: string | null
+  lost_at?: string | null
+  pipeline_stage?: string | null
   created_at: string
   updated_at: string
   assigned_at?: string | null
   first_response_at?: string | null
   last_interaction_at?: string | null
   redistribution_count?: number
+  last_redistributed_at?: string | null
+  previous_commercial_profile_id?: string | null
+  sla_redistributed?: boolean
   admin_alerted?: boolean
   plans?: { name: string } | { name: string }[] | null
 }
@@ -110,6 +129,59 @@ function mapRewardType(t: string): RecompensaTipo {
   return t === "desconto_fatura" ? "desconto_fatura" : "pix"
 }
 
+function computeReferralSlaFields(row: ReferralRow): {
+  slaLevel: ReturnType<typeof getCommercialSlaLevel>
+  slaOverdue: boolean
+} {
+  const slaLevel = getCommercialSlaLevel({
+    commercialProfileId: row.commercial_profile_id,
+    assignedAt: row.assigned_at,
+    firstResponseAt: row.first_response_at,
+    status: row.status,
+  })
+  if (slaLevel !== "none") {
+    devLogCommercialSlaLevel(slaLevel, {
+      referralId: row.id,
+      commercialProfileId: row.commercial_profile_id,
+      assignedAt: row.assigned_at,
+      status: row.status,
+    })
+  }
+  return { slaLevel, slaOverdue: slaLevel !== "none" }
+}
+
+function mapRedistributionFields(row: ReferralRow) {
+  return {
+    redistributionCount: row.redistribution_count ?? 0,
+    lastRedistributedAt: row.last_redistributed_at
+      ? new Date(row.last_redistributed_at)
+      : undefined,
+    previousCommercialId: row.previous_commercial_profile_id ?? undefined,
+    slaRedistributed: Boolean(row.sla_redistributed),
+  }
+}
+
+function mapReferralLostFields(row: ReferralRow): {
+  motivoRecusa?: string
+  observacoesRecusa?: string
+  dataRecusa?: Date
+} {
+  const rawReason = row.lost_reason?.trim() || row.rejection_reason?.trim() || ""
+  const motivoRecusa =
+    getLostReasonLabel(rawReason || null) ?? (rawReason || undefined)
+  const observacoesRecusa = row.lost_notes?.trim() || undefined
+  const dataRecusa = row.rejected_at
+    ? new Date(row.rejected_at)
+    : row.lost_at
+      ? new Date(row.lost_at)
+      : undefined
+  return {
+    motivoRecusa: motivoRecusa || undefined,
+    observacoesRecusa,
+    dataRecusa,
+  }
+}
+
 function planNomeFromRow(row: ReferralRow): Plano | undefined {
   const p = row.plans
   if (!p) return undefined
@@ -145,8 +217,13 @@ function referralToIndicacao(row: ReferralRow, indicadorId: string): Indicacao {
       ? new Date(row.first_invoice_paid_at)
       : undefined,
     dataAprovacao: row.approved_at ? new Date(row.approved_at) : undefined,
-    dataRecusa: row.rejected_at ? new Date(row.rejected_at) : undefined,
-    motivoRecusa: row.rejection_reason ?? undefined,
+    atribuidoEm: row.assigned_at ? new Date(row.assigned_at) : undefined,
+    primeiroContatoEm: row.first_response_at
+      ? new Date(row.first_response_at)
+      : undefined,
+    ...mapReferralLostFields(row),
+    ...computeReferralSlaFields(row),
+    ...mapRedistributionFields(row),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   }
@@ -187,8 +264,13 @@ function referralRowToIndicacaoMerged(
       ? new Date(row.first_invoice_paid_at)
       : undefined,
     dataAprovacao: row.approved_at ? new Date(row.approved_at) : undefined,
-    dataRecusa: row.rejected_at ? new Date(row.rejected_at) : undefined,
-    motivoRecusa: row.rejection_reason ?? undefined,
+    atribuidoEm: row.assigned_at ? new Date(row.assigned_at) : undefined,
+    primeiroContatoEm: row.first_response_at
+      ? new Date(row.first_response_at)
+      : undefined,
+    ...mapReferralLostFields(row),
+    ...computeReferralSlaFields(row),
+    ...mapRedistributionFields(row),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   }
@@ -1117,9 +1199,10 @@ export async function loadAdminNotificationsFromSupabase(): Promise<
       return null
     }
 
-    return (rows ?? []).map((raw: unknown) => {
+    return (rows ?? []).flatMap((raw: unknown) => {
       const row = raw as NotificationRow
       const mapped = mapNotificationRowFromDb(row, null)
+      if (!mapped) return []
       const referralIdRaw = mapped.metadata?.referral_id
       return {
         id: mapped.id,
@@ -1638,104 +1721,7 @@ export async function insertIndicadorReferral(
       from: (t: string) => ReturnType<typeof supabase.from>
     }
 
-    const availabilityStatusValue = "disponivel"
-    // No schema local usamos availability_status='disponivel' como equivalente de is_available=true.
-    const { data: comercialRows, error: comercialError } = await db
-      .from("commercial_availability")
-      .select("commercial_profile_id, created_at")
-      .eq("availability_status", availabilityStatusValue)
-      .order("created_at", { ascending: true })
-
-    devLogInsertReferral("resultado bruto query commercial_availability", {
-      filter: { availability_status: availabilityStatusValue },
-      error: comercialError?.message ?? null,
-      code: comercialError?.code ?? null,
-      rowCount: comercialRows?.length ?? 0,
-      rawRows: comercialRows ?? [],
-    })
-
-    if (comercialError) {
-      return {
-        ok: false,
-        message: comercialError.message || "Não foi possível selecionar comercial disponível.",
-      }
-    }
-
-    const availableRows = (comercialRows ?? []) as ComercialAvailabilityRow[]
-    devLogInsertReferral("quantidade comerciais disponíveis", {
-      count: availableRows.length,
-    })
-    if (availableRows.length === 0) {
-      devLogInsertReferral(
-        "nenhum comercial disponível visível (possível efeito de RLS para usuário indicador)"
-      )
-    }
-
-    const availableIds = availableRows.map((row) => row.commercial_profile_id)
-
-    const leadCountByComercial = new Map<string, number>()
-    if (availableIds.length > 0) {
-      const { data: activeReferrals, error: activeReferralsError } = await db
-        .from("referrals")
-        .select("commercial_profile_id")
-        .in("commercial_profile_id", availableIds)
-        .in("status", ["em_atendimento", "pendente", "aprovada"])
-
-      devLogInsertReferral("contagem de leads por comercial (linhas ativas)", {
-        error: activeReferralsError?.message ?? null,
-        code: activeReferralsError?.code ?? null,
-        rowCount: activeReferrals?.length ?? 0,
-      })
-
-      if (activeReferralsError) {
-        return {
-          ok: false,
-          message:
-            activeReferralsError.message ||
-            "Não foi possível calcular carga de leads dos comerciais.",
-        }
-      }
-
-      for (const id of availableIds) {
-        leadCountByComercial.set(id, 0)
-      }
-      for (const raw of (activeReferrals ?? []) as ActiveReferralCountRow[]) {
-        if (!raw.commercial_profile_id) continue
-        const current = leadCountByComercial.get(raw.commercial_profile_id) ?? 0
-        leadCountByComercial.set(raw.commercial_profile_id, current + 1)
-      }
-    }
-
-    devLogInsertReferral("contagem consolidada de leads por comercial", {
-      counts: availableRows.map((row) => ({
-        commercial_profile_id: row.commercial_profile_id,
-        active_leads: leadCountByComercial.get(row.commercial_profile_id) ?? 0,
-        created_at: row.created_at,
-      })),
-    })
-
-    const selectedCommercial = [...availableRows].sort((a, b) => {
-      const countA = leadCountByComercial.get(a.commercial_profile_id) ?? 0
-      const countB = leadCountByComercial.get(b.commercial_profile_id) ?? 0
-      if (countA !== countB) return countA - countB
-
-      const createdAtCompare = a.created_at.localeCompare(b.created_at)
-      if (createdAtCompare !== 0) return createdAtCompare
-      return a.commercial_profile_id.localeCompare(b.commercial_profile_id)
-    })[0]
-
-    const selectedCommercialId = selectedCommercial?.commercial_profile_id ?? null
-    const referralStatus = selectedCommercialId ? "em_atendimento" : "pendente"
-
-    devLogInsertReferral("comercial selecionado", {
-      selectedCommercialId,
-      selectedActiveLeadCount: selectedCommercialId
-        ? (leadCountByComercial.get(selectedCommercialId) ?? 0)
-        : null,
-      referralStatus,
-    })
-
-    const nowIso = new Date().toISOString()
+    // Distribuição automática: trigger AFTER INSERT + RPC assign_referral_to_next_commercial
     const insertPayload = {
       indicator_profile_id: user.id,
       referred_name: input.referred_name.trim(),
@@ -1745,10 +1731,10 @@ export async function insertIndicadorReferral(
       plan_id: input.plan_id,
       reward_type: input.reward_type,
       reward_amount: input.reward_amount,
-      commercial_profile_id: selectedCommercialId,
-      status: referralStatus,
-      assigned_at: selectedCommercialId ? nowIso : null,
-      last_interaction_at: selectedCommercialId ? nowIso : null,
+      commercial_profile_id: null,
+      status: "pendente" as const,
+      assigned_at: null,
+      last_interaction_at: null,
     }
     devLogInsertReferral("payload final do insert", insertPayload)
     devLogInsertReferral("campos SLA no insert", {
@@ -1813,55 +1799,10 @@ export async function insertIndicadorReferral(
       })
     }
 
-    if (insertedReferralId && selectedCommercialId) {
-      void createNotificationForProfileFromSupabase({
-        profileId: selectedCommercialId,
-        notificationType: "indicacao",
-        title: "Novo lead atribuído",
-        message: "Um novo lead foi atribuído automaticamente para você.",
-        data: {
-          action: "auto_assign",
-          referral_id: insertedReferralId,
-        },
-        actionUrl: `/comercial/leads/${insertedReferralId}`,
-      })
-
-      const { data: histRows, error: histError } = await db
-        .from("referral_history")
-        .insert({
-          referral_id: insertedReferralId,
-          actor_profile_id: user.id,
-          old_status: "pendente",
-          new_status: "em_atendimento",
-          action_note: "Lead atribuído automaticamente",
-          metadata: {
-            action: "auto_assign",
-            strategy: "least_active_leads",
-            selected_commercial_id: selectedCommercialId,
-          },
-        })
-        .select("id, referral_id, old_status, new_status, action_note, metadata")
-
-      devLogInsertReferral("resultado insert referral_history", {
-        error: histError?.message ?? null,
-        code: histError?.code ?? null,
-        rowCount: histRows?.length ?? 0,
-        rows: histRows ?? [],
-      })
-
-      if (histError && isDev()) {
-        console.warn(
-          "[insert-referral:supabase]",
-          "histórico auto_assign falhou (indicação já criada)",
-          histError.message
-        )
-      }
-    } else {
-      devLogInsertReferral("sem autoatribuição; histórico não criado", {
-        insertedReferralId,
-        selectedCommercialId,
-      })
-    }
+    devLogInsertReferral(
+      "distribuição automática delegada ao trigger assign_referral_to_next_commercial",
+      { insertedReferralId }
+    )
 
     return { ok: true }
   } catch (e) {
@@ -2035,35 +1976,31 @@ type ReferralHistoryRow = {
   created_at: string
 }
 
-/**
- * Todas as indicações (admin). Dados reais do Supabase; `null` só em erro / sem permissão.
- */
-export async function loadAdminReferralsFromSupabase(): Promise<Indicacao[] | null> {
-  try {
-    const supabase = getSupabaseClient()
-    const db = supabase as unknown as {
-      from: (t: string) => ReturnType<typeof supabase.from>
-    }
-    const {
-      data: { user },
-      error: authErr,
-    } = await supabase.auth.getUser()
-    if (authErr || !user) return null
+/** Metadados de diagnóstico dos loaders de referrals (admin / comercial). */
+export type ReferralsLoadMeta = {
+  authUserId: string | null
+  profileId: string | null
+  role: string | null
+  queryLabel: string
+  filter: string | null
+  selectColumns: string
+  referralRowCount: number
+  commercialProfileIdsSample: string[]
+}
 
-    const { data: profile, error: profileError } = await db
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .maybeSingle()
-    const role = (profile as { role?: string } | null)?.role ?? null
-    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
-      return null
+export type ReferralsLoadResult<T> =
+  | { ok: true; data: T[]; meta: ReferralsLoadMeta }
+  | {
+      ok: false
+      data: []
+      error: string
+      code?: string
+      details?: string
+      hint?: string
+      meta: ReferralsLoadMeta
     }
 
-    const { data: refData, error: refError } = await db
-      .from("referrals")
-      .select(
-        `
+const REFERRALS_LIST_SELECT_CORE = `
         id,
         indicator_profile_id,
         referred_name,
@@ -2084,58 +2021,345 @@ export async function loadAdminReferralsFromSupabase(): Promise<Indicacao[] | nu
         created_at,
         updated_at
       `
-      )
-      .order("created_at", { ascending: false })
-      .limit(2000)
 
-    if (isDev()) {
-      console.log("[admin-indicacoes:supabase] raw", { data: refData, error: refError })
+const REFERRALS_LIST_SELECT_EXTENDED = `
+        id,
+        indicator_profile_id,
+        referred_name,
+        referred_phone,
+        referred_email,
+        referred_address,
+        plan_id,
+        reward_type,
+        reward_amount,
+        status,
+        commercial_profile_id,
+        notes,
+        first_invoice_paid,
+        first_invoice_paid_at,
+        approved_at,
+        rejected_at,
+        rejection_reason,
+        assigned_at,
+        first_response_at,
+        redistribution_count,
+        last_redistributed_at,
+        previous_commercial_profile_id,
+        sla_redistributed,
+        created_at,
+        updated_at
+      `
+
+function isMissingColumnPostgrestError(
+  error: { code?: string; message?: string } | null
+): boolean {
+  if (!error) return false
+  const code = error.code ?? ""
+  const msg = (error.message ?? "").toLowerCase()
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    msg.includes("does not exist") ||
+    (msg.includes("column") && msg.includes("referrals"))
+  )
+}
+
+function formatPostgrestError(error: {
+  message?: string
+  code?: string
+  details?: string
+  hint?: string
+} | null): string {
+  if (!error) return "Erro desconhecido na consulta."
+  return [
+    error.message,
+    error.code ? `code=${error.code}` : "",
+    error.details ? `details=${error.details}` : "",
+    error.hint ? `hint=${error.hint}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ")
+}
+
+function buildReferralsLoadMeta(
+  partial: Partial<ReferralsLoadMeta>
+): ReferralsLoadMeta {
+  return {
+    authUserId: null,
+    profileId: null,
+    role: null,
+    queryLabel: "referrals",
+    filter: null,
+    selectColumns: REFERRALS_LIST_SELECT_EXTENDED,
+    referralRowCount: 0,
+    commercialProfileIdsSample: [],
+    ...partial,
+  }
+}
+
+function sampleCommercialProfileIds(rows: ReferralRow[], limit = 8): string[] {
+  const ids: string[] = []
+  for (const r of rows) {
+    if (r.commercial_profile_id && !ids.includes(r.commercial_profile_id)) {
+      ids.push(r.commercial_profile_id)
+      if (ids.length >= limit) return ids
+    }
+  }
+  return ids
+}
+
+type ReferralsDb = {
+  from: (t: string) => ReturnType<ReturnType<typeof getSupabaseClient>["from"]>
+}
+
+async function fetchReferralsListRows(
+  db: ReferralsDb,
+  opts: {
+    logTag: "admin-indicacoes" | "commercial-leads"
+    queryLabel: string
+    applyFilter?: (qb: ReturnType<ReferralsDb["from"]>) => ReturnType<ReferralsDb["from"]>
+  }
+): Promise<{
+  rows: ReferralRow[]
+  selectUsed: string
+  error: { message?: string; code?: string; details?: string; hint?: string } | null
+}> {
+  const selects = [REFERRALS_LIST_SELECT_EXTENDED, REFERRALS_LIST_SELECT_CORE]
+  let lastError: {
+    message?: string
+    code?: string
+    details?: string
+    hint?: string
+  } | null = null
+
+  for (let i = 0; i < selects.length; i++) {
+    const selectUsed = selects[i]
+    let qb = db.from("referrals").select(selectUsed)
+    if (opts.applyFilter) {
+      qb = opts.applyFilter(qb)
+    }
+    const queryDesc = `${opts.queryLabel} | referrals.select`
+
+    try {
+      const { data } = await qb
+        .order("created_at", { ascending: false })
+        .limit(2000)
+        .throwOnError()
+      const rows = (data ?? []) as ReferralRow[]
+      console.log(`[${opts.logTag}:supabase-query]`, {
+        query: queryDesc,
+        selectVariant: i === 0 ? "extended" : "core",
+        rowsReturned: rows.length,
+        error: null,
+      })
+      return { rows, selectUsed, error: null }
+    } catch (thrown) {
+      const error =
+        thrown &&
+        typeof thrown === "object" &&
+        "message" in thrown
+          ? (thrown as {
+              message?: string
+              code?: string
+              details?: string
+              hint?: string
+            })
+          : { message: thrown instanceof Error ? thrown.message : String(thrown) }
+      lastError = error
+      console.error(`[${opts.logTag}:error]`, error)
+      console.log(`[${opts.logTag}:supabase-query]`, {
+        query: queryDesc,
+        selectVariant: i === 0 ? "extended" : "core",
+        rowsReturned: 0,
+        error,
+      })
+      if (isMissingColumnPostgrestError(error) && i < selects.length - 1) {
+        console.warn(
+          `[${opts.logTag}:error] coluna ausente — retry com SELECT reduzido`
+        )
+        continue
+      }
+      return { rows: [], selectUsed, error }
+    }
+  }
+
+  return { rows: [], selectUsed: selects[selects.length - 1]!, error: lastError }
+}
+
+async function loadPlansMapForReferralRows(
+  db: ReferralsDb,
+  referrals: ReferralRow[],
+  logTag: "admin-indicacoes" | "commercial-leads"
+): Promise<Map<string, Plano>> {
+  const planoById = new Map<string, Plano>()
+  const planIds = [...new Set(referrals.map((r) => r.plan_id))]
+  if (planIds.length === 0) return planoById
+
+  try {
+    const { data: plansData } = await db
+      .from("plans")
+      .select(
+        "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+      )
+      .in("id", planIds)
+      .throwOnError()
+    for (const pr of plansData ?? []) {
+      const p = mapPlanRowToPlano(pr as PlanCatalogRow)
+      planoById.set(p.id, p)
+    }
+    console.log(`[${logTag}:supabase-query]`, {
+      query: "plans.in(planIds)",
+      rowsReturned: plansData?.length ?? 0,
+      error: null,
+    })
+  } catch (thrown) {
+    const error =
+      thrown &&
+      typeof thrown === "object" &&
+      "message" in thrown
+        ? thrown
+        : { message: thrown instanceof Error ? thrown.message : String(thrown) }
+    console.error(`[${logTag}:error]`, { step: "plans", error })
+    console.log(`[${logTag}:supabase-query]`, {
+      query: "plans.in(planIds)",
+      rowsReturned: 0,
+      error,
+    })
+  }
+  return planoById
+}
+
+/**
+ * Todas as indicações (admin). Sem filtro de status/pipeline na query principal.
+ */
+export async function loadAdminReferralsFromSupabase(): Promise<
+  ReferralsLoadResult<Indicacao>
+> {
+  let meta = buildReferralsLoadMeta({
+    queryLabel: "referrals.admin.all",
+    filter: null,
+  })
+
+  try {
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as ReferralsDb
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser()
+
+    meta = { ...meta, authUserId: user?.id ?? null }
+
+    if (authErr || !user) {
+      const error = authErr?.message ?? "Sessão ausente"
+      console.error("[admin-indicacoes:error]", { step: "auth", error: authErr ?? error })
+      return { ok: false, data: [], error, meta }
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const profileId = (profile as { id?: string } | null)?.id ?? user.id
+    const role = (profile as { role?: string } | null)?.role ?? null
+    meta = { ...meta, profileId, role }
+
+    console.log("[admin-indicacoes:session]", {
+      authUserId: user.id,
+      profileId,
+      role,
+      profileError: profileError?.message ?? null,
+    })
+
+    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
+      const error =
+        profileError?.message ??
+        `Sem permissão admin (role=${role ?? "ausente"})`
+      console.error("[admin-indicacoes:error]", { step: "profile", error })
+      return {
+        ok: false,
+        data: [],
+        error,
+        code: profileError?.code,
+        meta,
+      }
+    }
+
+    const { rows: referrals, selectUsed, error: refError } =
+      await fetchReferralsListRows(db, {
+        logTag: "admin-indicacoes",
+        queryLabel: "referrals.admin.all",
+      })
+
+    meta = {
+      ...meta,
+      selectColumns: selectUsed,
+      referralRowCount: referrals.length,
+      commercialProfileIdsSample: sampleCommercialProfileIds(referrals),
     }
 
     if (refError) {
-      return null
-    }
-
-    const referrals = (refData ?? []) as ReferralRow[]
-    const planIds = [...new Set(referrals.map((r) => r.plan_id))]
-
-    const planoById = new Map<string, Plano>()
-    if (planIds.length > 0) {
-      const { data: plansData, error: plansError } = await db
-        .from("plans")
-        .select(
-          "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
-        )
-        .in("id", planIds)
-
-      if (plansError) {
-        return null
-      }
-      for (const pr of plansData ?? []) {
-        const p = mapPlanRowToPlano(pr as PlanCatalogRow)
-        planoById.set(p.id, p)
+      return {
+        ok: false,
+        data: [],
+        error: formatPostgrestError(refError),
+        code: refError.code,
+        details: refError.details,
+        hint: refError.hint,
+        meta,
       }
     }
+
+    const planoById = await loadPlansMapForReferralRows(
+      db,
+      referrals,
+      "admin-indicacoes"
+    )
 
     const profileIds = new Set<string>()
     for (const r of referrals) {
       profileIds.add(r.indicator_profile_id)
       if (r.commercial_profile_id) profileIds.add(r.commercial_profile_id)
+      if (r.previous_commercial_profile_id) {
+        profileIds.add(r.previous_commercial_profile_id)
+      }
     }
     const profileList = [...profileIds]
 
     const profileMap = new Map<string, AdminProfileShortRow>()
     if (profileList.length > 0) {
-      const { data: profData, error: profError } = await db
-        .from("profiles")
-        .select("id, full_name, email, phone, cpf, is_active, created_at")
-        .in("id", profileList)
-
-      if (profError) {
-        return null
-      }
-      for (const pr of (profData ?? []) as AdminProfileShortRow[]) {
-        profileMap.set(pr.id, pr)
+      try {
+        const { data: profData } = await db
+          .from("profiles")
+          .select("id, full_name, email, phone, cpf, is_active, created_at")
+          .in("id", profileList)
+          .throwOnError()
+        for (const pr of (profData ?? []) as AdminProfileShortRow[]) {
+          profileMap.set(pr.id, pr)
+        }
+        console.log("[admin-indicacoes:supabase-query]", {
+          query: "profiles.in(ids)",
+          rowsReturned: profData?.length ?? 0,
+          error: null,
+        })
+      } catch (thrown) {
+        const error =
+          thrown &&
+          typeof thrown === "object" &&
+          "message" in thrown
+            ? thrown
+            : {
+                message:
+                  thrown instanceof Error ? thrown.message : String(thrown),
+              }
+        console.error("[admin-indicacoes:error]", { step: "profiles", error })
+        console.log("[admin-indicacoes:supabase-query]", {
+          query: "profiles.in(ids)",
+          rowsReturned: 0,
+          error,
+        })
       }
     }
 
@@ -2145,8 +2369,12 @@ export async function loadAdminReferralsFromSupabase(): Promise<Indicacao[] | nu
       const cp = r.commercial_profile_id
         ? profileMap.get(r.commercial_profile_id)
         : undefined
+      const prevCp = r.previous_commercial_profile_id
+        ? profileMap.get(r.previous_commercial_profile_id)
+        : undefined
       return {
         ...base,
+        previousCommercialNome: prevCp?.full_name ?? undefined,
         indicador: ip
           ? stubIndicadorFromAdminProfile(ip.id, {
               full_name: ip.full_name,
@@ -2170,13 +2398,20 @@ export async function loadAdminReferralsFromSupabase(): Promise<Indicacao[] | nu
       }
     })
 
-    if (isDev()) {
-      console.log("[admin-indicacoes:supabase] mapped", mapped)
-    }
+    console.log("[admin-indicacoes:result]", {
+      authUserId: meta.authUserId,
+      profileId: meta.profileId,
+      role: meta.role,
+      referralRowCount: meta.referralRowCount,
+      mappedCount: mapped.length,
+      commercialProfileIdsSample: meta.commercialProfileIdsSample,
+    })
 
-    return mapped
-  } catch {
-    return null
+    return { ok: true, data: mapped, meta }
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e)
+    console.error("[admin-indicacoes:error]", e)
+    return { ok: false, data: [], error, meta }
   }
 }
 
@@ -2235,15 +2470,43 @@ function mapReferralHistoryRowsToHistorico(
   return (historyRows ?? []).map((raw: unknown) => {
     const h = raw as ReferralHistoryRow
     const actor = h.actor_profile_id ? actorById.get(h.actor_profile_id) : null
-    const acaoBase = h.action_note?.trim() || "Atualização de lead"
-    const descricaoStatus =
-      h.old_status && h.old_status !== h.new_status
-        ? `Status: ${h.old_status} -> ${h.new_status}`
-        : `Status: ${h.new_status}`
-    const metadataAction =
-      h.metadata && typeof h.metadata.action === "string"
-        ? `Ação: ${h.metadata.action}`
+    const meta =
+      h.metadata && typeof h.metadata === "object"
+        ? (h.metadata as Record<string, unknown>)
         : null
+    const metaAction =
+      meta && typeof meta.action === "string" ? meta.action : null
+    const lostReasonRaw =
+      meta && typeof meta.lost_reason === "string" ? meta.lost_reason : null
+    const lostNotesRaw =
+      meta && typeof meta.lost_notes === "string" ? meta.lost_notes : null
+    const lostReasonLabel = getLostReasonLabel(lostReasonRaw) ?? lostReasonRaw
+
+    const isRejectEvent =
+      metaAction === "lead_lost" ||
+      metaAction === "referral_rejected" ||
+      h.new_status === "recusada"
+
+    let acao = h.action_note?.trim() || "Atualização de lead"
+    if (isRejectEvent) {
+      acao = acao || "Lead recusado"
+    }
+
+    const descParts: string[] = []
+    if (h.old_status && h.old_status !== h.new_status) {
+      descParts.push(`Status: ${h.old_status} → ${h.new_status}`)
+    } else if (h.new_status) {
+      descParts.push(`Status: ${h.new_status}`)
+    }
+    if (lostReasonLabel) {
+      descParts.push(`Motivo: ${lostReasonLabel}`)
+    }
+    if (lostNotesRaw?.trim()) {
+      descParts.push(`Observação: ${lostNotesRaw.trim()}`)
+    }
+    if (!isRejectEvent && metaAction) {
+      descParts.push(`Ação: ${metaAction}`)
+    }
 
     return {
       id: h.id,
@@ -2256,8 +2519,8 @@ function mapReferralHistoryRowsToHistorico(
             actor?.phone ?? ""
           )
         : undefined,
-      acao: acaoBase,
-      descricao: [descricaoStatus, metadataAction].filter(Boolean).join(" • "),
+      acao,
+      descricao: descParts.filter(Boolean).join(" • "),
       createdAt: new Date(h.created_at),
     }
   })
@@ -2311,6 +2574,9 @@ export async function loadAdminReferralDetailFromSupabase(
         approved_at,
         rejected_at,
         rejection_reason,
+        lost_reason,
+        lost_notes,
+        lost_at,
         created_at,
         updated_at,
         assigned_at,
@@ -2327,6 +2593,8 @@ export async function loadAdminReferralDetailFromSupabase(
       }
       return refError ? { kind: "error" } : { kind: "not-found" }
     }
+
+    logLeadLostReason("admin-detail-load", (row as ReferralRow).lost_reason)
 
     const refRow = row as ReferralRow
 
@@ -2628,9 +2896,57 @@ export async function assignReferralToCommercialFromSupabase(
 /**
  * Admin altera status do referral. Apenas admin_master | admin_financeiro.
  */
+export type ReferralRejectOptions = {
+  lostReason?: string
+  lostNotes?: string
+  note?: string
+}
+
+function isMissingColumnReferralError(
+  error: { code?: string; message?: string } | null | undefined
+): boolean {
+  if (!error) return false
+  const code = error.code ?? ""
+  const msg = (error.message ?? "").toLowerCase()
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    msg.includes("does not exist") ||
+    (msg.includes("column") && msg.includes("referrals"))
+  )
+}
+
+function buildRejectReferralPatch(opts: {
+  lostReason: string
+  lostNotes?: string
+  note?: string
+  nowIso: string
+}): Record<string, unknown> {
+  const reasonLabel = getLostReasonLabel(opts.lostReason) ?? opts.lostReason
+  const lostNotesTrimmed = opts.lostNotes?.trim() ?? ""
+  const noteTrimmed = opts.note?.trim() ?? ""
+  const patch: Record<string, unknown> = {
+    rejected_at: opts.nowIso,
+    rejection_reason: reasonLabel,
+    lost_reason: opts.lostReason,
+    pipeline_stage: "perdido",
+    lost_at: opts.nowIso,
+  }
+  if (lostNotesTrimmed) {
+    patch.lost_notes = lostNotesTrimmed
+  }
+  if (noteTrimmed) {
+    patch.notes = noteTrimmed
+  } else if (lostNotesTrimmed) {
+    patch.notes = lostNotesTrimmed
+  }
+  return patch
+}
+
 export async function updateAdminReferralStatusFromSupabase(
   referralId: string,
-  newStatus: IndicacaoStatus
+  newStatus: IndicacaoStatus,
+  options?: ReferralRejectOptions
 ): Promise<AdminReferralMutationResult> {
   if (isDataProviderMock()) {
     logAdminReferralsStatus("bloqueado — mock")
@@ -2644,6 +2960,10 @@ export async function updateAdminReferralStatusFromSupabase(
   if (!ADMIN_REFERRAL_STATUS_VALUES.has(newStatus)) {
     logAdminReferralsStatus("status inválido", { newStatus })
     return { ok: false, message: "Status inválido." }
+  }
+
+  if (newStatus === "recusada" && !options?.lostReason?.trim()) {
+    return { ok: false, message: "Selecione o motivo da recusa." }
   }
 
   try {
@@ -2698,8 +3018,17 @@ export async function updateAdminReferralStatusFromSupabase(
     if (newStatus === "aprovada" && !row.approved_at) {
       patch.approved_at = nowIso
     }
-    if (newStatus === "recusada") {
-      patch.rejected_at = nowIso
+    if (newStatus === "recusada" && options?.lostReason) {
+      Object.assign(
+        patch,
+        buildRejectReferralPatch({
+          lostReason: options.lostReason,
+          lostNotes: options.lostNotes,
+          nowIso,
+        })
+      )
+      logLeadReject("admin", { referralId, lostReason: options.lostReason })
+      logLeadLostReason("admin", options.lostReason, options.lostNotes)
     }
 
     logAdminStatusUpdate("request", { referralId, newStatus, oldStatus, patch })
@@ -2772,17 +3101,33 @@ export async function updateAdminReferralStatusFromSupabase(
       rejected_at: updatedRow!.rejected_at,
     })
 
+    const rejectLabel =
+      newStatus === "recusada" && options?.lostReason
+        ? getLostReasonLabel(options.lostReason) ?? options.lostReason
+        : null
+
     const { error: histErr } = await db.from("referral_history").insert({
       referral_id: referralId,
       actor_profile_id: user.id,
       old_status: oldStatus,
       new_status: newStatus,
-      action_note: "Status alterado pelo admin",
-      metadata: {
-        action: "admin_status_change",
-        from: oldStatus,
-        to: newStatus,
-      },
+      action_note:
+        newStatus === "recusada" ? "Lead recusado" : "Status alterado pelo admin",
+      metadata:
+        newStatus === "recusada" && options?.lostReason
+          ? {
+              action: "referral_rejected",
+              lost_reason: options.lostReason,
+              lost_reason_label: rejectLabel,
+              lost_notes: options.lostNotes?.trim() || null,
+              from: oldStatus,
+              to: newStatus,
+            }
+          : {
+              action: "admin_status_change",
+              from: oldStatus,
+              to: newStatus,
+            },
     })
 
     if (histErr) {
@@ -2803,8 +3148,31 @@ export async function updateAdminReferralStatusFromSupabase(
       }
     }
 
-    if (oldStatus !== newStatus) {
-      void notifyIndicatorReferralProgressFromSupabase(referralId)
+    if (newStatus === "recusada" && options?.lostReason) {
+      const pipelineLabel =
+        getLostReasonLabel(options.lostReason) ?? options.lostReason
+      const pipe = await moveReferralPipelineStageFromSupabase(
+        referralId,
+        "perdido",
+        undefined,
+        pipelineLabel
+      )
+      if (!pipe.ok && isDev()) {
+        logAdminReferralsStatus("pipeline perdido (não bloqueante)", {
+          message: pipe.message,
+        })
+      }
+    }
+
+    if (oldStatus !== newStatus && isDev()) {
+      console.log("[notification:status-change]", {
+        referralId,
+        oldStatus,
+        newStatus,
+        lostReason: options?.lostReason ?? null,
+        via: "db_trigger",
+        source: "updateAdminReferralStatus",
+      })
     }
 
     logAdminReferralsStatus("ok", { referralId, oldStatus, newStatus })
@@ -3060,9 +3428,15 @@ export async function loadAdminComerciaisFromSupabase(): Promise<Comercial[] | n
 }
 
 /**
- * Último status de disponibilidade do comercial logado (`commercial_availability`).
+ * Disponibilidade do comercial (`commercial_lead_settings` + fallback legado).
  */
 export async function loadComercialAvailabilityStatusFromSupabase(): Promise<ComercialDisponibilidade | null> {
+  const { loadComercialLeadSettingsFromSupabase, mapSettingsToDisponibilidade } =
+    await import("@/lib/services/commercial-lead.service")
+  const settings = await loadComercialLeadSettingsFromSupabase()
+  if (settings) {
+    return mapSettingsToDisponibilidade(settings.isAvailable, settings.receivingLeads)
+  }
   try {
     const supabase = getSupabaseClient()
     const db = supabase as unknown as {
@@ -3074,14 +3448,6 @@ export async function loadComercialAvailabilityStatusFromSupabase(): Promise<Com
     } = await supabase.auth.getUser()
     if (authErr || !user) return null
 
-    const { data: profile, error: profileError } = await db
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .maybeSingle()
-    if (profileError || !profile) return null
-    if ((profile as { role: string }).role !== "comercial") return null
-
     const { data: row, error } = await db
       .from("commercial_availability")
       .select("availability_status")
@@ -3090,15 +3456,20 @@ export async function loadComercialAvailabilityStatusFromSupabase(): Promise<Com
       .limit(1)
       .maybeSingle()
 
-    if (error) {
-      return null
-    }
-    if (!row) return null
-    return (row as { availability_status: ComercialDisponibilidade })
-      .availability_status
+    if (error || !row) return "disponivel"
+    return (row as { availability_status: ComercialDisponibilidade }).availability_status
   } catch {
-    return null
+    return "disponivel"
   }
+}
+
+export async function saveComercialAvailabilityStatusFromSupabase(
+  status: ComercialDisponibilidade
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { saveComercialAvailabilityStatusFromSupabase: save } = await import(
+    "@/lib/services/commercial-lead.service"
+  )
+  return save(status)
 }
 
 /**
@@ -3239,7 +3610,7 @@ function devWarnIndicacaoDetailMock(reason: string): void {
 }
 
 export type IndicadorReferralDetailResult =
-  | { kind: "ok"; indicacao: Indicacao }
+  | { kind: "ok"; indicacao: Indicacao; historico: Historico[] }
   | { kind: "not-found" }
   | { kind: "error" }
 
@@ -3298,6 +3669,9 @@ export async function loadIndicadorReferralDetailFromSupabase(
         approved_at,
         rejected_at,
         rejection_reason,
+        lost_reason,
+        lost_notes,
+        lost_at,
         created_at,
         updated_at
       `
@@ -3359,8 +3733,50 @@ export async function loadIndicadorReferralDetailFromSupabase(
     }
 
     const indicacao = referralRowToIndicacaoMerged(refRow, user.id, planoById)
-    devLogIndicacaoDetail("sucesso", { id: indicacao.id })
-    return { kind: "ok", indicacao }
+    logIndicatorReferralDetail("loaded", {
+      id: indicacao.id,
+      status: indicacao.status,
+      motivoRecusa: indicacao.motivoRecusa ?? null,
+    })
+
+    const { data: historyRows, error: historyError } = await db
+      .from("referral_history")
+      .select(
+        "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
+      )
+      .eq("referral_id", referralId)
+      .order("created_at", { ascending: false })
+
+    const historico: Historico[] = []
+    if (!historyError && historyRows) {
+      const actorIds = [
+        ...new Set(
+          historyRows
+            .map((h: unknown) => (h as ReferralHistoryRow).actor_profile_id)
+            .filter((id: string | null): id is string => Boolean(id))
+        ),
+      ]
+      const actorById = new Map<string, { full_name: string; phone: string | null }>()
+      if (actorIds.length > 0) {
+        const { data: actorRows } = await db
+          .from("profiles")
+          .select("id, full_name, phone")
+          .in("id", actorIds)
+        for (const a of actorRows ?? []) {
+          const row = a as { id: string; full_name: string; phone: string | null }
+          actorById.set(row.id, {
+            full_name: row.full_name,
+            phone: row.phone,
+          })
+        }
+      }
+      historico.push(
+        ...mapReferralHistoryRowsToHistorico(referralId, historyRows, actorById)
+      )
+    }
+
+    devLogIndicacaoDetail("sucesso", { id: indicacao.id, historyCount: historico.length })
+    return { kind: "ok", indicacao, historico }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     devWarnIndicacaoDetailMock(`exceção: ${msg}`)
@@ -3422,7 +3838,8 @@ function stubIndicadorProfile(id: string, nome: string): Indicador {
 function buildLeadFromReferralRow(
   row: ReferralRow,
   planoById: Map<string, Plano>,
-  indicadorNomeById: Map<string, string>
+  indicadorNomeById: Map<string, string>,
+  previousComercialNomeById: Map<string, string> = new Map()
 ): Lead {
   const indicacaoBase = referralRowToIndicacaoMerged(
     row,
@@ -3437,13 +3854,31 @@ function buildLeadFromReferralRow(
       }
     : indicacaoBase
 
+  const slaFields = computeReferralSlaFields(row)
+  const redistributionFields = mapRedistributionFields(row)
+  const previousCommercialNome = row.previous_commercial_profile_id
+    ? previousComercialNomeById.get(row.previous_commercial_profile_id)
+    : undefined
+
   return {
     id: row.id,
     indicacaoId: row.id,
-    indicacao,
+    indicacao: {
+      ...indicacao,
+      ...slaFields,
+      ...redistributionFields,
+      previousCommercialNome,
+    },
     comercialId: row.commercial_profile_id ?? "",
     status: referralStatusToLeadStatus(row.status),
     observacoes: row.notes ? [row.notes] : [],
+    assignedAt: row.assigned_at ? new Date(row.assigned_at) : null,
+    firstResponseAt: row.first_response_at
+      ? new Date(row.first_response_at)
+      : null,
+    ...slaFields,
+    ...redistributionFields,
+    previousCommercialNome,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   }
@@ -3473,39 +3908,41 @@ const ADMIN_ROLES_FOR_DEV_LEADS = new Set([
 ])
 
 /**
- * Leads do comercial logado: referrals atribuídos ou pool (commercial_profile_id nulo).
- * Em development: admin_* pode listar sem filtro (RLS); indicador pode usar OR próprio+pool
- * se `supabase/rls-policies.dev-local.sql` estiver aplicado no projeto local.
- * Retorna null se não for comercial (nem tester dev) ou em caso de erro (UI mantém mock).
+ * Leads do comercial logado: referrals atribuídos (profile.id) ou pool (commercial_profile_id nulo).
+ * Filtro usa profiles.id — não auth.uid() solto — alinhado a commercial_profile_id no banco.
  */
-export async function loadComercialLeadsFromSupabase(): Promise<Lead[] | null> {
+export async function loadComercialLeadsFromSupabase(): Promise<
+  ReferralsLoadResult<Lead>
+> {
+  let meta = buildReferralsLoadMeta({
+    queryLabel: "referrals.comercial.assigned_or_pool",
+    filter: null,
+  })
+
   try {
     devLogComercialLeads("início loadComercialLeadsFromSupabase")
 
     const supabase = getSupabaseClient()
-    const db = supabase as unknown as {
-      from: (t: string) => ReturnType<typeof supabase.from>
-    }
+    const db = supabase as unknown as ReferralsDb
 
     const {
       data: { user },
       error: userError,
     } = await supabase.auth.getUser()
 
-    const sessaoEncontrada = Boolean(user && !userError)
+    meta = { ...meta, authUserId: user?.id ?? null }
+
     devLogComercialLeads("sessão", {
-      encontrada: sessaoEncontrada,
-      userId: user?.id ?? null,
+      encontrada: Boolean(user && !userError),
+      authUserId: user?.id ?? null,
       authError: userError?.message ?? null,
     })
 
     if (userError || !user) {
-      devWarnComercialLeadsMock(
-        userError
-          ? `sem sessão válida: ${userError.message}`
-          : "sem usuário (sessão ausente)"
-      )
-      return null
+      const error =
+        userError?.message ?? "Sem usuário (sessão ausente)"
+      console.error("[commercial-leads:error]", { step: "auth", error: userError ?? error })
+      return { ok: false, data: [], error, meta }
     }
 
     const { data: profile, error: profileError } = await db
@@ -3514,175 +3951,175 @@ export async function loadComercialLeadsFromSupabase(): Promise<Lead[] | null> {
       .eq("id", user.id)
       .maybeSingle()
 
-    const profileEncontrado = profile != null && !profileError
-    const role = (profile as { role?: string } | null)?.role ?? null
-
-    devLogComercialLeads("profile", {
-      encontrado: profileEncontrado,
-      erro: profileError?.message ?? null,
-      code: profileError?.code ?? null,
-      role,
-    })
-
     if (profileError || !profile) {
-      devWarnComercialLeadsMock(
-        profileError
-          ? `query profiles falhou: ${profileError.message} (${profileError.code ?? "sem código"})`
-          : "perfil não encontrado para user.id"
-      )
-      return null
+      const error =
+        profileError?.message ?? "Perfil não encontrado para user.id"
+      console.error("[commercial-leads:error]", { step: "profile", error: profileError ?? error })
+      return {
+        ok: false,
+        data: [],
+        error,
+        code: profileError?.code,
+        meta,
+      }
     }
 
-    const roleStr = (profile as { role: string }).role
+    const profileRow = profile as { id: string; role: string }
+    const profileId = profileRow.id
+    const roleStr = profileRow.role
+    meta = { ...meta, profileId, role: roleStr }
+
+    if (profileId !== user.id) {
+      console.warn("[commercial-leads:session]", {
+        authUserId: user.id,
+        profileId,
+        note: "auth.uid() difere de profiles.id — filtro usa profileId",
+      })
+    }
+
+    console.log("[commercial-leads:session]", {
+      authUserId: user.id,
+      profileId,
+      role: roleStr,
+    })
+
     const isComercial = roleStr === "comercial"
     const isDevAdminTester = isDev() && ADMIN_ROLES_FOR_DEV_LEADS.has(roleStr)
     const isDevIndicadorPoolTester = isDev() && roleStr === "indicador"
 
     if (!isComercial && !isDevAdminTester && !isDevIndicadorPoolTester) {
-      const msg =
-        `/comercial/leads: carregamento Supabase só roda com profile.role=comercial. ` +
-        `Role atual: "${roleStr}". ` +
-        `Em produção o mock é esperado para não-comercial. ` +
-        `Em development, use comercial, ou admin_* (lista sem filtro, RLS admin), ou indicador + pool (aplique supabase/rls-policies.dev-local.sql no banco local).`
-      devLogComercialLeads("bloqueio por role", { role: roleStr, NODE_ENV: process.env.NODE_ENV })
-      if (isDev()) {
-        console.info(COMERCIAL_LEADS_LOG_PREFIX, msg)
+      const error =
+        `Role "${roleStr}" não autorizada para /comercial/leads (esperado comercial)`
+      console.error("[commercial-leads:error]", { step: "role", error, role: roleStr })
+      devWarnComercialLeadsMock(error)
+      return { ok: false, data: [], error, meta }
+    }
+
+    let filterDesc: string | null = null
+    const applyFilter = (qb: ReturnType<ReferralsDb["from"]>) => {
+      if (isComercial) {
+        filterDesc = `commercial_profile_id.eq.${profileId},commercial_profile_id.is.null`
+        devLogComercialLeads("filtro referrals", {
+          tipo: "comercial",
+          profileId,
+          orFilter: filterDesc,
+        })
+        return qb.or(filterDesc)
       }
-      devWarnComercialLeadsMock(
-        `role não autorizada para loader: "${roleStr}" (esperado comercial)`
-      )
-      return null
+      if (isDevAdminTester) {
+        filterDesc = "(dev admin — só RLS)"
+        devLogComercialLeads("filtro referrals", { tipo: "admin_dev", profileId })
+        return qb
+      }
+      filterDesc = `indicator_profile_id.eq.${profileId},commercial_profile_id.is.null`
+      devLogComercialLeads("filtro referrals", {
+        tipo: "indicador_dev",
+        profileId,
+        orFilter: filterDesc,
+      })
+      return qb.or(filterDesc)
     }
 
-    if (isDevAdminTester) {
-      devLogComercialLeads(
-        "modo DEV: admin — query referrals sem filtro de comercial (visibilidade = RLS)"
-      )
+    meta = { ...meta, filter: filterDesc }
+
+    const { rows: referrals, selectUsed, error: refError } =
+      await fetchReferralsListRows(db, {
+        logTag: "commercial-leads",
+        queryLabel: "referrals.comercial.assigned_or_pool",
+        applyFilter,
+      })
+
+    meta = {
+      ...meta,
+      selectColumns: selectUsed,
+      referralRowCount: referrals.length,
+      commercialProfileIdsSample: sampleCommercialProfileIds(referrals),
     }
-    if (isDevIndicadorPoolTester) {
-      devLogComercialLeads(
-        "modo DEV: indicador — OR indicator_profile_id + pool null (pool exige política dev-local no Supabase)"
-      )
-    }
-
-    const refSelect = `
-        id,
-        indicator_profile_id,
-        referred_name,
-        referred_phone,
-        referred_email,
-        referred_address,
-        plan_id,
-        reward_type,
-        reward_amount,
-        status,
-        commercial_profile_id,
-        notes,
-        first_invoice_paid,
-        first_invoice_paid_at,
-        approved_at,
-        rejected_at,
-        rejection_reason,
-        created_at,
-        updated_at
-      `
-
-    let refBuilder = db.from("referrals").select(refSelect)
-
-    if (isComercial) {
-      const orFilter = `commercial_profile_id.eq.${user.id},commercial_profile_id.is.null`
-      devLogComercialLeads("filtro referrals", { tipo: "comercial", orFilter })
-      refBuilder = refBuilder.or(orFilter)
-    } else if (isDevAdminTester) {
-      devLogComercialLeads("filtro referrals", { tipo: "admin_dev", filtro: "nenhum (só RLS)" })
-    } else if (isDevIndicadorPoolTester) {
-      const orDev = `indicator_profile_id.eq.${user.id},commercial_profile_id.is.null`
-      devLogComercialLeads("filtro referrals", { tipo: "indicador_dev", orFilter: orDev })
-      refBuilder = refBuilder.or(orDev)
-    }
-
-    const { data: refData, error: refError } = await refBuilder.order(
-      "created_at",
-      { ascending: false }
-    )
-
-    devLogComercialLeads("resultado query referrals", {
-      erro: refError?.message ?? null,
-      code: refError?.code ?? null,
-      details: (refError as { details?: string } | null)?.details ?? null,
-      hint: (refError as { hint?: string } | null)?.hint ?? null,
-      rowCount: refData?.length ?? 0,
-    })
 
     if (refError) {
-      devWarnComercialLeadsMock(
-        `referrals falhou: ${refError.message} (${refError.code ?? "sem código"})`
-      )
-      return null
-    }
-
-    const referrals = (refData ?? []) as ReferralRow[]
-    const planIds = [...new Set(referrals.map((r) => r.plan_id))]
-
-    const planoById = new Map<string, Plano>()
-    if (planIds.length > 0) {
-      const { data: plansData, error: plansError } = await db
-        .from("plans")
-        .select(
-          "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
-        )
-        .in("id", planIds)
-
-      devLogComercialLeads("resultado query plans", {
-        erro: plansError?.message ?? null,
-        code: plansError?.code ?? null,
-        rowCount: plansData?.length ?? 0,
-      })
-
-      if (plansError) {
-        devWarnComercialLeadsMock(
-          `plans falhou: ${plansError.message} (${plansError.code ?? "sem código"})`
-        )
-        return null
-      }
-
-      for (const pr of plansData ?? []) {
-        const p = mapPlanRowToPlano(pr as PlanCatalogRow)
-        planoById.set(p.id, p)
+      return {
+        ok: false,
+        data: [],
+        error: formatPostgrestError(refError),
+        code: refError.code,
+        details: refError.details,
+        hint: refError.hint,
+        meta,
       }
     }
 
-    const indicatorIds = [...new Set(referrals.map((r) => r.indicator_profile_id))]
+    const planoById = await loadPlansMapForReferralRows(
+      db,
+      referrals,
+      "commercial-leads"
+    )
+
+    const profileIdsForNames = new Set<string>()
+    for (const r of referrals) {
+      profileIdsForNames.add(r.indicator_profile_id)
+      if (r.previous_commercial_profile_id) {
+        profileIdsForNames.add(r.previous_commercial_profile_id)
+      }
+    }
     const indicadorNomeById = new Map<string, string>()
-    if (indicatorIds.length > 0) {
-      const { data: indProfiles, error: indErr } = await db
-        .from("profiles")
-        .select("id, full_name")
-        .in("id", indicatorIds)
-
-      devLogComercialLeads("query profiles indicadores", {
-        error: indErr?.message ?? null,
-        rowCount: indProfiles?.length ?? 0,
-      })
-
-      if (!indErr) {
+    const previousComercialNomeById = new Map<string, string>()
+    if (profileIdsForNames.size > 0) {
+      try {
+        const { data: indProfiles } = await db
+          .from("profiles")
+          .select("id, full_name")
+          .in("id", [...profileIdsForNames])
+          .throwOnError()
         for (const p of indProfiles ?? []) {
-          const row = p as { id: string; full_name: string }
-          indicadorNomeById.set(row.id, row.full_name)
+          const prof = p as { id: string; full_name: string }
+          indicadorNomeById.set(prof.id, prof.full_name)
+          previousComercialNomeById.set(prof.id, prof.full_name)
         }
+        console.log("[commercial-leads:supabase-query]", {
+          query: "profiles.in(indicatorIds)",
+          rowsReturned: indProfiles?.length ?? 0,
+          error: null,
+        })
+      } catch (thrown) {
+        const error =
+          thrown &&
+          typeof thrown === "object" &&
+          "message" in thrown
+            ? thrown
+            : {
+                message:
+                  thrown instanceof Error ? thrown.message : String(thrown),
+              }
+        console.error("[commercial-leads:error]", { step: "profiles", error })
       }
     }
 
     const result = referrals.map((r) =>
-      buildLeadFromReferralRow(r, planoById, indicadorNomeById)
+      buildLeadFromReferralRow(
+        r,
+        planoById,
+        indicadorNomeById,
+        previousComercialNomeById
+      )
     )
 
+    console.log("[commercial-leads:result]", {
+      authUserId: meta.authUserId,
+      profileId: meta.profileId,
+      role: meta.role,
+      filter: meta.filter,
+      referralRowCount: meta.referralRowCount,
+      mappedCount: result.length,
+      commercialProfileIdsSample: meta.commercialProfileIdsSample,
+    })
+
     devLogComercialLeads("sucesso", { total: result.length, roleUsada: roleStr })
-    return result
+    return { ok: true, data: result, meta }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    devWarnComercialLeadsMock(`exceção: ${msg}`)
-    return null
+    const error = e instanceof Error ? e.message : String(e)
+    console.error("[commercial-leads:error]", e)
+    devWarnComercialLeadsMock(`exceção: ${error}`)
+    return { ok: false, data: [], error, meta }
   }
 }
 
@@ -3701,74 +4138,7 @@ function devWarnComercialLeadDetailMock(reason: string): void {
   }
 }
 
-export type ComercialLeadDetailsResult =
-  | { kind: "ok"; lead: Lead; historico: Historico[] }
-  | { kind: "not-found" }
-  | { kind: "error" }
-
-export async function loadComercialLeadDetailsFromSupabase(
-  referralId: string
-): Promise<ComercialLeadDetailsResult> {
-  try {
-    devLogComercialLeadDetail("início", { referralId })
-
-    const supabase = getSupabaseClient()
-    const db = supabase as unknown as {
-      from: (t: string) => ReturnType<typeof supabase.from>
-    }
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    devLogComercialLeadDetail("auth.getUser", {
-      hasUser: Boolean(user && !authError),
-      userId: user?.id ?? null,
-      authError: authError?.message ?? null,
-    })
-
-    if (authError || !user) {
-      devWarnComercialLeadDetailMock(
-        authError
-          ? `sem sessão válida: ${authError.message}`
-          : "sem usuário autenticado"
-      )
-      return { kind: "error" }
-    }
-
-    const { data: profile, error: profileError } = await db
-      .from("profiles")
-      .select("id, role")
-      .eq("id", user.id)
-      .maybeSingle()
-
-    const role = (profile as { role?: string } | null)?.role ?? null
-    devLogComercialLeadDetail("profile do auth user", {
-      hasProfile: Boolean(profile && !profileError),
-      role,
-      error: profileError?.message ?? null,
-      code: profileError?.code ?? null,
-    })
-
-    const podeVerDetalheComercialLead =
-      role === "comercial" ||
-      role === "admin_financeiro" ||
-      role === "admin_master"
-
-    if (profileError || !profile || !podeVerDetalheComercialLead) {
-      devWarnComercialLeadDetailMock(
-        profileError
-          ? `profiles falhou: ${profileError.message} (${profileError.code ?? "sem código"})`
-          : `role não autorizada para detalhe de lead: "${role}"`
-      )
-      return { kind: "error" }
-    }
-
-    const { data: refRow, error: refError } = await db
-      .from("referrals")
-      .select(
-        `
+const REFERRAL_DETAIL_SELECT_CORE = `
         id,
         indicator_profile_id,
         referred_name,
@@ -3789,32 +4159,363 @@ export async function loadComercialLeadDetailsFromSupabase(
         created_at,
         updated_at
       `
-      )
+
+const REFERRAL_DETAIL_SELECT_EXTENDED = `
+        id,
+        indicator_profile_id,
+        referred_name,
+        referred_phone,
+        referred_email,
+        referred_address,
+        plan_id,
+        reward_type,
+        reward_amount,
+        status,
+        commercial_profile_id,
+        notes,
+        first_invoice_paid,
+        first_invoice_paid_at,
+        approved_at,
+        rejected_at,
+        rejection_reason,
+        assigned_at,
+        first_response_at,
+        lost_reason,
+        lost_notes,
+        lost_at,
+        redistribution_count,
+        previous_commercial_profile_id,
+        sla_redistributed,
+        last_redistributed_at,
+        created_at,
+        updated_at
+      `
+
+const COMERCIAL_LEAD_DETAIL_READ_ROLES = new Set([
+  "comercial",
+  "admin_master",
+  "admin_financeiro",
+  "admin_consulta",
+])
+
+type IndicatorPublicProfileRpc = {
+  ok?: boolean
+  id?: string
+  name?: string
+  email?: string | null
+  phone?: string | null
+  message?: string
+}
+
+export type ResolvedIndicatorProfile = {
+  id: string
+  nome: string
+  email: string
+  telefone: string
+  found: boolean
+  source: "rpc" | "profiles" | "fallback"
+}
+
+async function resolveIndicatorProfileForCommercialLead(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  db: ReferralsDb,
+  referralId: string,
+  indicatorProfileId: string
+): Promise<ResolvedIndicatorProfile> {
+  const fallback: ResolvedIndicatorProfile = {
+    id: indicatorProfileId,
+    nome: "Indicador não identificado",
+    email: "",
+    telefone: "",
+    found: false,
+    source: "fallback",
+  }
+
+  try {
+    const dbRpc = supabase as unknown as {
+      rpc: (
+        fn: string,
+        args: { p_referral_id: string }
+      ) => Promise<{ data: IndicatorPublicProfileRpc | null; error: { message: string } | null }>
+    }
+    const { data: rpcData, error: rpcError } = await dbRpc.rpc(
+      "get_referral_indicator_public_profile",
+      { p_referral_id: referralId }
+    )
+
+    if (!rpcError && rpcData?.ok && rpcData.id) {
+      const resolved: ResolvedIndicatorProfile = {
+        id: rpcData.id,
+        nome: (rpcData.name ?? "").trim() || "Indicador não identificado",
+        email: rpcData.email?.trim() ?? "",
+        telefone: rpcData.phone?.trim() ?? "",
+        found: Boolean((rpcData.name ?? "").trim()),
+        source: "rpc",
+      }
+      console.log("[commercial-lead-detail:indicator]", {
+        referralId,
+        indicator_profile_id: indicatorProfileId,
+        indicatorProfileFound: true,
+        indicatorName: resolved.nome,
+        indicatorEmail: resolved.email || null,
+        source: resolved.source,
+        rpcMessage: rpcData.message ?? null,
+      })
+      return resolved
+    }
+
+    if (rpcError) {
+      console.error("[commercial-lead-detail:error]", {
+        step: "indicator-rpc",
+        error: rpcError,
+      })
+    } else if (rpcData && !rpcData.ok) {
+      console.warn("[commercial-lead-detail:indicator]", {
+        referralId,
+        indicator_profile_id: indicatorProfileId,
+        rpcOk: false,
+        rpcMessage: rpcData.message ?? null,
+      })
+    }
+  } catch (thrown) {
+    console.error("[commercial-lead-detail:error]", {
+      step: "indicator-rpc-exception",
+      thrown,
+    })
+  }
+
+  const { data: indicatorProfileRow, error: indicatorProfError } = await db
+    .from("profiles")
+    .select("id, full_name, phone, email")
+    .eq("id", indicatorProfileId)
+    .maybeSingle()
+
+  const prof = indicatorProfileRow as {
+    id: string
+    full_name: string | null
+    phone: string | null
+    email: string | null
+  } | null
+
+  const nome =
+    prof?.full_name?.trim() ||
+    prof?.email?.trim() ||
+    "Indicador não identificado"
+
+  const resolved: ResolvedIndicatorProfile = {
+    id: indicatorProfileId,
+    nome,
+    email: prof?.email?.trim() ?? "",
+    telefone: prof?.phone?.trim() ?? "",
+    found: Boolean(prof && (prof.full_name?.trim() || prof.email?.trim())),
+    source: prof ? "profiles" : "fallback",
+  }
+
+  console.log("[commercial-lead-detail:indicator]", {
+    referralId,
+    indicator_profile_id: indicatorProfileId,
+    indicatorProfileFound: resolved.found,
+    indicatorName: resolved.nome,
+    indicatorEmail: resolved.email || null,
+    source: resolved.source,
+    profilesError: indicatorProfError?.message ?? null,
+    profilesCode: indicatorProfError?.code ?? null,
+  })
+
+  if (indicatorProfError) {
+    console.error("[commercial-lead-detail:error]", {
+      step: "indicator-profiles",
+      error: indicatorProfError,
+    })
+  }
+
+  return resolved
+}
+
+async function fetchReferralRowForComercialDetail(
+  db: ReferralsDb,
+  referralId: string
+): Promise<{
+  row: ReferralRow | null
+  selectVariant: "extended" | "core"
+  error: { message?: string; code?: string } | null
+}> {
+  const selects: Array<{ variant: "extended" | "core"; sql: string }> = [
+    { variant: "extended", sql: REFERRAL_DETAIL_SELECT_EXTENDED },
+    { variant: "core", sql: REFERRAL_DETAIL_SELECT_CORE },
+  ]
+  let lastError: { message?: string; code?: string } | null = null
+
+  for (let i = 0; i < selects.length; i++) {
+    const { variant, sql } = selects[i]!
+    const { data, error } = await db
+      .from("referrals")
+      .select(sql)
       .eq("id", referralId)
       .maybeSingle()
 
-    devLogComercialLeadDetail("query referral", {
-      hasRow: Boolean(refRow),
-      error: refError?.message ?? null,
-      code: refError?.code ?? null,
-      details: (refError as { details?: string } | null)?.details ?? null,
-      hint: (refError as { hint?: string } | null)?.hint ?? null,
+    console.log("[commercial-lead-detail:query]", {
+      referralId,
+      selectVariant: variant,
+      hasRow: Boolean(data),
+      error: error ?? null,
     })
 
+    if (!error && data) {
+      return { row: data as ReferralRow, selectVariant: variant, error: null }
+    }
+
+    if (!error && !data) {
+      return { row: null, selectVariant: variant, error: null }
+    }
+
+    lastError = error
+    console.error("[commercial-lead-detail:error]", {
+      step: "referrals.select",
+      selectVariant: variant,
+      error,
+    })
+
+    if (isMissingColumnReferralError(error) && i < selects.length - 1) {
+      console.warn("[commercial-lead-detail:retry-core]", {
+        reason: error?.message,
+        referralId,
+      })
+      continue
+    }
+
+    return { row: null, selectVariant: variant, error }
+  }
+
+  return {
+    row: null,
+    selectVariant: "core",
+    error: lastError,
+  }
+}
+
+export type ComercialLeadDetailsResult =
+  | { kind: "ok"; lead: Lead; historico: Historico[] }
+  | { kind: "not-found"; message?: string }
+  | {
+      kind: "unauthorized"
+      message: string
+    }
+  | { kind: "error"; message: string; code?: string }
+
+export async function loadComercialLeadDetailsFromSupabase(
+  referralId: string
+): Promise<ComercialLeadDetailsResult> {
+  try {
+    devLogComercialLeadDetail("início", { referralId })
+
+    const supabase = getSupabaseClient()
+    const db = supabase as unknown as ReferralsDb
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      const message = authError?.message ?? "Sessão inválida."
+      console.error("[commercial-lead-detail:error]", { step: "auth", message })
+      return { kind: "error", message }
+    }
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const profileRow = profile as { id: string; role: string } | null
+    const profileId = profileRow?.id ?? user.id
+    const role = profileRow?.role ?? null
+
+    console.log("[commercial-lead-detail:session]", {
+      authUserId: user.id,
+      profileId,
+      role,
+      referralId,
+      profileError: profileError?.message ?? null,
+    })
+
+    if (profileError || !profileRow || !role) {
+      const message =
+        profileError?.message ?? "Perfil não encontrado para o usuário logado."
+      console.error("[commercial-lead-detail:error]", { step: "profile", message })
+      return { kind: "error", message, code: profileError?.code }
+    }
+
+    if (!COMERCIAL_LEAD_DETAIL_READ_ROLES.has(role)) {
+      const message = `Perfil "${role}" não pode abrir detalhe de lead comercial.`
+      console.error("[commercial-lead-detail:error]", { step: "role", message })
+      return { kind: "error", message }
+    }
+
+    const { row: refRow, selectVariant, error: refError } =
+      await fetchReferralRowForComercialDetail(db, referralId)
+
     if (refError) {
-      devWarnComercialLeadDetailMock(
-        `referrals falhou: ${refError.message} (${refError.code ?? "sem código"})`
-      )
-      return { kind: "error" }
+      const message =
+        refError.message ??
+        "Erro ao carregar o lead. Verifique se os patches SQL (lost_reason/lost_notes) foram aplicados."
+      return { kind: "error", message, code: refError.code }
     }
 
     if (!refRow) {
-      devLogComercialLeadDetail("referral não encontrado (id inexistente ou RLS)")
-      return { kind: "not-found" }
+      console.log("[commercial-lead-detail:result]", {
+        kind: "not-found",
+        referralId,
+        profileId,
+        selectVariant,
+      })
+      return {
+        kind: "not-found",
+        message: "Lead não encontrado ou sem permissão de leitura (RLS).",
+      }
     }
 
-    const referral = refRow as ReferralRow
+    const referral = refRow
+    const isAdminReader =
+      role === "admin_master" ||
+      role === "admin_financeiro" ||
+      role === "admin_consulta"
 
+    if (
+      role === "comercial" &&
+      referral.commercial_profile_id &&
+      !uuidEqual(referral.commercial_profile_id, profileId)
+    ) {
+      console.log("[commercial-lead-detail:result]", {
+        kind: "unauthorized",
+        referralId,
+        profileId,
+        commercial_profile_id: referral.commercial_profile_id,
+        status: referral.status,
+      })
+      return {
+        kind: "unauthorized",
+        message: "Lead não autorizado para este comercial.",
+      }
+    }
+
+    if (role === "comercial" && !referral.commercial_profile_id) {
+      console.log("[commercial-lead-detail:result]", {
+        kind: "unauthorized",
+        referralId,
+        profileId,
+        note: "lead sem commercial_profile_id (pool)",
+      })
+      return {
+        kind: "unauthorized",
+        message:
+          "Este lead ainda não está atribuído a você. Assuma o lead na lista antes de abrir o detalhe.",
+      }
+    }
+
+    const planoById = new Map<string, Plano>()
     const { data: planRow, error: planError } = await db
       .from("plans")
       .select(
@@ -3823,83 +4524,46 @@ export async function loadComercialLeadDetailsFromSupabase(
       .eq("id", referral.plan_id)
       .maybeSingle()
 
-    devLogComercialLeadDetail("query plan", {
-      hasRow: Boolean(planRow),
-      error: planError?.message ?? null,
-      code: planError?.code ?? null,
-    })
-
     if (planError) {
-      devWarnComercialLeadDetailMock(
-        `plans falhou: ${planError.message} (${planError.code ?? "sem código"})`
-      )
-      return { kind: "error" }
-    }
-
-    const planoById = new Map<string, Plano>()
-    if (planRow) {
-      const plano = mapPlanRowToPlano(planRow as PlanCatalogRow)
-      planoById.set(plano.id, plano)
-    }
-
-    const profileIds = [
-      ...new Set(
-        [referral.indicator_profile_id, referral.commercial_profile_id].filter(
-          (id): id is string => Boolean(id)
-        )
-      ),
-    ]
-    let profilesById = new Map<
-      string,
-      { id: string; full_name: string; phone: string | null }
-    >()
-
-    if (profileIds.length > 0) {
-      const { data: profRows, error: profError } = await db
-        .from("profiles")
-        .select("id, full_name, phone")
-        .in("id", profileIds)
-
-      devLogComercialLeadDetail("query profiles relacionados", {
-        error: profError?.message ?? null,
-        code: profError?.code ?? null,
-        rowCount: profRows?.length ?? 0,
+      console.error("[commercial-lead-detail:error]", {
+        step: "plans",
+        error: planError,
       })
-
-      if (profError) {
-        devWarnComercialLeadDetailMock(
-          `profiles relacionados falhou: ${profError.message} (${profError.code ?? "sem código"})`
-        )
-        return { kind: "error" }
-      }
-
-      profilesById = new Map(
-        (profRows ?? []).map((row: unknown) => {
-          const p = row as { id: string; full_name: string; phone: string | null }
-          return [p.id, p]
-        })
-      )
+    } else if (planRow) {
+      planoById.set(referral.plan_id, mapPlanRowToPlano(planRow as PlanCatalogRow))
     }
 
-    const indicatorName =
-      profilesById.get(referral.indicator_profile_id)?.full_name ?? "Indicador"
+    const indicatorResolved = await resolveIndicatorProfileForCommercialLead(
+      supabase,
+      db,
+      referralId,
+      referral.indicator_profile_id
+    )
+
     const lead = buildLeadFromReferralRow(
       referral,
       planoById,
-      new Map([[referral.indicator_profile_id, indicatorName]])
+      new Map([[referral.indicator_profile_id, indicatorResolved.nome]])
     )
 
-    const indicatorProfile = profilesById.get(referral.indicator_profile_id)
     if (lead.indicacao) {
       lead.indicacao.indicador = stubIndicadorProfile(
-        referral.indicator_profile_id,
-        indicatorProfile?.full_name ?? "Indicador"
+        indicatorResolved.id,
+        indicatorResolved.nome
       )
-      if (indicatorProfile?.phone) {
-        lead.indicacao.indicador.telefone = indicatorProfile.phone
+      if (indicatorResolved.telefone) {
+        lead.indicacao.indicador.telefone = indicatorResolved.telefone
       }
+      if (indicatorResolved.email) {
+        lead.indicacao.indicador.email = indicatorResolved.email
+      }
+      const lost = mapReferralLostFields(referral)
+      lead.indicacao.motivoRecusa = lost.motivoRecusa
+      lead.indicacao.observacoesRecusa = lost.observacoesRecusa
+      lead.indicacao.dataRecusa = lost.dataRecusa
     }
 
+    let historico: Historico[] = []
     const { data: historyRows, error: historyError } = await db
       .from("referral_history")
       .select(
@@ -3908,95 +4572,72 @@ export async function loadComercialLeadDetailsFromSupabase(
       .eq("referral_id", referralId)
       .order("created_at", { ascending: false })
 
-    devLogComercialLeadDetail("query referral_history", {
-      error: historyError?.message ?? null,
-      code: historyError?.code ?? null,
-      rowCount: historyRows?.length ?? 0,
-    })
-
     if (historyError) {
-      devWarnComercialLeadDetailMock(
-        `referral_history falhou: ${historyError.message} (${historyError.code ?? "sem código"})`
-      )
-      return { kind: "error" }
-    }
-
-    const actorIds = [
-      ...new Set(
-        (historyRows ?? [])
-          .map((h: unknown) => (h as ReferralHistoryRow).actor_profile_id)
-          .filter((id: string | null): id is string => Boolean(id))
-      ),
-    ]
-
-    const actorById = new Map<string, { full_name: string; phone: string | null }>()
-    if (actorIds.length > 0) {
-      const { data: actorRows, error: actorError } = await db
-        .from("profiles")
-        .select("id, full_name, phone")
-        .in("id", actorIds)
-
-      devLogComercialLeadDetail("query actors history", {
-        error: actorError?.message ?? null,
-        code: actorError?.code ?? null,
-        rowCount: actorRows?.length ?? 0,
+      console.error("[commercial-lead-detail:error]", {
+        step: "referral_history",
+        error: historyError,
       })
+    } else {
+      const actorIds = [
+        ...new Set(
+          (historyRows ?? [])
+            .map((h: unknown) => (h as ReferralHistoryRow).actor_profile_id)
+            .filter((id: string | null): id is string => Boolean(id))
+        ),
+      ]
 
-      if (actorError) {
-        devWarnComercialLeadDetailMock(
-          `profiles actors falhou: ${actorError.message} (${actorError.code ?? "sem código"})`
-        )
-        return { kind: "error" }
+      const actorById = new Map<string, { full_name: string; phone: string | null }>()
+      if (actorIds.length > 0) {
+        const { data: actorRows, error: actorError } = await db
+          .from("profiles")
+          .select("id, full_name, phone")
+          .in("id", actorIds)
+
+        if (actorError) {
+          console.error("[commercial-lead-detail:error]", {
+            step: "history-actors",
+            error: actorError,
+          })
+        } else {
+          for (const row of actorRows ?? []) {
+            const actor = row as {
+              id: string
+              full_name: string
+              phone: string | null
+            }
+            actorById.set(actor.id, {
+              full_name: actor.full_name,
+              phone: actor.phone,
+            })
+          }
+        }
       }
 
-      for (const row of actorRows ?? []) {
-        const actor = row as { id: string; full_name: string; phone: string | null }
-        actorById.set(actor.id, {
-          full_name: actor.full_name,
-          phone: actor.phone,
-        })
-      }
+      historico = mapReferralHistoryRowsToHistorico(
+        referralId,
+        historyRows ?? [],
+        actorById
+      )
     }
 
-    const historico: Historico[] = (historyRows ?? []).map((raw: unknown) => {
-      const h = raw as ReferralHistoryRow
-      const actor = h.actor_profile_id ? actorById.get(h.actor_profile_id) : null
-      const acaoBase = h.action_note?.trim() || "Atualização de lead"
-      const descricaoStatus =
-        h.old_status && h.old_status !== h.new_status
-          ? `Status: ${h.old_status} -> ${h.new_status}`
-          : `Status: ${h.new_status}`
-      const metadataAction =
-        h.metadata && typeof h.metadata.action === "string"
-          ? `Ação: ${h.metadata.action}`
-          : null
-
-      return {
-        id: h.id,
-        leadId: referralId,
-        comercialId: h.actor_profile_id ?? "",
-        comercial: h.actor_profile_id
-          ? stubComercialProfile(
-              h.actor_profile_id,
-              actor?.full_name ?? "Comercial",
-              actor?.phone ?? ""
-            )
-          : undefined,
-        acao: acaoBase,
-        descricao: [descricaoStatus, metadataAction].filter(Boolean).join(" • "),
-        createdAt: new Date(h.created_at),
-      }
-    })
-
-    devLogComercialLeadDetail("sucesso", {
+    console.log("[commercial-lead-detail:result]", {
+      kind: "ok",
       leadId: lead.id,
+      status: referral.status,
+      commercial_profile_id: referral.commercial_profile_id,
+      profileId,
+      isAdminReader,
+      selectVariant,
       historyCount: historico.length,
+      indicator_profile_id: referral.indicator_profile_id,
     })
+
     return { kind: "ok", lead, historico }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    devWarnComercialLeadDetailMock(`exceção: ${msg}`)
-    return { kind: "error" }
+    const message = e instanceof Error ? e.message : String(e)
+    console.error("[commercial-lead-detail:error]", { step: "exception", message })
+    devWarnComercialLeadDetailMock(`exceção: ${message}`)
+    return { kind: "error", message }
   }
 }
 
@@ -4609,14 +5250,21 @@ function mapComercialUpdateStatusToReferralStatus(
 export async function updateComercialLeadStatus(
   referralId: string,
   newStatus: ComercialLeadUpdateStatus,
-  note?: string
+  options?: ReferralRejectOptions
 ): Promise<UpdateComercialLeadStatusResult> {
+  const note = options?.note
   try {
     devLogComercialLeadUpdate("início", {
       referralId,
       newStatus,
       hasNote: Boolean(note?.trim()),
+      hasLostReason: Boolean(options?.lostReason),
     })
+
+    if (isComercialLeadRejectStatus(newStatus) && !options?.lostReason?.trim()) {
+      logLeadReject("comercial-validation", { referralId, newStatus })
+      return { ok: false, message: "Selecione o motivo da recusa ou perda." }
+    }
 
     const supabase = getSupabaseClient()
     const db = supabase as unknown as {
@@ -4647,9 +5295,12 @@ export async function updateComercialLeadStatus(
       .eq("id", user.id)
       .maybeSingle()
 
-    const role = (profile as { role?: string } | null)?.role ?? null
+    const profileRow = profile as { id: string; role: string } | null
+    const profileId = profileRow?.id ?? user.id
+    const role = profileRow?.role ?? null
     devLogComercialLeadUpdate("profile", {
       hasProfile: Boolean(profile && !profileError),
+      profileId,
       role,
       error: profileError?.message ?? null,
       code: profileError?.code ?? null,
@@ -4719,34 +5370,77 @@ export async function updateComercialLeadStatus(
       last_interaction_at: nowIso,
       first_response_at: before.first_response_at ?? nowIso,
     }
-    if (noteTrimmed) {
+    if (noteTrimmed && !isComercialLeadRejectStatus(newStatus)) {
       updatePayload.notes = noteTrimmed
     }
     if (finalStatus === "aprovada" && oldStatus !== "aprovada") {
       updatePayload.approved_at = nowIso
     }
-    if (finalStatus === "recusada") {
-      updatePayload.rejected_at = nowIso
+    if (finalStatus === "recusada" && options?.lostReason) {
+      Object.assign(
+        updatePayload,
+        buildRejectReferralPatch({
+          lostReason: options.lostReason,
+          lostNotes: options.lostNotes,
+          note: noteTrimmed || undefined,
+          nowIso,
+        })
+      )
+      logLeadReject("comercial", { referralId, lostReason: options.lostReason })
+      logLeadLostReason("comercial", options.lostReason, options.lostNotes)
     }
 
-    const { data: updateRows, error: updateError } = await db
-      .from("referrals")
-      .update(updatePayload)
-      .eq("id", referralId)
-      .eq("commercial_profile_id", user.id)
-      .select(
-        "id, status, notes, updated_at, first_response_at, last_interaction_at, assigned_at"
-      )
+    let updateRows: unknown[] | null = null
+    let updateError: { message: string; code?: string } | null = null
+
+    const runUpdate = async (payload: Record<string, unknown>) =>
+      db
+        .from("referrals")
+        .update(payload)
+        .eq("id", referralId)
+        .eq("commercial_profile_id", profileId)
+        .select(
+          "id, status, notes, updated_at, first_response_at, last_interaction_at, assigned_at"
+        )
+
+    const first = await runUpdate(updatePayload)
+    updateRows = first.data
+    updateError = first.error
+
+    if (
+      updateError &&
+      isMissingColumnReferralError(updateError) &&
+      finalStatus === "recusada" &&
+      options?.lostReason
+    ) {
+      const minimal: Record<string, unknown> = {
+        status: nextReferralStatus,
+        last_interaction_at: nowIso,
+        first_response_at: before.first_response_at ?? nowIso,
+        rejected_at: nowIso,
+        rejection_reason:
+          getLostReasonLabel(options.lostReason) ?? options.lostReason,
+      }
+      const noteVal = options.lostNotes?.trim() || noteTrimmed
+      if (noteVal) minimal.notes = noteVal
+      logLeadReject("comercial-retry-minimal", { referralId })
+      const second = await runUpdate(minimal)
+      updateRows = second.data
+      updateError = second.error
+    }
+
+    const updateRowsData = updateRows
+    const updateErrorFinal = updateError
 
     devLogComercialLeadUpdate("resultado update referrals", {
-      error: updateError?.message ?? null,
-      code: updateError?.code ?? null,
+      error: updateErrorFinal?.message ?? null,
+      code: updateErrorFinal?.code ?? null,
       payload: updatePayload,
-      rowCount: updateRows?.length ?? 0,
-      rows: updateRows ?? [],
+      rowCount: updateRowsData?.length ?? 0,
+      rows: updateRowsData ?? [],
     })
     devLogComercialLeadUpdate("resultado update referrals (campos SLA)", {
-      sla: (updateRows ?? []).map((row: unknown) => {
+      sla: (updateRowsData ?? []).map((row: unknown) => {
         const r = row as {
           id: string
           assigned_at?: string | null
@@ -4762,13 +5456,13 @@ export async function updateComercialLeadStatus(
       }),
     })
 
-    if (updateError) {
+    if (updateErrorFinal) {
       if (isDev()) {
         console.warn(COMERCIAL_LEAD_UPDATE_LOG_PREFIX, "falha update referrals", {
-          message: updateError.message,
-          code: updateError.code ?? null,
-          details: (updateError as { details?: string }).details ?? null,
-          hint: (updateError as { hint?: string }).hint ?? null,
+          message: updateErrorFinal.message,
+          code: updateErrorFinal.code ?? null,
+          details: (updateErrorFinal as { details?: string }).details ?? null,
+          hint: (updateErrorFinal as { hint?: string }).hint ?? null,
         })
       }
       return {
@@ -4777,7 +5471,7 @@ export async function updateComercialLeadStatus(
       }
     }
 
-    const updatedRow = (updateRows?.[0] ?? null) as {
+    const updatedRow = (updateRowsData?.[0] ?? null) as {
       id?: string
       status?: string
     } | null
@@ -4789,8 +5483,8 @@ export async function updateComercialLeadStatus(
     if (!updateConfirmed) {
       devLogComercialLeadUpdate("update sem efeito (RLS ou lead não atribuído ao comercial)", {
         referralId,
-        commercialProfileId: user.id,
-        rowCount: updateRows?.length ?? 0,
+        commercialProfileId: profileId,
+        rowCount: updateRowsData?.length ?? 0,
         updatedRow,
         esperadoStatus: nextReferralStatus,
       })
@@ -4803,6 +5497,15 @@ export async function updateComercialLeadStatus(
 
     if (oldStatus !== nextReferralStatus) {
       if (isDev()) {
+        console.log("[notification:status-change]", {
+          source: "updateComercialLeadStatus",
+          referralId,
+          oldStatus,
+          newStatus: nextReferralStatus,
+          requestedStatus: newStatus,
+          lostReason: options?.lostReason ?? null,
+          via: "db_trigger",
+        })
         console.log("[indicator:trigger]", {
           source: "updateComercialLeadStatus",
           referralId,
@@ -4810,10 +5513,16 @@ export async function updateComercialLeadStatus(
           nextReferralStatus,
         })
       }
-      void notifyIndicatorReferralProgressFromSupabase(referralId)
     }
 
-    const historyNote = noteTrimmed || `Status alterado para ${newStatus}`
+    const rejectLabel =
+      finalStatus === "recusada" && options?.lostReason
+        ? getLostReasonLabel(options.lostReason) ?? options.lostReason
+        : null
+    const historyNote =
+      finalStatus === "recusada"
+        ? "Lead recusado"
+        : noteTrimmed || `Status alterado para ${newStatus}`
     const { data: historyRows, error: historyError } = await db
       .from("referral_history")
       .insert({
@@ -4822,10 +5531,19 @@ export async function updateComercialLeadStatus(
         old_status: oldStatus,
         new_status: nextReferralStatus,
         action_note: historyNote,
-        metadata: {
-          action: "status_change",
-          requested_status: newStatus,
-        },
+        metadata:
+          finalStatus === "recusada" && options?.lostReason
+            ? {
+                action: "lead_lost",
+                lost_reason: options.lostReason,
+                lost_reason_label: rejectLabel,
+                lost_notes: options.lostNotes?.trim() || null,
+                requested_status: newStatus,
+              }
+            : {
+                action: "status_change",
+                requested_status: newStatus,
+              },
       })
       .select(
         "id, referral_id, actor_profile_id, old_status, new_status, action_note, metadata, created_at"
@@ -4882,6 +5600,20 @@ export async function updateComercialLeadStatus(
       return {
         ok: false,
         message: "Não foi possível confirmar a atualização do lead.",
+      }
+    }
+
+    if (finalStatus === "recusada" && options?.lostReason) {
+      const pipelineLabel =
+        getLostReasonLabel(options.lostReason) ?? options.lostReason
+      const pipe = await moveReferralPipelineStageFromSupabase(
+        referralId,
+        "perdido",
+        undefined,
+        pipelineLabel
+      )
+      if (!pipe.ok && isDev()) {
+        console.warn(COMERCIAL_LEAD_UPDATE_LOG_PREFIX, "pipeline perdido", pipe.message)
       }
     }
 
@@ -5378,9 +6110,11 @@ export async function loadUserNotificationsFromSupabase(): Promise<NotificationI
       return null
     }
 
-    const list: NotificationItem[] = (rows ?? []).map((raw: unknown) =>
-      mapNotificationRowFromDb(raw as Record<string, unknown>, userRole)
-    )
+    const list: NotificationItem[] = (rows ?? [])
+      .map((raw: unknown) =>
+        mapNotificationRowFromDb(raw as Record<string, unknown>, userRole)
+      )
+      .filter((item: NotificationItem | null): item is NotificationItem => item != null)
 
     const unreadCount = list.filter((n) => !n.read).length
     devLogUserNotifications("load", {
@@ -6771,12 +7505,18 @@ export async function countComercialPipelineReferralsFromSupabase(): Promise<
       return null
     }
 
-    const orFilter = `commercial_profile_id.eq.${user.id},commercial_profile_id.is.null`
     const { count, error } = await db
       .from("referrals")
       .select("id", { count: "exact", head: true })
-      .or(orFilter)
-      .in("status", ["pendente", "em_atendimento", "em_andamento", "em_negociacao"])
+      .eq("commercial_profile_id", user.id)
+      .in("pipeline_stage", [
+        "novo",
+        "tentativa_contato",
+        "contato_realizado",
+        "negociacao",
+        "agendado",
+        "instalacao",
+      ])
 
     if (error) {
       devWarnSidebarCounts(`countComercialPipelineReferrals: ${error.message}`)
