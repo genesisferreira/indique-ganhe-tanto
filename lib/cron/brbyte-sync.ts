@@ -1,5 +1,6 @@
 import "server-only"
 import {
+  BRBYTE_AUTO_MARK_PAID_ENABLED,
   runBrbyteSync,
   type BrbyteSyncResult,
 } from "@/lib/cron/brbyte.service"
@@ -13,7 +14,9 @@ export type BrbyteSyncCronPayload = {
 }
 
 export function logCronBrbyteSyncStart(): void {
-  console.log("[cron:brbyte-sync:start]")
+  console.log("[cron:brbyte-sync:start]", {
+    autoMarkPaidEnabled: BRBYTE_AUTO_MARK_PAID_ENABLED,
+  })
 }
 
 export function logCronBrbyteSyncSuccess(payload: unknown): void {
