@@ -17,6 +17,8 @@ export type BrbyteInterestedObservationInput = {
   observacaoIndicado?: string | null
   /** Campo legado referrals.referred_address */
   enderecoIndicado?: string | null
+  installationFeeAwareness?: boolean | null
+  contractTypeAwareness?: boolean | null
 }
 
 function rewardTypeLabel(value: RecompensaTipo | string | null | undefined): string {
@@ -51,6 +53,10 @@ function buildAddressLine(input: BrbyteInterestedObservationInput): string | nul
   return parts.length > 0 ? parts.join(", ") : null
 }
 
+function yesNo(value: boolean | null | undefined): string {
+  return value ? "Sim" : "Não"
+}
+
 /**
  * Monta texto de observação para futura criação de Interessado no ERP BRByte.
  * Não envia dados — apenas formata string.
@@ -64,6 +70,8 @@ export function buildBrbyteInterestedObservation(
     `Plano de interesse: ${referral.planoNome?.trim() || "Não informado"}`,
     `Tipo de recompensa: ${rewardTypeLabel(referral.tipoRecompensa)}`,
     `CPF informado: ${referral.cpfIndicado?.replace(/\D/g, "") ? "Sim" : "Não"}`,
+    `Ciente sobre possíveis taxas: ${yesNo(referral.installationFeeAwareness)}`,
+    `Ciente sobre Tanto Livre/Vantagens: ${yesNo(referral.contractTypeAwareness)}`,
   ]
 
   const address = buildAddressLine(referral)

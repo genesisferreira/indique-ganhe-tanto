@@ -47,6 +47,7 @@ import {
 } from "@/hooks/use-supabase-realtime"
 import { ArrowLeft, Calendar, Mail, Phone, User } from "lucide-react"
 import { ReferralInterestedFields } from "@/components/referral/referral-interested-fields"
+import { ReferralRegistrationAcknowledgements } from "@/components/referral/referral-registration-acknowledgements"
 import { getReferralContractTypeLabel } from "@/lib/referral-contract-type"
 
 const STATUS_OPTIONS: IndicacaoStatus[] = [
@@ -338,6 +339,10 @@ export default function AdminIndicacaoDetalhePage({
               <p className="text-muted-foreground">{indicacao.enderecoIndicado}</p>
             ) : null}
             <ReferralInterestedFields indicacao={indicacao} variant="compact" />
+            <ReferralRegistrationAcknowledgements
+              indicacao={indicacao}
+              variant="compact"
+            />
           </CardContent>
         </Card>
 

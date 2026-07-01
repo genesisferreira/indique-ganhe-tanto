@@ -68,6 +68,12 @@ export interface Indicacao {
   previousCommercialId?: string
   previousCommercialNome?: string
   slaRedistributed?: boolean
+  /** referrals.installation_fee_awareness */
+  cienteTaxasInstalacao?: boolean
+  cienteTaxasInstalacaoEm?: Date
+  /** referrals.contract_type_awareness */
+  cienteDiferencaContratacao?: boolean
+  cienteDiferencaContratacaoEm?: Date
   createdAt: Date
   updatedAt: Date
 }
@@ -89,6 +95,8 @@ export interface IndicacaoCreateData {
   complementoInstalacao?: string
   observacaoIndicado?: string
   tipoContratacao?: ReferralContractType
+  installation_fee_awareness?: boolean
+  contract_type_awareness?: boolean
   planoId: string
   tipoRecompensa: RecompensaTipo
   observacoes?: string

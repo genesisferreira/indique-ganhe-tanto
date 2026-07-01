@@ -92,6 +92,10 @@ type ReferralRow = {
   brbyte_interessado_last_sync_at?: string | null
   brbyte_interessado_payload?: Record<string, unknown> | null
   referral_contract_type?: string | null
+  installation_fee_awareness?: boolean
+  installation_fee_awareness_at?: string | null
+  contract_type_awareness?: boolean
+  contract_type_awareness_at?: string | null
   plan_id: string
   reward_type: string
   reward_amount: number | string
@@ -267,6 +271,27 @@ function mapReferralContractType(
   return {}
 }
 
+function mapReferralAcknowledgements(
+  row: ReferralRow
+): Pick<
+  Indicacao,
+  | "cienteTaxasInstalacao"
+  | "cienteTaxasInstalacaoEm"
+  | "cienteDiferencaContratacao"
+  | "cienteDiferencaContratacaoEm"
+> {
+  return {
+    cienteTaxasInstalacao: Boolean(row.installation_fee_awareness),
+    cienteTaxasInstalacaoEm: row.installation_fee_awareness_at
+      ? new Date(row.installation_fee_awareness_at)
+      : undefined,
+    cienteDiferencaContratacao: Boolean(row.contract_type_awareness),
+    cienteDiferencaContratacaoEm: row.contract_type_awareness_at
+      ? new Date(row.contract_type_awareness_at)
+      : undefined,
+  }
+}
+
 function planNomeFromRow(row: ReferralRow): Plano | undefined {
   const p = row.plans
   if (!p) return undefined
@@ -311,6 +336,7 @@ function referralToIndicacao(row: ReferralRow, indicadorId: string): Indicacao {
     ...mapRedistributionFields(row),
     ...mapReferralInterestedFields(row),
     ...mapReferralContractType(row),
+    ...mapReferralAcknowledgements(row),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   }
@@ -360,6 +386,7 @@ function referralRowToIndicacaoMerged(
     ...mapRedistributionFields(row),
     ...mapReferralInterestedFields(row),
     ...mapReferralContractType(row),
+    ...mapReferralAcknowledgements(row),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   }
@@ -837,6 +864,8 @@ export type InsertIndicadorReferralInput = {
   referred_complement?: string | null
   referred_observation?: string | null
   referral_contract_type?: ReferralContractType
+  installation_fee_awareness: boolean
+  contract_type_awareness: boolean
   plan_id: string
   reward_type: "pix" | "desconto_fatura"
   reward_amount: number
@@ -1840,6 +1869,24 @@ export async function insertIndicadorReferral(
       ? input.referral_contract_type
       : "tanto_vantagens"
 
+    if (!input.installation_fee_awareness) {
+      return {
+        ok: false,
+        message:
+          "Confirme que o indicado está ciente sobre possíveis taxas de instalação.",
+      }
+    }
+
+    if (!input.contract_type_awareness) {
+      return {
+        ok: false,
+        message:
+          "Confirme que explicou a diferença entre Tanto Livre e Tanto Vantagens.",
+      }
+    }
+
+    const acknowledgementAt = new Date().toISOString()
+
     const nullableTrim = (value: string | null | undefined): string | null => {
       if (value == null) return null
       const t = String(value).trim()
@@ -1872,6 +1919,10 @@ export async function insertIndicadorReferral(
       referred_observation: nullableTrim(input.referred_observation ?? undefined),
       erp_lead_source: "Indique e Ganhe",
       referral_contract_type: contractType,
+      installation_fee_awareness: true,
+      installation_fee_awareness_at: acknowledgementAt,
+      contract_type_awareness: true,
+      contract_type_awareness_at: acknowledgementAt,
       plan_id: input.plan_id,
       reward_type: input.reward_type,
       reward_amount: input.reward_amount,
@@ -4302,7 +4353,11 @@ const REFERRAL_INTERESTED_FIELDS_SELECT = `
         brbyte_interessado_created_at,
         brbyte_interessado_last_sync_at,
         brbyte_interessado_payload,
-        referral_contract_type
+        referral_contract_type,
+        installation_fee_awareness,
+        installation_fee_awareness_at,
+        contract_type_awareness,
+        contract_type_awareness_at
       `
 
 const REFERRAL_DETAIL_SELECT_CORE = `

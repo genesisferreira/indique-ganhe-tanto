@@ -44,6 +44,7 @@ import {
 import type { Plano } from "@/types/plan"
 import type { ReferralContractType } from "@/types/referral"
 import { CheckCircle2, Wallet, Receipt, Info, Loader2 } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
 
 export default function NovaIndicacaoPage() {
   const router = useRouter()
@@ -71,6 +72,8 @@ export default function NovaIndicacaoPage() {
   const [complemento, setComplemento] = useState("")
   const [cepLoading, setCepLoading] = useState(false)
   const [cepError, setCepError] = useState<string | null>(null)
+  const [installationFeeAwareness, setInstallationFeeAwareness] = useState(false)
+  const [contractTypeAwareness, setContractTypeAwareness] = useState(false)
   const [viacepLocked, setViacepLocked] = useState({
     estado: false,
     cidade: false,
@@ -216,6 +219,20 @@ export default function NovaIndicacaoPage() {
       return
     }
 
+    if (!installationFeeAwareness) {
+      toast.error(
+        "Confirme que o indicado está ciente sobre possíveis taxas de instalação."
+      )
+      return
+    }
+
+    if (!contractTypeAwareness) {
+      toast.error(
+        "Confirme que explicou a diferença entre Tanto Livre e Tanto Vantagens."
+      )
+      return
+    }
+
     const normalizedCep = cep.trim() ? normalizeReferralZipcode(cep) : null
 
     setIsLoading(true)
@@ -241,6 +258,8 @@ export default function NovaIndicacaoPage() {
       referred_complement: complemento.trim() || null,
       referred_observation: observacao.trim() || null,
       referral_contract_type: tipoContratacao,
+      installation_fee_awareness: true,
+      contract_type_awareness: true,
       plan_id: planoSelecionado.id,
       reward_type: rewardTypeDb,
       reward_amount: rewardAmount,
@@ -649,6 +668,51 @@ export default function NovaIndicacaoPage() {
             </ul>
           </div>
         ) : null}
+
+        <div className="rounded-xl border bg-card p-6 space-y-4 mt-6">
+          <h2 className="text-lg font-semibold text-foreground">
+            Confirmações obrigatórias
+          </h2>
+
+          <div className="space-y-4">
+            <div className="flex items-start gap-3">
+              <Checkbox
+                id="installation-fee-awareness"
+                checked={installationFeeAwareness}
+                onCheckedChange={(checked) =>
+                  setInstallationFeeAwareness(checked === true)
+                }
+                className="mt-0.5"
+              />
+              <Label
+                htmlFor="installation-fee-awareness"
+                className="text-sm font-normal leading-relaxed cursor-pointer"
+              >
+                Declaro que o indicado está ciente de que podem existir taxas de
+                instalação, habilitação, equipamentos ou outros custos conforme
+                análise comercial e disponibilidade técnica.
+              </Label>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <Checkbox
+                id="contract-type-awareness"
+                checked={contractTypeAwareness}
+                onCheckedChange={(checked) =>
+                  setContractTypeAwareness(checked === true)
+                }
+                className="mt-0.5"
+              />
+              <Label
+                htmlFor="contract-type-awareness"
+                className="text-sm font-normal leading-relaxed cursor-pointer"
+              >
+                Declaro que expliquei ao indicado a diferença entre Tanto Livre
+                e Tanto Vantagens, conforme o tipo de contratação escolhido.
+              </Label>
+            </div>
+          </div>
+        </div>
 
         <div className="flex items-center gap-4 mt-8">
           <Button

@@ -52,6 +52,7 @@ import {
   Send,
 } from "lucide-react"
 import { ReferralInterestedFields } from "@/components/referral/referral-interested-fields"
+import { ReferralRegistrationAcknowledgements } from "@/components/referral/referral-registration-acknowledgements"
 import { getReferralContractTypeLabel } from "@/lib/referral-contract-type"
 import type { Lead, LeadStatus, Historico } from "@/types"
 import type { UserRole } from "@/types/user"
@@ -481,6 +482,8 @@ export default function DetalheLeadPage({
           </div>
 
           <ReferralInterestedFields indicacao={indicacao} />
+
+          <ReferralRegistrationAcknowledgements indicacao={indicacao} />
 
           {/* Add Observation */}
           <div className="rounded-xl border bg-card p-6">

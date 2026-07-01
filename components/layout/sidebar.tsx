@@ -28,6 +28,7 @@ import {
   ChevronDown,
   Zap,
   Bell,
+  CircleHelp,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -82,6 +83,7 @@ const indicadorNav: NavGroup[] = [
       { label: "Notificações", href: "/notificacoes", icon: Bell },
       { label: "Nova Indicação", href: "/indicador/nova-indicacao", icon: UserPlus },
       { label: "Minhas Indicações", href: "/indicador/indicacoes", icon: Users },
+      { label: "Dúvidas", href: "/indicador/duvidas", icon: CircleHelp },
     ],
   },
   {
