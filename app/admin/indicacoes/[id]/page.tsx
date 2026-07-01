@@ -46,6 +46,8 @@ import {
   useRealtimeReload,
 } from "@/hooks/use-supabase-realtime"
 import { ArrowLeft, Calendar, Mail, Phone, User } from "lucide-react"
+import { ReferralInterestedFields } from "@/components/referral/referral-interested-fields"
+import { getReferralContractTypeLabel } from "@/lib/referral-contract-type"
 
 const STATUS_OPTIONS: IndicacaoStatus[] = [
   "pendente",
@@ -335,6 +337,7 @@ export default function AdminIndicacaoDetalhePage({
             {indicacao.enderecoIndicado ? (
               <p className="text-muted-foreground">{indicacao.enderecoIndicado}</p>
             ) : null}
+            <ReferralInterestedFields indicacao={indicacao} variant="compact" />
           </CardContent>
         </Card>
 
@@ -350,6 +353,16 @@ export default function AdminIndicacaoDetalhePage({
             <div>
               <p className="text-muted-foreground">Plano</p>
               <p>{indicacao.plano?.nome ?? "—"}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Tipo de contratação</p>
+              <p>
+                {getReferralContractTypeLabel(indicacao.tipoContratacao, {
+                  legacyFallback: indicacao.tipoContratacao
+                    ? "tanto_vantagens"
+                    : "nao_informado",
+                })}
+              </p>
             </div>
             <div>
               <p className="text-muted-foreground">Indicador</p>

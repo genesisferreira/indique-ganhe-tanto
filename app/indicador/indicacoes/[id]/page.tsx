@@ -24,6 +24,8 @@ import {
   Clock,
   XCircle,
 } from "lucide-react"
+import { ReferralInterestedFields } from "@/components/referral/referral-interested-fields"
+import { getReferralContractTypeLabel } from "@/lib/referral-contract-type"
 
 function statusEmFluxo(s: Indicacao["status"]) {
   return (
@@ -243,6 +245,8 @@ export default function DetalheIndicacaoPage({
             </div>
           </div>
 
+          <ReferralInterestedFields indicacao={indicacao} />
+
           {indicacao.observacoes ? (
             <div className="rounded-xl border bg-card p-6">
               <h2 className="text-lg font-semibold text-foreground mb-2">
@@ -269,6 +273,14 @@ export default function DetalheIndicacaoPage({
                 <p className="text-sm text-muted-foreground">
                   {indicacao.plano?.velocidade || "-"} -{" "}
                   {indicacao.plano?.descricao || "-"}
+                </p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Tipo de contratação:{" "}
+                  {getReferralContractTypeLabel(indicacao.tipoContratacao, {
+                    legacyFallback: indicacao.tipoContratacao
+                      ? "tanto_vantagens"
+                      : "nao_informado",
+                  })}
                 </p>
               </div>
               <div className="text-right">

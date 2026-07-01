@@ -51,6 +51,8 @@ import {
   MessageSquare,
   Send,
 } from "lucide-react"
+import { ReferralInterestedFields } from "@/components/referral/referral-interested-fields"
+import { getReferralContractTypeLabel } from "@/lib/referral-contract-type"
 import type { Lead, LeadStatus, Historico } from "@/types"
 import type { UserRole } from "@/types/user"
 
@@ -453,6 +455,13 @@ export default function DetalheLeadPage({
                       })}
                       /mês
                     </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {getReferralContractTypeLabel(indicacao.tipoContratacao, {
+                        legacyFallback: indicacao.tipoContratacao
+                          ? "tanto_vantagens"
+                          : "nao_informado",
+                      })}
+                    </p>
                   </div>
                 </div>
               )}
@@ -470,6 +479,8 @@ export default function DetalheLeadPage({
               </Button>
             </div>
           </div>
+
+          <ReferralInterestedFields indicacao={indicacao} />
 
           {/* Add Observation */}
           <div className="rounded-xl border bg-card p-6">

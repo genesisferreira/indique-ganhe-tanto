@@ -3,6 +3,12 @@ import {
   getCommercialSlaLevel,
   devLogCommercialSlaLevel,
 } from "@/lib/commercial-sla"
+import {
+  normalizeReferralDocument,
+  normalizeReferralPhone,
+  normalizeReferralZipcode,
+} from "@/lib/referral-field-normalize"
+import { isReferralContractType } from "@/lib/referral-contract-type"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { PAYMENT_RECEIPTS_BUCKET } from "@/lib/supabase/upload-payment-receipt"
 import type { DashboardIndicador } from "@/types/dashboard"
@@ -16,6 +22,8 @@ import type {
 import type {
   Indicacao,
   IndicacaoStatus,
+  IndicadoPersonType,
+  ReferralContractType,
   MarkFirstInvoicePaidErrorCode,
   MarkFirstInvoicePaidResult,
   RecompensaTipo,
@@ -66,6 +74,24 @@ type ReferralRow = {
   referred_phone: string
   referred_email: string | null
   referred_address: string | null
+  referred_document?: string | null
+  referred_rg?: string | null
+  referred_person_type?: string | null
+  referred_zipcode?: string | null
+  referred_state?: string | null
+  referred_city?: string | null
+  referred_neighborhood?: string | null
+  referred_street?: string | null
+  referred_number?: string | null
+  referred_complement?: string | null
+  referred_observation?: string | null
+  erp_lead_source?: string | null
+  brbyte_id_interessado?: string | null
+  brbyte_interessado_status?: string | null
+  brbyte_interessado_created_at?: string | null
+  brbyte_interessado_last_sync_at?: string | null
+  brbyte_interessado_payload?: Record<string, unknown> | null
+  referral_contract_type?: string | null
   plan_id: string
   reward_type: string
   reward_amount: number | string
@@ -182,6 +208,65 @@ function mapReferralLostFields(row: ReferralRow): {
   }
 }
 
+function mapReferralInterestedFields(row: ReferralRow): Pick<
+  Indicacao,
+  | "cpfIndicado"
+  | "rgIndicado"
+  | "tipoPessoaIndicado"
+  | "cepInstalacao"
+  | "estadoInstalacao"
+  | "cidadeInstalacao"
+  | "bairroInstalacao"
+  | "enderecoInstalacao"
+  | "numeroInstalacao"
+  | "complementoInstalacao"
+  | "observacaoIndicado"
+  | "erpLeadSource"
+  | "brbyteIdInteressado"
+  | "brbyteInteressadoStatus"
+  | "brbyteInteressadoCreatedAt"
+  | "brbyteInteressadoLastSyncAt"
+  | "brbyteInteressadoPayload"
+> {
+  const personType = row.referred_person_type?.trim()
+  return {
+    cpfIndicado: row.referred_document?.trim() || undefined,
+    rgIndicado: row.referred_rg?.trim() || undefined,
+    tipoPessoaIndicado:
+      personType === "pj" || personType === "pf"
+        ? (personType as IndicadoPersonType)
+        : undefined,
+    cepInstalacao: row.referred_zipcode?.trim() || undefined,
+    estadoInstalacao: row.referred_state?.trim() || undefined,
+    cidadeInstalacao: row.referred_city?.trim() || undefined,
+    bairroInstalacao: row.referred_neighborhood?.trim() || undefined,
+    enderecoInstalacao: row.referred_street?.trim() || undefined,
+    numeroInstalacao: row.referred_number?.trim() || undefined,
+    complementoInstalacao: row.referred_complement?.trim() || undefined,
+    observacaoIndicado: row.referred_observation?.trim() || undefined,
+    erpLeadSource: row.erp_lead_source?.trim() || undefined,
+    brbyteIdInteressado: row.brbyte_id_interessado?.trim() || undefined,
+    brbyteInteressadoStatus: row.brbyte_interessado_status?.trim() || undefined,
+    brbyteInteressadoCreatedAt: row.brbyte_interessado_created_at
+      ? new Date(row.brbyte_interessado_created_at)
+      : undefined,
+    brbyteInteressadoLastSyncAt: row.brbyte_interessado_last_sync_at
+      ? new Date(row.brbyte_interessado_last_sync_at)
+      : undefined,
+    brbyteInteressadoPayload: row.brbyte_interessado_payload ?? undefined,
+  }
+}
+
+function mapReferralContractType(
+  row: ReferralRow
+): Pick<Indicacao, "tipoContratacao"> {
+  const value = row.referral_contract_type?.trim()
+  if (isReferralContractType(value)) {
+    return { tipoContratacao: value }
+  }
+  return {}
+}
+
 function planNomeFromRow(row: ReferralRow): Plano | undefined {
   const p = row.plans
   if (!p) return undefined
@@ -224,6 +309,8 @@ function referralToIndicacao(row: ReferralRow, indicadorId: string): Indicacao {
     ...mapReferralLostFields(row),
     ...computeReferralSlaFields(row),
     ...mapRedistributionFields(row),
+    ...mapReferralInterestedFields(row),
+    ...mapReferralContractType(row),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   }
@@ -271,6 +358,8 @@ function referralRowToIndicacaoMerged(
     ...mapReferralLostFields(row),
     ...computeReferralSlaFields(row),
     ...mapRedistributionFields(row),
+    ...mapReferralInterestedFields(row),
+    ...mapReferralContractType(row),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   }
@@ -736,6 +825,18 @@ export type InsertIndicadorReferralInput = {
   referred_phone: string
   referred_email?: string | null
   referred_address?: string | null
+  referred_document?: string | null
+  referred_rg?: string | null
+  referred_person_type?: IndicadoPersonType
+  referred_zipcode?: string | null
+  referred_state?: string | null
+  referred_city?: string | null
+  referred_neighborhood?: string | null
+  referred_street?: string | null
+  referred_number?: string | null
+  referred_complement?: string | null
+  referred_observation?: string | null
+  referral_contract_type?: ReferralContractType
   plan_id: string
   reward_type: "pix" | "desconto_fatura"
   reward_amount: number
@@ -1717,6 +1818,34 @@ export async function insertIndicadorReferral(
         ? String(input.referred_address).trim()
         : null
 
+    const normalizedPhone = normalizeReferralPhone(input.referred_phone)
+    if (!normalizedPhone) {
+      return {
+        ok: false,
+        message: "Informe um telefone válido com DDD.",
+      }
+    }
+
+    const normalizedDocument = normalizeReferralDocument(
+      input.referred_document ?? undefined
+    )
+    if (!normalizedDocument || normalizedDocument.length !== 11) {
+      return {
+        ok: false,
+        message: "CPF do indicado é obrigatório e deve ter 11 dígitos.",
+      }
+    }
+
+    const contractType = isReferralContractType(input.referral_contract_type)
+      ? input.referral_contract_type
+      : "tanto_vantagens"
+
+    const nullableTrim = (value: string | null | undefined): string | null => {
+      if (value == null) return null
+      const t = String(value).trim()
+      return t !== "" ? t : null
+    }
+
     const db = supabase as unknown as {
       from: (t: string) => ReturnType<typeof supabase.from>
     }
@@ -1725,9 +1854,24 @@ export async function insertIndicadorReferral(
     const insertPayload = {
       indicator_profile_id: user.id,
       referred_name: input.referred_name.trim(),
-      referred_phone: input.referred_phone.trim(),
+      referred_phone: normalizedPhone,
       referred_email: email,
       referred_address: address,
+      referred_document: normalizedDocument,
+      referred_rg: nullableTrim(input.referred_rg ?? undefined),
+      referred_person_type: input.referred_person_type ?? "pf",
+      referred_zipcode: normalizeReferralZipcode(
+        input.referred_zipcode ?? undefined
+      ),
+      referred_state: nullableTrim(input.referred_state ?? undefined),
+      referred_city: nullableTrim(input.referred_city ?? undefined),
+      referred_neighborhood: nullableTrim(input.referred_neighborhood ?? undefined),
+      referred_street: nullableTrim(input.referred_street ?? undefined),
+      referred_number: nullableTrim(input.referred_number ?? undefined),
+      referred_complement: nullableTrim(input.referred_complement ?? undefined),
+      referred_observation: nullableTrim(input.referred_observation ?? undefined),
+      erp_lead_source: "Indique e Ganhe",
+      referral_contract_type: contractType,
       plan_id: input.plan_id,
       reward_type: input.reward_type,
       reward_amount: input.reward_amount,
@@ -2581,7 +2725,8 @@ export async function loadAdminReferralDetailFromSupabase(
         updated_at,
         assigned_at,
         first_response_at,
-        last_interaction_at
+        last_interaction_at,
+        ${REFERRAL_INTERESTED_FIELDS_SELECT}
       `
       )
       .eq("id", referralId)
@@ -3673,7 +3818,8 @@ export async function loadIndicadorReferralDetailFromSupabase(
         lost_notes,
         lost_at,
         created_at,
-        updated_at
+        updated_at,
+        ${REFERRAL_INTERESTED_FIELDS_SELECT}
       `
       )
       .eq("id", referralId)
@@ -4138,6 +4284,27 @@ function devWarnComercialLeadDetailMock(reason: string): void {
   }
 }
 
+const REFERRAL_INTERESTED_FIELDS_SELECT = `
+        referred_document,
+        referred_rg,
+        referred_person_type,
+        referred_zipcode,
+        referred_state,
+        referred_city,
+        referred_neighborhood,
+        referred_street,
+        referred_number,
+        referred_complement,
+        referred_observation,
+        erp_lead_source,
+        brbyte_id_interessado,
+        brbyte_interessado_status,
+        brbyte_interessado_created_at,
+        brbyte_interessado_last_sync_at,
+        brbyte_interessado_payload,
+        referral_contract_type
+      `
+
 const REFERRAL_DETAIL_SELECT_CORE = `
         id,
         indicator_profile_id,
@@ -4157,7 +4324,8 @@ const REFERRAL_DETAIL_SELECT_CORE = `
         rejected_at,
         rejection_reason,
         created_at,
-        updated_at
+        updated_at,
+        ${REFERRAL_INTERESTED_FIELDS_SELECT}
       `
 
 const REFERRAL_DETAIL_SELECT_EXTENDED = `
@@ -4188,7 +4356,8 @@ const REFERRAL_DETAIL_SELECT_EXTENDED = `
         sla_redistributed,
         last_redistributed_at,
         created_at,
-        updated_at
+        updated_at,
+        ${REFERRAL_INTERESTED_FIELDS_SELECT}
       `
 
 const COMERCIAL_LEAD_DETAIL_READ_ROLES = new Set([
