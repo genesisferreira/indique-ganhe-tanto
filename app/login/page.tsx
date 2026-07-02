@@ -1,26 +1,50 @@
 "use client"
 
-import { useState } from "react"
+import { Suspense, useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Zap, Eye, EyeOff, ArrowLeft } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useAuth } from "@/components/auth/auth-provider"
 import { getDashboardHomeForRole } from "@/lib/auth/auth-audit"
+import {
+  getDemoCredentials,
+  getDemoDashboardPath,
+  type DemoDashboardRole,
+} from "@/lib/auth/demo-login"
+import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import { performClientLogout } from "@/lib/auth/logout"
 import { getSupabaseAuthNetworkHint, getSupabaseClient } from "@/lib/supabase/client"
 import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
 import type { UserRole } from "@/types/user"
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const auth = useAuth()
   const [showPassword, setShowPassword] = useState(false)
   const [loginType, setLoginType] = useState<"email" | "telefone">("email")
   const [isLoading, setIsLoading] = useState(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
+
+  const redirectParam = searchParams.get("redirect")
+
+  const resolvePostLoginPath = (role: UserRole | null): string => {
+    if (
+      redirectParam &&
+      redirectParam.startsWith("/") &&
+      !redirectParam.startsWith("//")
+    ) {
+      return redirectParam
+    }
+    return role ? getDashboardHomeForRole(role) : "/indicador"
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -34,6 +58,8 @@ export default function LoginPage() {
     }
 
     try {
+      await performClientLogout()
+
       const supabase = getSupabaseClient()
       const { error: signInError } = await supabase.auth.signInWithPassword({
         email,
@@ -45,9 +71,11 @@ export default function LoginPage() {
         return
       }
 
+      await auth.refreshProfile()
       const basics = await getAuthProfileBasicsFromSupabase()
       const role = (basics?.role ?? null) as UserRole | null
-      router.push(role ? getDashboardHomeForRole(role) : "/indicador")
+      router.replace(resolvePostLoginPath(role))
+      router.refresh()
     } catch (err) {
       if (process.env.NODE_ENV === "development" && err instanceof Error) {
         console.error("[login] auth:", err.name, err.message)
@@ -59,9 +87,71 @@ export default function LoginPage() {
     }
   }
 
+  const handleDemoAccess = async (role: DemoDashboardRole) => {
+    setIsLoading(true)
+    setError("")
+
+    try {
+      await performClientLogout()
+      await auth.refreshProfile()
+
+      if (isDataProviderMock()) {
+        router.replace(getDemoDashboardPath(role))
+        router.refresh()
+        return
+      }
+
+      const credentials = getDemoCredentials(role)
+      if (!credentials) {
+        toast.error(
+          "Demonstração não configurada. Defina NEXT_PUBLIC_DEMO_* no ambiente ou use login com e-mail e senha."
+        )
+        return
+      }
+
+      const supabase = getSupabaseClient()
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: credentials.email,
+        password: credentials.password,
+      })
+
+      if (signInError) {
+        toast.error(signInError.message || "Não foi possível entrar na demonstração.")
+        return
+      }
+
+      await auth.refreshProfile()
+      const basics = await getAuthProfileBasicsFromSupabase()
+      const profileRole = basics?.role ?? null
+
+      if (profileRole && profileRole !== credentials.expectedRole) {
+        if (
+          role === "admin" &&
+          (profileRole === "admin_consulta" ||
+            profileRole === "admin_financeiro" ||
+            profileRole === "admin_master")
+        ) {
+          // ok — qualquer perfil admin
+        } else if (profileRole !== credentials.expectedRole) {
+          toast.error("A conta de demonstração não corresponde ao perfil esperado.")
+          await performClientLogout()
+          await auth.refreshProfile()
+          return
+        }
+      }
+
+      router.replace(getDemoDashboardPath(role))
+      router.refresh()
+    } catch (err) {
+      const hint = getSupabaseAuthNetworkHint(err)
+      toast.error(hint ?? "Erro ao acessar demonstração.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen flex bg-background">
-      {/* Left Side - Form */}
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="w-full max-w-md">
           <Link
@@ -174,27 +264,49 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {/* Demo Links */}
           <div className="mt-8 p-4 rounded-xl bg-card border border-border">
             <p className="text-xs text-muted-foreground mb-3 font-medium uppercase tracking-wider">
               Links de demonstração
             </p>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/indicador">Indicador</Link>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isLoading}
+                onClick={() => {
+                  void handleDemoAccess("indicador")
+                }}
+              >
+                Indicador
               </Button>
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/comercial">Comercial</Link>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isLoading}
+                onClick={() => {
+                  void handleDemoAccess("comercial")
+                }}
+              >
+                Comercial
               </Button>
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/admin">Admin</Link>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isLoading}
+                onClick={() => {
+                  void handleDemoAccess("admin")
+                }}
+              >
+                Admin
               </Button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Right Side - Decorative */}
       <div className="hidden lg:flex lg:flex-1 relative bg-primary/5 items-center justify-center p-12">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-primary/20 via-transparent to-transparent" />
         <div className="relative max-w-md text-center">
@@ -211,5 +323,19 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-background text-muted-foreground">
+          Carregando…
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   )
 }

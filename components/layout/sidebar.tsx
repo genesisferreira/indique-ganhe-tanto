@@ -49,6 +49,7 @@ import {
   useRealtimeReload,
 } from "@/hooks/use-supabase-realtime"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
+import { useAuth } from "@/components/auth/auth-provider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import type { UserRole } from "@/types/user"
 import {
@@ -202,6 +203,7 @@ export function Sidebar({
   policyRole = null,
 }: SidebarProps) {
   const pathname = usePathname()
+  const { signOut } = useAuth()
   const notifCtx = useNotificationsContextOptional()
   const [isOpen, setIsOpen] = useState(false)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
@@ -517,11 +519,15 @@ export function Sidebar({
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link href="/login" className="text-destructive">
-                  <LogOut className="w-4 h-4 mr-2" />
-                  Sair
-                </Link>
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onSelect={(event) => {
+                  event.preventDefault()
+                  void signOut()
+                }}
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Sair
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

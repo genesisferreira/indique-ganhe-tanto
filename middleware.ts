@@ -1,102 +1,100 @@
-import { type NextRequest, NextResponse } from 'next/server'
-import { logAuthAudit } from '@/lib/auth/auth-audit'
-// import { updateSession } from '@/lib/supabase/middleware'
+import { type NextRequest, NextResponse } from "next/server"
+import {
+  evaluateRouteAccessForRole,
+  getDashboardHomeForRole,
+  logAuthAudit,
+} from "@/lib/auth/auth-audit"
+import { updateSession } from "@/lib/supabase/middleware"
+import type { UserRole } from "@/types/user"
 
-// Define route permissions
-const routePermissions: Record<string, string[]> = {
-  '/indicador': ['indicador'],
-  '/comercial': ['comercial'],
-  '/admin': ['admin_consulta', 'admin_financeiro', 'admin_master'],
+const protectedPrefixes = ["/indicador", "/comercial", "/admin", "/notificacoes"]
+
+const publicRoutes = ["/", "/login", "/cadastro", "/recuperar-senha"]
+
+function isPublicPath(pathname: string): boolean {
+  if (publicRoutes.some((route) => pathname === route)) return true
+  if (pathname.startsWith("/_next")) return true
+  if (pathname.startsWith("/api")) return true
+  return false
 }
 
-// Public routes that don't require authentication
-const publicRoutes = [
-  '/',
-  '/login',
-  '/cadastro',
-  '/recuperar-senha',
-]
+function isProtectedPath(pathname: string): boolean {
+  return protectedPrefixes.some((prefix) => pathname.startsWith(prefix))
+}
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Allow public routes
-  if (publicRoutes.some(route => pathname === route || pathname.startsWith('/_next') || pathname.startsWith('/api'))) {
+  if (isPublicPath(pathname)) {
     return NextResponse.next()
   }
 
-  const protectedRouteMatch = Object.keys(routePermissions).find((route) =>
-    pathname.startsWith(route)
-  )
-  if (process.env.NODE_ENV === 'development' && protectedRouteMatch) {
-    logAuthAudit({
-      role: null,
-      route: pathname,
-      allowed: true,
-      reason:
-        'middleware(dev): bypass de autenticação; enforcement no cliente (AuthenticatedDashboardShell) + RLS',
-    })
-  }
+  const protectedRoute = isProtectedPath(pathname)
 
-  // TODO: Enable when Supabase is connected
-  // const { supabaseResponse, user } = await updateSession(request)
-  
-  // Autenticação por rota: em produção habilitar `updateSession` + checagem de role abaixo.
-  // Hoje a coerência role × área é aplicada no cliente (`AuthenticatedDashboardShell` + RLS no Supabase).
-  if (process.env.NODE_ENV === 'development') {
+  if (process.env.NODE_ENV === "development") {
+    if (protectedRoute) {
+      logAuthAudit({
+        role: null,
+        route: pathname,
+        allowed: true,
+        reason:
+          "middleware(dev): bypass; enforcement no cliente (AuthenticatedDashboardShell) + RLS",
+      })
+    }
     return NextResponse.next()
   }
-
-  // Check if route requires authentication
-  const protectedRoute = Object.keys(routePermissions).find(route => 
-    pathname.startsWith(route)
-  )
 
   if (!protectedRoute) {
     return NextResponse.next()
   }
 
-  // TODO: Uncomment when Supabase is connected
-  /*
-  // Check if user is authenticated
-  if (!user) {
-    const loginUrl = new URL('/login', request.url)
-    loginUrl.searchParams.set('redirect', pathname)
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    const loginUrl = new URL("/login", request.url)
+    loginUrl.searchParams.set("redirect", pathname)
     return NextResponse.redirect(loginUrl)
   }
 
-  // Get user role from metadata or profile
-  const userRole = user.user_metadata?.role || 'indicador'
-  const allowedRoles = routePermissions[protectedRoute]
+  const { supabaseResponse, user, supabase } = await updateSession(request)
 
-  // Check if user has permission
-  if (!allowedRoles.includes(userRole)) {
-    // Redirect to appropriate dashboard based on role
-    const redirectMap: Record<string, string> = {
-      'indicador': '/indicador',
-      'comercial': '/comercial',
-      'admin_consulta': '/admin',
-      'admin_financeiro': '/admin',
-      'admin_master': '/admin',
-    }
-    return NextResponse.redirect(new URL(redirectMap[userRole] || '/', request.url))
+  if (!user) {
+    const loginUrl = new URL("/login", request.url)
+    loginUrl.searchParams.set("redirect", pathname)
+    return NextResponse.redirect(loginUrl)
   }
 
-  return supabaseResponse
-  */
+  const { data: profileRow, error: profileError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle()
 
-  return NextResponse.next()
+  const role = (profileRow?.role ?? null) as UserRole | null
+
+  if (profileError || !role) {
+    const loginUrl = new URL("/login", request.url)
+    loginUrl.searchParams.set("redirect", pathname)
+    return NextResponse.redirect(loginUrl)
+  }
+
+  const access = evaluateRouteAccessForRole(pathname, role)
+  if (!access.allowed) {
+    const redirectUrl = new URL(getDashboardHomeForRole(role), request.url)
+    return NextResponse.redirect(redirectUrl)
+  }
+
+  supabaseResponse.headers.set(
+    "Cache-Control",
+    "private, no-store, max-age=0, must-revalidate"
+  )
+
+  return supabaseResponse
 }
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder
-     */
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 }

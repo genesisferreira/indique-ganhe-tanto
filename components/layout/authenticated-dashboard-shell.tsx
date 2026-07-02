@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react"
 import { usePathname, useRouter } from "next/navigation"
+import { useAuth } from "@/components/auth/auth-provider"
 import { AppToaster } from "@/components/notifications/app-toaster"
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
 import { NotificationsProvider } from "@/components/notifications/notifications-provider"
-import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
 import { mockDataService } from "@/lib/services/mock-data.service"
 import type { AuthProfileBasics } from "@/types/auth-profile"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
@@ -34,6 +34,7 @@ export function AuthenticatedDashboardShell({
 }: AuthenticatedDashboardShellProps) {
   const router = useRouter()
   const pathname = usePathname()
+  const auth = useAuth()
   const [ready, setReady] = useState(false)
   const [userName, setUserName] = useState("")
   const [userRoleLabel, setUserRoleLabel] = useState("")
@@ -45,6 +46,7 @@ export function AuthenticatedDashboardShell({
 
   useEffect(() => {
     let cancelled = false
+
     void (async () => {
       if (isDataProviderMock()) {
         const snap = mockDataService.getSnapshot()
@@ -124,38 +126,43 @@ export function AuthenticatedDashboardShell({
         return
       }
 
-      const profile = await getAuthProfileBasicsFromSupabase()
-      if (cancelled) return
-      if (!profile) {
+      if (!auth.ready) return
+
+      if (!auth.profile) {
         setRedirecting(true)
         const dest = `/login?redirect=${encodeURIComponent(pathname)}`
         router.replace(dest)
         return
       }
-      if (!isRoleAllowedOnDashboardVariant(variant, profile.role)) {
+
+      if (!isRoleAllowedOnDashboardVariant(variant, auth.profile.role)) {
         if (process.env.NODE_ENV === "development") {
           console.warn("[permission-check:debug]", {
             flow: "dashboard-shell",
             action: "redirect_variant_mismatch",
             variant,
-            role: profile.role,
-            dest: getDashboardHomeForRole(profile.role),
+            role: auth.profile.role,
+            dest: getDashboardHomeForRole(auth.profile.role),
           })
         }
         setRedirecting(true)
-        router.replace(getDashboardHomeForRole(profile.role))
+        router.replace(getDashboardHomeForRole(auth.profile.role))
         return
       }
-      setUserName(profile.fullName)
-      setUserRoleLabel(formatUserRoleLabel(profile.role))
-      setPolicyRole(profile.role)
-      setSessionProfile(profile)
+
+      if (cancelled) return
+
+      setUserName(auth.profile.fullName)
+      setUserRoleLabel(formatUserRoleLabel(auth.profile.role))
+      setPolicyRole(auth.profile.role)
+      setSessionProfile(auth.profile)
       setReady(true)
     })()
+
     return () => {
       cancelled = true
     }
-  }, [variant, lockedProfile, pathname, router])
+  }, [variant, lockedProfile, pathname, router, auth.ready, auth.profile])
 
   if (!ready) {
     if (redirecting) {

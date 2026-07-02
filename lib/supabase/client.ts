@@ -36,6 +36,11 @@ function logSupabaseAuthDebugOnce() {
 let browserClient: ReturnType<typeof createBrowserClient<Database>> | null = null
 let envSignature = ''
 
+export function resetSupabaseBrowserClient(): void {
+  browserClient = null
+  envSignature = ''
+}
+
 export function getSupabaseClient() {
   const { url, anonKey } = getPublicSupabaseEnv()
   logSupabaseAuthDebugOnce()
