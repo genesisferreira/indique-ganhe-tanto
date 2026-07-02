@@ -12,6 +12,16 @@ function readEnv(name: string): string {
   return process.env[name]?.trim() ?? ""
 }
 
+function readTruthyEnv(name: string): boolean {
+  const value = readEnv(name).toLowerCase()
+  return value === "true" || value === "1"
+}
+
+/** Links de demonstração na tela de login (desligado por padrão em produção). */
+export function isDemoLinksEnabled(): boolean {
+  return readTruthyEnv("NEXT_PUBLIC_ENABLE_DEMO_LINKS")
+}
+
 /** Credenciais opcionais de demonstração (variáveis NEXT_PUBLIC_*). */
 export function getDemoCredentials(
   role: DemoDashboardRole

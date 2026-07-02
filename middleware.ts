@@ -4,15 +4,23 @@ import {
   getDashboardHomeForRole,
   logAuthAudit,
 } from "@/lib/auth/auth-audit"
+import { applyNoStoreHeaders } from "@/lib/auth/cache-control"
 import { updateSession } from "@/lib/supabase/middleware"
 import type { UserRole } from "@/types/user"
 
 const protectedPrefixes = ["/indicador", "/comercial", "/admin", "/notificacoes"]
 
-const publicRoutes = ["/", "/login", "/cadastro", "/recuperar-senha"]
+const publicRoutes = [
+  "/",
+  "/login",
+  "/cadastro",
+  "/recuperar-senha",
+  "/auth/logout",
+]
 
 function isPublicPath(pathname: string): boolean {
   if (publicRoutes.some((route) => pathname === route)) return true
+  if (pathname.startsWith("/auth/")) return true
   if (pathname.startsWith("/_next")) return true
   if (pathname.startsWith("/api")) return true
   return false
@@ -20,6 +28,12 @@ function isPublicPath(pathname: string): boolean {
 
 function isProtectedPath(pathname: string): boolean {
   return protectedPrefixes.some((prefix) => pathname.startsWith(prefix))
+}
+
+function redirectToLogin(request: NextRequest, pathname: string): NextResponse {
+  const loginUrl = new URL("/login", request.url)
+  loginUrl.searchParams.set("redirect", pathname)
+  return applyNoStoreHeaders(NextResponse.redirect(loginUrl))
 }
 
 export async function middleware(request: NextRequest) {
@@ -52,17 +66,13 @@ export async function middleware(request: NextRequest) {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    const loginUrl = new URL("/login", request.url)
-    loginUrl.searchParams.set("redirect", pathname)
-    return NextResponse.redirect(loginUrl)
+    return redirectToLogin(request, pathname)
   }
 
   const { supabaseResponse, user, supabase } = await updateSession(request)
 
   if (!user) {
-    const loginUrl = new URL("/login", request.url)
-    loginUrl.searchParams.set("redirect", pathname)
-    return NextResponse.redirect(loginUrl)
+    return redirectToLogin(request, pathname)
   }
 
   const { data: profileRow, error: profileError } = await supabase
@@ -74,23 +84,16 @@ export async function middleware(request: NextRequest) {
   const role = (profileRow?.role ?? null) as UserRole | null
 
   if (profileError || !role) {
-    const loginUrl = new URL("/login", request.url)
-    loginUrl.searchParams.set("redirect", pathname)
-    return NextResponse.redirect(loginUrl)
+    return redirectToLogin(request, pathname)
   }
 
   const access = evaluateRouteAccessForRole(pathname, role)
   if (!access.allowed) {
     const redirectUrl = new URL(getDashboardHomeForRole(role), request.url)
-    return NextResponse.redirect(redirectUrl)
+    return applyNoStoreHeaders(NextResponse.redirect(redirectUrl))
   }
 
-  supabaseResponse.headers.set(
-    "Cache-Control",
-    "private, no-store, max-age=0, must-revalidate"
-  )
-
-  return supabaseResponse
+  return applyNoStoreHeaders(supabaseResponse)
 }
 
 export const config = {

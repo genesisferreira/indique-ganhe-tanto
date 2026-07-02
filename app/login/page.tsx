@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
@@ -14,6 +14,7 @@ import { getDashboardHomeForRole } from "@/lib/auth/auth-audit"
 import {
   getDemoCredentials,
   getDemoDashboardPath,
+  isDemoLinksEnabled,
   type DemoDashboardRole,
 } from "@/lib/auth/demo-login"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
@@ -34,6 +35,8 @@ function LoginForm() {
   const [error, setError] = useState("")
 
   const redirectParam = searchParams.get("redirect")
+  const loggedOutParam = searchParams.get("loggedOut")
+  const demoLinksEnabled = isDemoLinksEnabled()
 
   const resolvePostLoginPath = (role: UserRole | null): string => {
     if (
@@ -45,6 +48,41 @@ function LoginForm() {
     }
     return role ? getDashboardHomeForRole(role) : "/indicador"
   }
+
+  useEffect(() => {
+    if (loggedOutParam === "1") return
+    if (isDataProviderMock()) return
+
+    let cancelled = false
+
+    void (async () => {
+      if (!auth.ready) return
+
+      const role = (auth.profile?.role ?? null) as UserRole | null
+      if (role) {
+        if (!cancelled) {
+          router.replace(resolvePostLoginPath(role))
+        }
+        return
+      }
+
+      const supabase = getSupabaseClient()
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      if (cancelled || !user) return
+
+      const basics = await getAuthProfileBasicsFromSupabase()
+      if (cancelled || !basics?.role) return
+
+      router.replace(resolvePostLoginPath(basics.role))
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [auth.ready, auth.profile, loggedOutParam, redirectParam, router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -264,46 +302,48 @@ function LoginForm() {
             </p>
           </div>
 
-          <div className="mt-8 p-4 rounded-xl bg-card border border-border">
-            <p className="text-xs text-muted-foreground mb-3 font-medium uppercase tracking-wider">
-              Links de demonstração
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={isLoading}
-                onClick={() => {
-                  void handleDemoAccess("indicador")
-                }}
-              >
-                Indicador
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={isLoading}
-                onClick={() => {
-                  void handleDemoAccess("comercial")
-                }}
-              >
-                Comercial
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={isLoading}
-                onClick={() => {
-                  void handleDemoAccess("admin")
-                }}
-              >
-                Admin
-              </Button>
+          {demoLinksEnabled ? (
+            <div className="mt-8 p-4 rounded-xl bg-card border border-border">
+              <p className="text-xs text-muted-foreground mb-3 font-medium uppercase tracking-wider">
+                Links de demonstração
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isLoading}
+                  onClick={() => {
+                    void handleDemoAccess("indicador")
+                  }}
+                >
+                  Indicador
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isLoading}
+                  onClick={() => {
+                    void handleDemoAccess("comercial")
+                  }}
+                >
+                  Comercial
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isLoading}
+                  onClick={() => {
+                    void handleDemoAccess("admin")
+                  }}
+                >
+                  Admin
+                </Button>
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </div>
 

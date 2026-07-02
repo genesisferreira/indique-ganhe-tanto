@@ -8,7 +8,6 @@ import {
   useMemo,
   useState,
 } from "react"
-import { useRouter } from "next/navigation"
 import { performClientLogout } from "@/lib/auth/logout"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
@@ -25,7 +24,6 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const router = useRouter()
   const [ready, setReady] = useState(false)
   const [profile, setProfile] = useState<AuthProfileBasics | null>(null)
 
@@ -88,14 +86,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const signOut = useCallback(async () => {
-    if (!isDataProviderMock()) {
-      await performClientLogout()
-    }
     setProfile(null)
     setReady(true)
-    router.replace("/login")
-    router.refresh()
-  }, [router])
+
+    if (isDataProviderMock()) {
+      window.location.href = "/login?loggedOut=1"
+      return
+    }
+
+    await performClientLogout()
+    window.location.href = "/auth/logout"
+  }, [])
 
   const value = useMemo<AuthContextValue>(
     () => ({
