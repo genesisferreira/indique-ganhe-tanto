@@ -2,11 +2,11 @@
   "crons": [
     {
       "path": "/api/cron/commercial-sla",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 3 * * *"
     },
     {
       "path": "/api/cron/brbyte-sync",
-      "schedule": "0 */6 * * *"
+      "schedule": "30 3 * * *"
     }
   ]
 }
