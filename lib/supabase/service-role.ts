@@ -1,11 +1,13 @@
 import "server-only"
 import { createClient } from "@supabase/supabase-js"
 import type { Database } from "@/types/database"
+import { applyDevSupabaseTlsWorkaround } from "@/lib/supabase/dev-tls"
 
 /**
  * Cliente Supabase com service role — apenas server/API (nunca importar em Client Components).
  */
 export function createServiceRoleClient() {
+  applyDevSupabaseTlsWorkaround()
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? ""
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ?? ""
 

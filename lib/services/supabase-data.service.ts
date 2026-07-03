@@ -9,6 +9,7 @@ import {
   normalizeReferralZipcode,
 } from "@/lib/referral-field-normalize"
 import { isReferralContractType } from "@/lib/referral-contract-type"
+import { normalizeBrbyteSyncStatus } from "@/types/referral"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { PAYMENT_RECEIPTS_BUCKET } from "@/lib/supabase/upload-payment-receipt"
 import type { DashboardIndicador } from "@/types/dashboard"
@@ -91,6 +92,12 @@ type ReferralRow = {
   brbyte_interessado_created_at?: string | null
   brbyte_interessado_last_sync_at?: string | null
   brbyte_interessado_payload?: Record<string, unknown> | null
+  brbyte_sync_status?: string | null
+  brbyte_sync_error?: string | null
+  brbyte_sync_attempts?: number | null
+  brbyte_last_error_at?: string | null
+  brbyte_last_http_status?: number | null
+  brbyte_last_endpoint?: string | null
   referral_contract_type?: string | null
   installation_fee_awareness?: boolean
   installation_fee_awareness_at?: string | null
@@ -121,7 +128,7 @@ type ReferralRow = {
   previous_commercial_profile_id?: string | null
   sla_redistributed?: boolean
   admin_alerted?: boolean
-  plans?: { name: string } | { name: string }[] | null
+  plans?: { name: string; speed_label?: string } | { name: string; speed_label?: string }[] | null
 }
 
 type PaymentRow = {
@@ -209,6 +216,31 @@ function mapReferralLostFields(row: ReferralRow): {
     motivoRecusa: motivoRecusa || undefined,
     observacoesRecusa,
     dataRecusa,
+  }
+}
+
+function mapReferralBrbyteSyncFields(row: ReferralRow): Pick<
+  Indicacao,
+  | "brbyteSyncStatus"
+  | "brbyteSyncError"
+  | "brbyteSyncAttempts"
+  | "brbyteLastErrorAt"
+  | "brbyteLastHttpStatus"
+  | "brbyteLastEndpoint"
+> {
+  return {
+    brbyteSyncStatus: normalizeBrbyteSyncStatus(row.brbyte_sync_status),
+    brbyteSyncError: row.brbyte_sync_error?.trim() || undefined,
+    brbyteSyncAttempts:
+      typeof row.brbyte_sync_attempts === "number" ? row.brbyte_sync_attempts : 0,
+    brbyteLastErrorAt: row.brbyte_last_error_at
+      ? new Date(row.brbyte_last_error_at)
+      : undefined,
+    brbyteLastHttpStatus:
+      typeof row.brbyte_last_http_status === "number"
+        ? row.brbyte_last_http_status
+        : undefined,
+    brbyteLastEndpoint: row.brbyte_last_endpoint?.trim() || undefined,
   }
 }
 
@@ -335,6 +367,7 @@ function referralToIndicacao(row: ReferralRow, indicadorId: string): Indicacao {
     ...computeReferralSlaFields(row),
     ...mapRedistributionFields(row),
     ...mapReferralInterestedFields(row),
+    ...mapReferralBrbyteSyncFields(row),
     ...mapReferralContractType(row),
     ...mapReferralAcknowledgements(row),
     createdAt: new Date(row.created_at),
@@ -385,6 +418,7 @@ function referralRowToIndicacaoMerged(
     ...computeReferralSlaFields(row),
     ...mapRedistributionFields(row),
     ...mapReferralInterestedFields(row),
+    ...mapReferralBrbyteSyncFields(row),
     ...mapReferralContractType(row),
     ...mapReferralAcknowledgements(row),
     createdAt: new Date(row.created_at),
@@ -4353,6 +4387,12 @@ const REFERRAL_INTERESTED_FIELDS_SELECT = `
         brbyte_interessado_created_at,
         brbyte_interessado_last_sync_at,
         brbyte_interessado_payload,
+        brbyte_sync_status,
+        brbyte_sync_error,
+        brbyte_sync_attempts,
+        brbyte_last_error_at,
+        brbyte_last_http_status,
+        brbyte_last_endpoint,
         referral_contract_type,
         installation_fee_awareness,
         installation_fee_awareness_at,

@@ -29,6 +29,7 @@ import {
   Zap,
   Bell,
   CircleHelp,
+  Cable,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -157,6 +158,16 @@ const adminNav: NavGroup[] = [
       { label: "Pagamentos Pendentes", href: "/admin/pagamentos-pendentes", icon: CreditCard },
       { label: "Histórico Pagamentos", href: "/admin/historico-pagamentos", icon: History },
       { label: "Upload Comprovante", href: "/admin/upload-comprovante", icon: Upload },
+    ],
+  },
+  {
+    title: "Integrações",
+    items: [
+      {
+        label: "BRByte / Controllr",
+        href: "/admin/integracoes/brbyte",
+        icon: Cable,
+      },
     ],
   },
   {

@@ -10,6 +10,41 @@ export type IndicadoPersonType = 'pf' | 'pj'
 
 export type ReferralContractType = 'tanto_livre' | 'tanto_vantagens'
 
+export type BrbyteSyncStatus =
+  | 'pending'
+  | 'created'
+  | 'waiting_conversion'
+  | 'waiting_contract'
+  | 'waiting_invoice'
+  | 'synced'
+  | 'completed'
+  | 'error'
+  | 'retry'
+
+const BRBYTE_SYNC_STATUS_VALUES = new Set<string>([
+  'pending',
+  'created',
+  'waiting_conversion',
+  'waiting_contract',
+  'waiting_invoice',
+  'synced',
+  'completed',
+  'error',
+  'retry',
+])
+
+export function isBrbyteSyncStatus(
+  value: string | null | undefined
+): value is BrbyteSyncStatus {
+  return typeof value === 'string' && BRBYTE_SYNC_STATUS_VALUES.has(value)
+}
+
+export function normalizeBrbyteSyncStatus(
+  value: string | null | undefined
+): BrbyteSyncStatus {
+  return isBrbyteSyncStatus(value) ? value : 'pending'
+}
+
 export interface Indicacao {
   id: string
   indicadorId: string
@@ -38,6 +73,13 @@ export interface Indicacao {
   brbyteInteressadoCreatedAt?: Date
   brbyteInteressadoLastSyncAt?: Date
   brbyteInteressadoPayload?: Record<string, unknown>
+  /** referrals.brbyte_sync_status */
+  brbyteSyncStatus?: BrbyteSyncStatus
+  brbyteSyncError?: string
+  brbyteSyncAttempts?: number
+  brbyteLastErrorAt?: Date
+  brbyteLastHttpStatus?: number
+  brbyteLastEndpoint?: string
   planoId: string
   plano?: Plano
   /** referrals.referral_contract_type */

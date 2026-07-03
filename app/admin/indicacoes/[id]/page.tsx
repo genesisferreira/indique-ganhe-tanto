@@ -48,6 +48,7 @@ import {
 import { ArrowLeft, Calendar, Mail, Phone, User } from "lucide-react"
 import { ReferralInterestedFields } from "@/components/referral/referral-interested-fields"
 import { ReferralRegistrationAcknowledgements } from "@/components/referral/referral-registration-acknowledgements"
+import { BrbyteCreateInterestCard } from "@/components/admin/brbyte-create-interest-card"
 import { getReferralContractTypeLabel } from "@/lib/referral-contract-type"
 
 const STATUS_OPTIONS: IndicacaoStatus[] = [
@@ -430,6 +431,17 @@ export default function AdminIndicacaoDetalhePage({
           </CardContent>
         </Card>
       </div>
+
+      {!isDataProviderMock() ? (
+        <BrbyteCreateInterestCard
+          referralId={id}
+          indicacao={indicacao}
+          canMutate={canMutate}
+          onCreated={() => {
+            void reloadReferral()
+          }}
+        />
+      ) : null}
 
       {role === "admin_consulta" ? (
         <p className="text-sm text-muted-foreground">Perfil somente leitura (admin consulta).</p>
