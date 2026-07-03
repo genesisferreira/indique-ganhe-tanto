@@ -88,6 +88,7 @@ export type BrbyteSyncRunStatus =
 export type BrbyteSyncRunPhase =
   | "login"
   | "create_interest"
+  | "convert_interest"
   | "find_interest"
   | "find_client"
   | "find_contract"
@@ -141,6 +142,8 @@ export const BRBYTE_API_PATHS = {
   createClientInterest: "/controllrctl/client_interest/create",
   /** Listagem administrativa de Interessados (fallback pós-criação). */
   listClientInterest: "/controllrctl/client_interest/list",
+  /** Conversão manual Interessado → Cliente. */
+  convertClientInterest: "/controllrctl/client_interest/convert",
 } as const
 
 export type BrbyteCreateInterestPayload = {
@@ -172,6 +175,18 @@ export type BrbyteCreateInterestResult = {
   syncRunId: string | null
   brbyteIdInteressado: string | null
   brbyteInteressadoStatus: string | null
+  message?: string
+  durationMs: number
+}
+
+export type BrbyteConvertInterestResult = {
+  ok: boolean
+  skipped?: boolean
+  reason?: string
+  referralId: string
+  syncRunId: string | null
+  brbyteClientPk: string | null
+  brbyteIdInteressado: string | null
   message?: string
   durationMs: number
 }

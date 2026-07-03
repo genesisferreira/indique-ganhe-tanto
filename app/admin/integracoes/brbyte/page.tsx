@@ -88,6 +88,7 @@ function buildEmptyDashboard(): DashboardPayload {
     referralsByStatus: {
       pending: 0,
       created: 0,
+      converted: 0,
       waiting_conversion: 0,
       waiting_contract: 0,
       waiting_invoice: 0,

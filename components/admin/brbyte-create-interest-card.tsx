@@ -45,6 +45,10 @@ type BrbyteMeta = {
 
   brbyteLastEndpoint: string | null
 
+  brbyteClientPk: string | null
+
+  brbyteClientSyncedAt: string | null
+
 }
 
 
@@ -80,6 +84,8 @@ export function BrbyteCreateInterestCard({
   const [loadingMeta, setLoadingMeta] = useState(false)
 
   const [creating, setCreating] = useState(false)
+
+  const [converting, setConverting] = useState(false)
 
 
 
@@ -125,6 +131,10 @@ export function BrbyteCreateInterestCard({
 
         brbyteLastEndpoint?: string | null
 
+        brbyteClientPk?: string | null
+
+        brbyteClientSyncedAt?: string | null
+
       }
 
       setMeta({
@@ -158,6 +168,10 @@ export function BrbyteCreateInterestCard({
             : null,
 
         brbyteLastEndpoint: data.brbyteLastEndpoint ?? null,
+
+        brbyteClientPk: data.brbyteClientPk ?? null,
+
+        brbyteClientSyncedAt: data.brbyteClientSyncedAt ?? null,
 
       })
 
@@ -217,6 +231,18 @@ export function BrbyteCreateInterestCard({
 
     null
 
+  const clientPk =
+
+    meta?.brbyteClientPk ?? indicacao.brbyteClientPk ?? null
+
+  const clientSyncedAt =
+
+    meta?.brbyteClientSyncedAt ??
+
+    indicacao.brbyteClientSyncedAt?.toISOString() ??
+
+    null
+
 
 
   if (!canMutate) return null
@@ -237,6 +263,80 @@ export function BrbyteCreateInterestCard({
 
   const retryLimitReached = syncStatus === "error" && syncAttempts >= 3
   const unconfirmedCreate = isUnconfirmedBrbyteCreateError(syncError)
+
+  const canConvert =
+    Boolean(meta?.enabled && meta?.configured) &&
+    Boolean(existingId) &&
+    syncStatus === "created" &&
+    !clientPk
+
+
+
+  const handleConvert = async () => {
+
+    setConverting(true)
+
+    try {
+
+      const res = await fetch("/api/admin/brbyte/convert-interest", {
+
+        method: "POST",
+
+        headers: { "Content-Type": "application/json" },
+
+        body: JSON.stringify({ referralId }),
+
+      })
+
+      const data = (await res.json()) as {
+
+        ok?: boolean
+
+        message?: string
+
+        brbyteClientPk?: string | null
+
+      }
+
+
+
+      if (!res.ok || !data.ok) {
+
+        toast.error(
+
+          data.message ??
+
+            "Não foi possível converter o Interessado em cliente no Controllr."
+
+        )
+
+        await loadMeta()
+
+        onCreated?.()
+
+        return
+
+      }
+
+
+
+      toast.success(data.message ?? "Interessado convertido em cliente no Controllr.")
+
+      await loadMeta()
+
+      onCreated?.()
+
+    } catch {
+
+      toast.error("Erro inesperado ao converter Interessado no Controllr.")
+
+    } finally {
+
+      setConverting(false)
+
+    }
+
+  }
 
 
 
@@ -450,6 +550,30 @@ export function BrbyteCreateInterestCard({
 
             ) : null}
 
+            {clientPk ? (
+
+              <p>
+
+                <span className="text-muted-foreground">ID Cliente:</span>{" "}
+
+                {clientPk}
+
+              </p>
+
+            ) : null}
+
+            {clientSyncedAt ? (
+
+              <p className="text-muted-foreground text-xs">
+
+                Cliente sincronizado em:{" "}
+
+                {new Date(clientSyncedAt).toLocaleString("pt-BR")}
+
+              </p>
+
+            ) : null}
+
           </div>
 
         ) : null}
@@ -517,6 +641,58 @@ export function BrbyteCreateInterestCard({
               ) : (
 
                 "Criar Interessado no Controllr"
+
+              )}
+
+            </Button>
+
+          </div>
+
+        ) : null}
+
+        {canConvert ? (
+
+          <div className="space-y-3 border-t border-border pt-3">
+
+            <p className="text-muted-foreground">
+
+              Converte o Interessado já criado em cliente no Controllr (ação
+
+              manual).
+
+            </p>
+
+            <Button
+
+              type="button"
+
+              variant="secondary"
+
+              className="w-full"
+
+              disabled={converting}
+
+              onClick={() => {
+
+                void handleConvert()
+
+              }}
+
+            >
+
+              {converting ? (
+
+                <>
+
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+
+                  Convertendo no Controllr…
+
+                </>
+
+              ) : (
+
+                "Converter em cliente no Controllr"
 
               )}
 

@@ -92,6 +92,8 @@ type ReferralRow = {
   brbyte_interessado_created_at?: string | null
   brbyte_interessado_last_sync_at?: string | null
   brbyte_interessado_payload?: Record<string, unknown> | null
+  brbyte_client_pk?: string | null
+  brbyte_client_synced_at?: string | null
   brbyte_sync_status?: string | null
   brbyte_sync_error?: string | null
   brbyte_sync_attempts?: number | null
@@ -263,6 +265,8 @@ function mapReferralInterestedFields(row: ReferralRow): Pick<
   | "brbyteInteressadoCreatedAt"
   | "brbyteInteressadoLastSyncAt"
   | "brbyteInteressadoPayload"
+  | "brbyteClientPk"
+  | "brbyteClientSyncedAt"
 > {
   const personType = row.referred_person_type?.trim()
   return {
@@ -290,6 +294,10 @@ function mapReferralInterestedFields(row: ReferralRow): Pick<
       ? new Date(row.brbyte_interessado_last_sync_at)
       : undefined,
     brbyteInteressadoPayload: row.brbyte_interessado_payload ?? undefined,
+    brbyteClientPk: row.brbyte_client_pk?.trim() || undefined,
+    brbyteClientSyncedAt: row.brbyte_client_synced_at
+      ? new Date(row.brbyte_client_synced_at)
+      : undefined,
   }
 }
 
@@ -4387,6 +4395,8 @@ const REFERRAL_INTERESTED_FIELDS_SELECT = `
         brbyte_interessado_created_at,
         brbyte_interessado_last_sync_at,
         brbyte_interessado_payload,
+        brbyte_client_pk,
+        brbyte_client_synced_at,
         brbyte_sync_status,
         brbyte_sync_error,
         brbyte_sync_attempts,

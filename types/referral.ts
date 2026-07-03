@@ -13,6 +13,7 @@ export type ReferralContractType = 'tanto_livre' | 'tanto_vantagens'
 export type BrbyteSyncStatus =
   | 'pending'
   | 'created'
+  | 'converted'
   | 'waiting_conversion'
   | 'waiting_contract'
   | 'waiting_invoice'
@@ -24,6 +25,7 @@ export type BrbyteSyncStatus =
 const BRBYTE_SYNC_STATUS_VALUES = new Set<string>([
   'pending',
   'created',
+  'converted',
   'waiting_conversion',
   'waiting_contract',
   'waiting_invoice',
@@ -73,6 +75,8 @@ export interface Indicacao {
   brbyteInteressadoCreatedAt?: Date
   brbyteInteressadoLastSyncAt?: Date
   brbyteInteressadoPayload?: Record<string, unknown>
+  brbyteClientPk?: string
+  brbyteClientSyncedAt?: Date
   /** referrals.brbyte_sync_status */
   brbyteSyncStatus?: BrbyteSyncStatus
   brbyteSyncError?: string

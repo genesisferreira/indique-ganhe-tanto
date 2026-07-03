@@ -3,6 +3,7 @@ import type { BrbyteSyncStatus } from "@/types/referral"
 export const BRBYTE_SYNC_STATUS_LABELS: Record<BrbyteSyncStatus, string> = {
   pending: "Pendente",
   created: "Interessado criado",
+  converted: "Convertido em cliente",
   waiting_conversion: "Aguardando conversão em cliente",
   waiting_contract: "Aguardando contrato",
   waiting_invoice: "Aguardando primeira mensalidade",

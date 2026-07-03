@@ -8,6 +8,7 @@ import { normalizeBrbyteSyncStatus } from "@/types/referral"
 const STATUS_KEYS: BrbyteSyncStatus[] = [
   "pending",
   "created",
+  "converted",
   "waiting_conversion",
   "waiting_contract",
   "waiting_invoice",

@@ -46,7 +46,9 @@ export async function GET(request: NextRequest) {
       brbyte_last_error_at,
       brbyte_last_http_status,
       brbyte_last_endpoint,
-      brbyte_last_sync_at
+      brbyte_last_sync_at,
+      brbyte_client_pk,
+      brbyte_client_synced_at
     `
     )
     .eq("id", referralId)
@@ -63,6 +65,8 @@ export async function GET(request: NextRequest) {
     brbyte_last_http_status?: number | null
     brbyte_last_endpoint?: string | null
     brbyte_last_sync_at?: string | null
+    brbyte_client_pk?: string | null
+    brbyte_client_synced_at?: string | null
   } | null
 
   return NextResponse.json({
@@ -76,6 +80,8 @@ export async function GET(request: NextRequest) {
       referralRow?.brbyte_interessado_last_sync_at ??
       referralRow?.brbyte_last_sync_at ??
       null,
+    brbyteClientPk: referralRow?.brbyte_client_pk ?? null,
+    brbyteClientSyncedAt: referralRow?.brbyte_client_synced_at ?? null,
     brbyteSyncStatus: normalizeBrbyteSyncStatus(referralRow?.brbyte_sync_status),
     brbyteSyncError: referralRow?.brbyte_sync_error ?? null,
     brbyteSyncAttempts:
