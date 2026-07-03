@@ -1,6 +1,15 @@
 import "server-only"
 
 import { buildBrbyteInterestedObservation } from "@/lib/brbyte/interested-observation"
+import {
+  BRBYTE_UNCONFIRMED_INTEREST_MESSAGE,
+  extractInterestResolution,
+  isCreateInterestResponseSuccessful,
+  isUnconfirmedBrbyteCreateError,
+  logCreateInterestResponseBody,
+  lookupClientInterestByDocument,
+  type BrbyteInterestResolution,
+} from "@/lib/brbyte/create-interest-response"
 import { truncateBrbyteField } from "@/lib/brbyte/truncate-field"
 import { brbyteAdminLogin, brbyteAdminPostForm } from "@/lib/brbyte/admin-http"
 import {
@@ -53,6 +62,7 @@ type ReferralCreateInterestRow = {
   brbyte_id_interessado: string | null
   brbyte_interessado_status: string | null
   brbyte_sync_status: string | null
+  brbyte_sync_error: string | null
   brbyte_sync_attempts: number | null
   plan_id: string
   plans:
@@ -123,57 +133,14 @@ function indicatorNameFromRow(row: ReferralCreateInterestRow): string | null {
   return profile?.full_name?.trim() || null
 }
 
-function extractInterestId(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") return null
-
-  const roots: Record<string, unknown>[] = [payload as Record<string, unknown>]
-  const data = (payload as Record<string, unknown>).data
-  if (data && typeof data === "object") {
-    roots.push(data as Record<string, unknown>)
+function requestFallbackFromForm(form: Record<string, string>): {
+  leadPk: string | null
+  planPk: string | null
+} {
+  return {
+    leadPk: form.lead_pk?.trim() || null,
+    planPk: form.plan_pk?.trim() || null,
   }
-
-  const keys = [
-    "interest_pk",
-    "client_interest_pk",
-    "id_interessado",
-    "idInteressado",
-    "brbyte_id_interessado",
-    "id",
-  ]
-
-  for (const obj of roots) {
-    for (const key of keys) {
-      const value = obj[key]
-      if (value !== undefined && value !== null && String(value).trim()) {
-        return String(value).trim()
-      }
-    }
-  }
-
-  return null
-}
-
-function extractInterestStatus(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") return null
-  const obj = payload as Record<string, unknown>
-  const data =
-    obj.data && typeof obj.data === "object"
-      ? (obj.data as Record<string, unknown>)
-      : obj
-  const value =
-    data.interest_status ??
-    data.status ??
-    data.nomenclatura_status ??
-    data.nomenclaturaEstado
-  return value !== undefined && value !== null ? String(value) : null
-}
-
-function isApiSuccess(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object") return false
-  const obj = payload as Record<string, unknown>
-  if (obj.success === false || obj.error === true) return false
-  if (obj.success === true) return true
-  return extractInterestId(payload) !== null
 }
 
 async function createSyncRun(
@@ -283,6 +250,7 @@ async function loadReferralForCreateInterest(
       brbyte_id_interessado,
       brbyte_interessado_status,
       brbyte_sync_status,
+      brbyte_sync_error,
       brbyte_sync_attempts,
       plan_id,
       plans:plan_id ( name, speed_label ),
@@ -369,6 +337,9 @@ function buildCreateInterestForm(
 
 function validateReferralForCreate(row: ReferralCreateInterestRow): string | null {
   const syncStatus = normalizeBrbyteSyncStatus(row.brbyte_sync_status)
+  if (isUnconfirmedBrbyteCreateError(row.brbyte_sync_error)) {
+    return BRBYTE_UNCONFIRMED_INTEREST_MESSAGE
+  }
   if (row.brbyte_id_interessado?.trim() && syncStatus !== "error") {
     return "Esta indicação já possui Interessado vinculado no Controllr."
   }
@@ -432,6 +403,9 @@ async function persistReferralInterestLink(
   patch: {
     brbyteIdInteressado: string
     brbyteInteressadoStatus: string | null
+    clientPk?: string | null
+    leadPk?: string | null
+    planPk?: string | null
     payload: Record<string, unknown>
     createdAtIso: string
     httpStatus: number | null
@@ -439,22 +413,28 @@ async function persistReferralInterestLink(
 ): Promise<boolean> {
   const nextAttempts = currentAttempts + 1
 
+  const update: Record<string, unknown> = {
+    brbyte_id_interessado: patch.brbyteIdInteressado,
+    brbyte_interessado_status: patch.brbyteInteressadoStatus,
+    brbyte_interessado_created_at: patch.createdAtIso,
+    brbyte_interessado_last_sync_at: patch.createdAtIso,
+    brbyte_interessado_payload: patch.payload,
+    brbyte_sync_status: "created",
+    brbyte_sync_error: null,
+    brbyte_sync_attempts: nextAttempts,
+    brbyte_last_sync_at: patch.createdAtIso,
+    brbyte_last_error_at: null,
+    brbyte_last_http_status: patch.httpStatus,
+    brbyte_last_endpoint: BRBYTE_API_PATHS.createClientInterest,
+  }
+
+  if (patch.clientPk?.trim()) {
+    update.brbyte_id_cliente = patch.clientPk.trim()
+  }
+
   const { error } = await getDb()
     .from("referrals")
-    .update({
-      brbyte_id_interessado: patch.brbyteIdInteressado,
-      brbyte_interessado_status: patch.brbyteInteressadoStatus,
-      brbyte_interessado_created_at: patch.createdAtIso,
-      brbyte_interessado_last_sync_at: patch.createdAtIso,
-      brbyte_interessado_payload: patch.payload,
-      brbyte_sync_status: "created",
-      brbyte_sync_error: null,
-      brbyte_sync_attempts: nextAttempts,
-      brbyte_last_sync_at: patch.createdAtIso,
-      brbyte_last_error_at: null,
-      brbyte_last_http_status: patch.httpStatus,
-      brbyte_last_endpoint: BRBYTE_API_PATHS.createClientInterest,
-    })
+    .update(update)
     .eq("id", referralId)
 
   if (error) {
@@ -462,6 +442,64 @@ async function persistReferralInterestLink(
     return false
   }
   return true
+}
+
+async function persistUnconfirmedReferralInterest(
+  referralId: string,
+  currentAttempts: number,
+  patch: {
+    payload: Record<string, unknown>
+    httpStatus: number | null
+    request: Record<string, string>
+  }
+): Promise<boolean> {
+  const { error } = await getDb()
+    .from("referrals")
+    .update({
+      brbyte_sync_status: "error",
+      brbyte_sync_error: BRBYTE_UNCONFIRMED_INTEREST_MESSAGE,
+      brbyte_sync_attempts: currentAttempts,
+      brbyte_last_endpoint: BRBYTE_API_PATHS.createClientInterest,
+      brbyte_last_http_status: patch.httpStatus,
+      brbyte_last_error_at: new Date().toISOString(),
+      brbyte_interessado_payload: {
+        unconfirmed_create: true,
+        response: patch.payload,
+        request: patch.request,
+      },
+    })
+    .eq("id", referralId)
+
+  if (error) {
+    console.error(LOG_TAG, {
+      step: "persist_unconfirmed",
+      message: error.message,
+    })
+    return false
+  }
+  return true
+}
+
+function buildInterestPayload(input: {
+  resolution: BrbyteInterestResolution
+  planPkSource: string
+  syncRunId: string | null
+  request: Record<string, string>
+  response: Record<string, unknown>
+}): Record<string, unknown> {
+  return {
+    action: "create_interest",
+    endpoint: BRBYTE_API_PATHS.createClientInterest,
+    interest_pk: input.resolution.interestPk,
+    client_pk: input.resolution.clientPk,
+    lead_pk: input.resolution.leadPk,
+    plan_pk: input.resolution.planPk,
+    resolution_source: input.resolution.source,
+    plan_pk_source: input.planPkSource,
+    request: input.request,
+    response: input.response,
+    sync_run_id: input.syncRunId,
+  }
 }
 
 function syncRunAuditMeta(input: {
@@ -702,7 +740,12 @@ export async function createBrbyteInterestFromReferral(input: {
       ? (apiResult.json as Record<string, unknown>)
       : { raw: apiResult.json }
 
-  if (!apiResult.ok || !isApiSuccess(apiResult.json)) {
+  logCreateInterestResponseBody(apiResult.status, apiResult.json)
+
+  if (
+    !apiResult.ok ||
+    !isCreateInterestResponseSuccessful(apiResult.json, apiResult.status)
+  ) {
     const message =
       (typeof payload.message === "string" && payload.message) ||
       apiResult.message ||
@@ -760,17 +803,28 @@ export async function createBrbyteInterestFromReferral(input: {
     }
   }
 
-  const brbyteId = extractInterestId(apiResult.json) ?? extractInterestId(payload)
-  if (!brbyteId) {
-    const message =
-      "BRByte respondeu sem ID do Interessado. Verifique logs em brbyte_sync_runs."
+  const requestFallback = requestFallbackFromForm(form)
+  let resolution = extractInterestResolution(apiResult.json, requestFallback)
 
-    await persistReferralSyncState(referralId, currentAttempts, {
-      brbyteSyncStatus: "error",
-      brbyteSyncError: message,
-      brbyteLastEndpoint: BRBYTE_API_PATHS.createClientInterest,
-      brbyteLastHttpStatus: apiResult.status,
-      brbyteLastErrorAt: new Date().toISOString(),
+  if (!resolution.interestPk) {
+    const lookup = await lookupClientInterestByDocument({
+      config,
+      cookie: login.cookie,
+      interestDoc1: form.interest_doc1,
+      requestFallback,
+    })
+    if (lookup?.interestPk) {
+      resolution = lookup
+    }
+  }
+
+  if (!resolution.interestPk) {
+    const message = BRBYTE_UNCONFIRMED_INTEREST_MESSAGE
+
+    await persistUnconfirmedReferralInterest(referralId, currentAttempts, {
+      payload,
+      httpStatus: apiResult.status,
+      request: form,
     })
     await logBrbyteReferralHistory({
       referralId,
@@ -780,7 +834,10 @@ export async function createBrbyteInterestFromReferral(input: {
       endpoint: BRBYTE_API_PATHS.createClientInterest,
       httpStatus: apiResult.status,
       message,
-      payload: { response: payload },
+      payload: {
+        unconfirmed_create: true,
+        response: payload,
+      },
       createdBy: input.actorUserId ?? null,
     })
 
@@ -795,6 +852,7 @@ export async function createBrbyteInterestFromReferral(input: {
         message,
         response: payload,
         http_status: apiResult.status,
+        unconfirmed_create: true,
       },
       meta: syncRunAuditMeta({
         referralId,
@@ -817,21 +875,24 @@ export async function createBrbyteInterestFromReferral(input: {
     }
   }
 
+  const brbyteId = resolution.interestPk
   const brbyteStatus =
-    extractInterestStatus(apiResult.json) ?? config.defaultInterestStatus
+    resolution.interestStatus ?? config.defaultInterestStatus
   const nowIso = new Date().toISOString()
 
   const persisted = await persistReferralInterestLink(referralId, currentAttempts, {
     brbyteIdInteressado: brbyteId,
     brbyteInteressadoStatus: brbyteStatus,
-    payload: {
-      action: "create_interest",
-      endpoint: BRBYTE_API_PATHS.createClientInterest,
-      plan_pk_source: planResolution.source,
+    clientPk: resolution.clientPk,
+    leadPk: resolution.leadPk,
+    planPk: resolution.planPk,
+    payload: buildInterestPayload({
+      resolution,
+      planPkSource: planResolution.source,
+      syncRunId,
       request: form,
       response: payload,
-      sync_run_id: syncRunId,
-    },
+    }),
     createdAtIso: nowIso,
     httpStatus: apiResult.status,
   })
@@ -916,6 +977,7 @@ export async function createBrbyteInterestFromReferral(input: {
     step: "created",
     referralId,
     brbyteIdInteressado: brbyteId,
+    resolutionSource: resolution.source,
     syncRunId,
     planPkSource: planResolution.source,
   })

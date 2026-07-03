@@ -139,6 +139,8 @@ export const BRBYTE_API_PATHS = {
   cobrancaList: "/api/cobranca/cliente",
   /** Área administrativa — criação manual de Interessado (sem captcha do Hotsite). */
   createClientInterest: "/controllrctl/client_interest/create",
+  /** Listagem administrativa de Interessados (fallback pós-criação). */
+  listClientInterest: "/controllrctl/client_interest/list",
 } as const
 
 export type BrbyteCreateInterestPayload = {

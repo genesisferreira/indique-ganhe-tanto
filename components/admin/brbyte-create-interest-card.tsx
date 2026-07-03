@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 import { getBrbyteSyncStatusLabel } from "@/lib/brbyte/sync-status-labels"
+import { isUnconfirmedBrbyteCreateError } from "@/lib/brbyte/create-interest-messages"
 
 import { Loader2, PlugZap } from "lucide-react"
 
@@ -231,9 +232,11 @@ export function BrbyteCreateInterestCard({
   const canCreate =
     Boolean(meta?.enabled && meta?.configured) &&
     (!existingId || syncStatus === "error") &&
-    !(syncStatus === "error" && syncAttempts >= 3)
+    !(syncStatus === "error" && syncAttempts >= 3) &&
+    !isUnconfirmedBrbyteCreateError(syncError)
 
   const retryLimitReached = syncStatus === "error" && syncAttempts >= 3
+  const unconfirmedCreate = isUnconfirmedBrbyteCreateError(syncError)
 
 
 
@@ -457,6 +460,13 @@ export function BrbyteCreateInterestCard({
           <p className="text-amber-600 dark:text-amber-500 border-t border-border pt-3">
             Limite de tentativas atingido. Revise as credenciais, plano ou dados
             do indicado.
+          </p>
+        ) : null}
+
+        {unconfirmedCreate ? (
+          <p className="text-amber-600 dark:text-amber-500 border-t border-border pt-3">
+            A criação pode ter ocorrido no Controllr, mas o CRM não confirmou o ID.
+            Verifique manualmente no ERP antes de tentar novamente.
           </p>
         ) : null}
 
