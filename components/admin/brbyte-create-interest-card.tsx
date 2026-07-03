@@ -85,7 +85,7 @@ export function BrbyteCreateInterestCard({
 
   const [creating, setCreating] = useState(false)
 
-  const [converting, setConverting] = useState(false)
+  const [checkingConversion, setCheckingConversion] = useState(false)
 
 
 
@@ -264,78 +264,55 @@ export function BrbyteCreateInterestCard({
   const retryLimitReached = syncStatus === "error" && syncAttempts >= 3
   const unconfirmedCreate = isUnconfirmedBrbyteCreateError(syncError)
 
-  const canConvert =
+  const canCheckConversion =
     Boolean(meta?.enabled && meta?.configured) &&
     Boolean(existingId) &&
     syncStatus === "created" &&
     !clientPk
 
-
-
-  const handleConvert = async () => {
-
-    setConverting(true)
-
+  const handleCheckConversion = async () => {
+    setCheckingConversion(true)
     try {
-
-      const res = await fetch("/api/admin/brbyte/convert-interest", {
-
+      const res = await fetch("/api/admin/brbyte/check-conversion", {
         method: "POST",
-
         headers: { "Content-Type": "application/json" },
-
         body: JSON.stringify({ referralId }),
-
       })
 
       const data = (await res.json()) as {
-
         ok?: boolean
-
+        converted?: boolean
         message?: string
-
         brbyteClientPk?: string | null
-
       }
 
-
-
-      if (!res.ok || !data.ok) {
-
+      if (!res.ok || data.ok === false) {
         toast.error(
-
           data.message ??
-
-            "Não foi possível converter o Interessado em cliente no Controllr."
-
+            "Não foi possível verificar o status do Interessado no Controllr."
         )
-
         await loadMeta()
-
         onCreated?.()
-
         return
-
       }
 
-
-
-      toast.success(data.message ?? "Interessado convertido em cliente no Controllr.")
+      if (data.converted) {
+        toast.success(
+          data.message ?? "Interessado convertido em cliente no Controllr."
+        )
+      } else {
+        toast.message(
+          data.message ?? "Ainda não convertido no Controllr."
+        )
+      }
 
       await loadMeta()
-
       onCreated?.()
-
     } catch {
-
-      toast.error("Erro inesperado ao converter Interessado no Controllr.")
-
+      toast.error("Erro inesperado ao verificar status no Controllr.")
     } finally {
-
-      setConverting(false)
-
+      setCheckingConversion(false)
     }
-
   }
 
 
@@ -650,15 +627,15 @@ export function BrbyteCreateInterestCard({
 
         ) : null}
 
-        {canConvert ? (
+        {canCheckConversion ? (
 
           <div className="space-y-3 border-t border-border pt-3">
 
             <p className="text-muted-foreground">
 
-              Converte o Interessado já criado em cliente no Controllr (ação
+              Consulta no Controllr se o comercial já converteu o Interessado em
 
-              manual).
+              cliente (ação manual no ERP).
 
             </p>
 
@@ -670,29 +647,29 @@ export function BrbyteCreateInterestCard({
 
               className="w-full"
 
-              disabled={converting}
+              disabled={checkingConversion}
 
               onClick={() => {
 
-                void handleConvert()
+                void handleCheckConversion()
 
               }}
 
             >
 
-              {converting ? (
+              {checkingConversion ? (
 
                 <>
 
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
 
-                  Convertendo no Controllr…
+                  Verificando no Controllr…
 
                 </>
 
               ) : (
 
-                "Converter em cliente no Controllr"
+                "Verificar status no Controllr"
 
               )}
 

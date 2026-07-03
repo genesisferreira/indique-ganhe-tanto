@@ -88,7 +88,7 @@ export type BrbyteSyncRunStatus =
 export type BrbyteSyncRunPhase =
   | "login"
   | "create_interest"
-  | "convert_interest"
+  | "check_conversion"
   | "find_interest"
   | "find_client"
   | "find_contract"
@@ -140,10 +140,8 @@ export const BRBYTE_API_PATHS = {
   cobrancaList: "/api/cobranca/cliente",
   /** Área administrativa — criação manual de Interessado (sem captcha do Hotsite). */
   createClientInterest: "/controllrctl/client_interest/create",
-  /** Listagem administrativa de Interessados (fallback pós-criação). */
+  /** Listagem administrativa de Interessados (consulta de status/conversão). */
   listClientInterest: "/controllrctl/client_interest/list",
-  /** Conversão manual Interessado → Cliente. */
-  convertClientInterest: "/controllrctl/client_interest/convert",
 } as const
 
 export type BrbyteCreateInterestPayload = {
@@ -179,8 +177,9 @@ export type BrbyteCreateInterestResult = {
   durationMs: number
 }
 
-export type BrbyteConvertInterestResult = {
+export type BrbyteCheckConversionResult = {
   ok: boolean
+  converted: boolean
   skipped?: boolean
   reason?: string
   referralId: string
