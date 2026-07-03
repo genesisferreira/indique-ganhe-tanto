@@ -1,6 +1,7 @@
 import "server-only"
 
 import { buildBrbyteInterestedObservation } from "@/lib/brbyte/interested-observation"
+import { truncateBrbyteField } from "@/lib/brbyte/truncate-field"
 import { brbyteAdminLogin, brbyteAdminPostForm } from "@/lib/brbyte/admin-http"
 import {
   getBrbyteCreateInterestConfig,
@@ -58,6 +59,10 @@ type ReferralCreateInterestRow = {
     | { name: string; speed_label?: string | null }
     | { name: string; speed_label?: string | null }[]
     | null
+  indicator:
+    | { full_name: string | null }
+    | { full_name: string | null }[]
+    | null
 }
 
 type BrbyteLooseDb = {
@@ -109,6 +114,13 @@ function planFieldsFromRow(row: ReferralCreateInterestRow): {
     name: plan?.name?.trim() || null,
     code: plan?.speed_label?.trim() || null,
   }
+}
+
+function indicatorNameFromRow(row: ReferralCreateInterestRow): string | null {
+  const indicator = row.indicator
+  if (!indicator) return null
+  const profile = Array.isArray(indicator) ? indicator[0] : indicator
+  return profile?.full_name?.trim() || null
 }
 
 function extractInterestId(payload: unknown): string | null {
@@ -273,7 +285,8 @@ async function loadReferralForCreateInterest(
       brbyte_sync_status,
       brbyte_sync_attempts,
       plan_id,
-      plans:plan_id ( name, speed_label )
+      plans:plan_id ( name, speed_label ),
+      indicator:indicator_profile_id ( full_name )
     `
     )
     .eq("id", referralId)
@@ -298,8 +311,9 @@ function buildCreateInterestForm(
     : "tanto_vantagens"
   const { name: planoNome } = planFieldsFromRow(row)
 
-  const interestObs = buildBrbyteInterestedObservation({
+  const interestObsBuild = buildBrbyteInterestedObservation({
     erpLeadSource: row.erp_lead_source,
+    indicadorNome: indicatorNameFromRow(row),
     tipoContratacao: contractType,
     planoNome,
     tipoRecompensa: row.reward_type,
@@ -315,6 +329,19 @@ function buildCreateInterestForm(
     installationFeeAwareness: row.installation_fee_awareness,
     contractTypeAwareness: row.contract_type_awareness,
   })
+  const interestObsResult = truncateBrbyteField(interestObsBuild.value)
+  if (interestObsBuild.truncated || interestObsResult.truncated) {
+    console.warn(LOG_TAG, {
+      step: "interest_obs_truncated",
+      originalLength: Math.max(
+        interestObsBuild.originalLength,
+        interestObsResult.originalLength
+      ),
+      finalLength: interestObsResult.value.length,
+      maxLength: 255,
+    })
+  }
+  const interestObs = interestObsResult.value
 
   const personType = row.referred_person_type?.trim() === "pj" ? "1" : "0"
 
