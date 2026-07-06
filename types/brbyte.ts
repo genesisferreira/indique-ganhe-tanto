@@ -89,6 +89,7 @@ export type BrbyteSyncRunPhase =
   | "login"
   | "create_interest"
   | "check_conversion"
+  | "check_first_invoice"
   | "find_interest"
   | "find_client"
   | "find_contract"
@@ -142,6 +143,10 @@ export const BRBYTE_API_PATHS = {
   createClientInterest: "/controllrctl/client_interest/create",
   /** Listagem administrativa de Interessados (consulta de status/conversão). */
   listClientInterest: "/controllrctl/client_interest/list",
+  /** Faturas do contrato no Controllr. */
+  invoiceList: "/invoice_ctl/invoice/list",
+  /** Detalhes da fatura no Controllr. */
+  invoiceListInfo: "/invoice_ctl/invoice/list_info",
 } as const
 
 export type BrbyteCreateInterestPayload = {
@@ -186,6 +191,39 @@ export type BrbyteCheckConversionResult = {
   syncRunId: string | null
   brbyteClientPk: string | null
   brbyteIdInteressado: string | null
+  message?: string
+  durationMs: number
+}
+
+export type BrbyteInvoiceListRow = {
+  invoicePk: string | null
+  contractPk: string | null
+  invoiceDueDate: string | null
+  invoiceDate: string | null
+  invoicePeriod: string | null
+  invoiceDeleted: boolean
+  raw: Record<string, unknown>
+}
+
+export type BrbyteInvoiceInfo = {
+  invoicePk: string | null
+  invoiceMsg: string | null
+  invoiceDateCredit: string | null
+  isPaid: boolean
+  raw: Record<string, unknown> | null
+}
+
+export type BrbyteCheckFirstInvoiceResult = {
+  ok: boolean
+  paid: boolean
+  skipped?: boolean
+  reason?: string
+  idempotent?: boolean
+  referralId: string
+  syncRunId: string | null
+  contractPk: string | null
+  invoicePk: string | null
+  brbyteClientPk: string | null
   message?: string
   durationMs: number
 }

@@ -18,6 +18,7 @@ export type BrbyteSyncStatus =
   | 'waiting_contract'
   | 'waiting_invoice'
   | 'synced'
+  | 'paid_confirmed'
   | 'completed'
   | 'error'
   | 'retry'
@@ -30,6 +31,7 @@ const BRBYTE_SYNC_STATUS_VALUES = new Set<string>([
   'waiting_contract',
   'waiting_invoice',
   'synced',
+  'paid_confirmed',
   'completed',
   'error',
   'retry',
@@ -77,6 +79,9 @@ export interface Indicacao {
   brbyteInteressadoPayload?: Record<string, unknown>
   brbyteClientPk?: string
   brbyteClientSyncedAt?: Date
+  brbyteContractPk?: string
+  brbyteFirstInvoicePk?: string
+  brbyteFirstInvoicePaidAt?: Date
   /** referrals.brbyte_sync_status */
   brbyteSyncStatus?: BrbyteSyncStatus
   brbyteSyncError?: string

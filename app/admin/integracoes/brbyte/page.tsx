@@ -59,6 +59,10 @@ type DashboardPayload = {
     errors: number
   }
   referralsByStatus: Record<BrbyteSyncStatus, number>
+  firstInvoice: {
+    waiting: number
+    paidOrCompleted: number
+  }
 }
 
 type DashboardApiResponse = {
@@ -93,9 +97,14 @@ function buildEmptyDashboard(): DashboardPayload {
       waiting_contract: 0,
       waiting_invoice: 0,
       synced: 0,
+      paid_confirmed: 0,
       completed: 0,
       error: 0,
       retry: 0,
+    },
+    firstInvoice: {
+      waiting: 0,
+      paidOrCompleted: 0,
     },
   }
 }
@@ -465,6 +474,28 @@ export default function AdminBrbyteIntegracaoPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Primeira mensalidade</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs text-muted-foreground">
+                Aguardando 1ª mensalidade
+              </p>
+              <p className="text-2xl font-bold">
+                {dashboard.firstInvoice?.waiting ?? 0}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs text-muted-foreground">Pago / concluído</p>
+              <p className="text-2xl font-bold text-emerald-600">
+                {dashboard.firstInvoice?.paidOrCompleted ?? 0}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Totais</CardTitle>

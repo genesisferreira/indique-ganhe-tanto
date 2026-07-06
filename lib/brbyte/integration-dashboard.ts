@@ -13,6 +13,7 @@ const STATUS_KEYS: BrbyteSyncStatus[] = [
   "waiting_contract",
   "waiting_invoice",
   "synced",
+  "paid_confirmed",
   "completed",
   "error",
   "retry",
@@ -48,6 +49,10 @@ export type BrbyteIntegrationDashboard = {
     errors: number
   }
   referralsByStatus: Record<BrbyteSyncStatus, number>
+  firstInvoice: {
+    waiting: number
+    paidOrCompleted: number
+  }
 }
 
 function startOfTodayUtcIso(): string {
@@ -78,6 +83,10 @@ export function buildEmptyBrbyteIntegrationDashboard(): BrbyteIntegrationDashboa
       errors: 0,
     },
     referralsByStatus: emptyStatusCounts(),
+    firstInvoice: {
+      waiting: 0,
+      paidOrCompleted: 0,
+    },
   }
 }
 
@@ -122,7 +131,7 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
 
   const referralsStatusPromise = supabase
     .from("referrals")
-    .select("brbyte_sync_status")
+    .select("brbyte_sync_status, first_invoice_paid")
 
   const [
     { data: lastRunRow },
@@ -141,6 +150,8 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
   let todayAttempts = 0
   let todaySuccesses = 0
   let todayErrors = 0
+  let waitingFirstInvoice = 0
+  let paidOrCompleted = 0
 
   for (const row of todayRows ?? []) {
     if (row.phase !== "create_interest") continue
@@ -152,6 +163,25 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
   for (const row of referralRows ?? []) {
     const status = normalizeBrbyteSyncStatus(row.brbyte_sync_status)
     referralsByStatus[status] += 1
+
+    const firstInvoicePaid = Boolean(row.first_invoice_paid)
+    if (
+      !firstInvoicePaid &&
+      (status === "converted" ||
+        status === "waiting_invoice" ||
+        status === "waiting_contract")
+    ) {
+      waitingFirstInvoice += 1
+    }
+
+    if (
+      firstInvoicePaid ||
+      status === "synced" ||
+      status === "paid_confirmed" ||
+      status === "completed"
+    ) {
+      paidOrCompleted += 1
+    }
   }
 
   return {
@@ -191,5 +221,9 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
       errors: todayErrors,
     },
     referralsByStatus,
+    firstInvoice: {
+      waiting: waitingFirstInvoice,
+      paidOrCompleted,
+    },
   }
 }

@@ -8,6 +8,7 @@ export const BRBYTE_SYNC_STATUS_LABELS: Record<BrbyteSyncStatus, string> = {
   waiting_contract: "Aguardando contrato",
   waiting_invoice: "Aguardando primeira mensalidade",
   synced: "Sincronizado",
+  paid_confirmed: "Primeira mensalidade paga",
   completed: "Concluído",
   retry: "Nova tentativa pendente",
   error: "Erro",

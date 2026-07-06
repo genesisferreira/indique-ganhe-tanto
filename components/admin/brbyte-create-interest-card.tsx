@@ -49,6 +49,10 @@ type BrbyteMeta = {
 
   brbyteClientSyncedAt: string | null
 
+  brbyteContractPk: string | null
+
+  firstInvoicePaid: boolean
+
 }
 
 
@@ -86,6 +90,8 @@ export function BrbyteCreateInterestCard({
   const [creating, setCreating] = useState(false)
 
   const [checkingConversion, setCheckingConversion] = useState(false)
+
+  const [checkingFirstInvoice, setCheckingFirstInvoice] = useState(false)
 
 
 
@@ -135,6 +141,10 @@ export function BrbyteCreateInterestCard({
 
         brbyteClientSyncedAt?: string | null
 
+        brbyteContractPk?: string | null
+
+        firstInvoicePaid?: boolean
+
       }
 
       setMeta({
@@ -172,6 +182,10 @@ export function BrbyteCreateInterestCard({
         brbyteClientPk: data.brbyteClientPk ?? null,
 
         brbyteClientSyncedAt: data.brbyteClientSyncedAt ?? null,
+
+        brbyteContractPk: data.brbyteContractPk ?? null,
+
+        firstInvoicePaid: Boolean(data.firstInvoicePaid),
 
       })
 
@@ -243,6 +257,14 @@ export function BrbyteCreateInterestCard({
 
     null
 
+  const contractPk =
+
+    meta?.brbyteContractPk ?? indicacao.brbyteContractPk ?? null
+
+  const firstInvoicePaid =
+
+    meta?.firstInvoicePaid ?? indicacao.primeiraFaturaPaga ?? false
+
 
 
   if (!canMutate) return null
@@ -269,6 +291,14 @@ export function BrbyteCreateInterestCard({
     Boolean(existingId) &&
     syncStatus === "created" &&
     !clientPk
+
+  const canCheckFirstInvoice =
+    Boolean(meta?.enabled && meta?.configured) &&
+    Boolean(clientPk) &&
+    (syncStatus === "converted" ||
+      syncStatus === "waiting_invoice" ||
+      syncStatus === "waiting_contract") &&
+    !firstInvoicePaid
 
   const handleCheckConversion = async () => {
     setCheckingConversion(true)
@@ -312,6 +342,53 @@ export function BrbyteCreateInterestCard({
       toast.error("Erro inesperado ao verificar status no Controllr.")
     } finally {
       setCheckingConversion(false)
+    }
+  }
+
+  const handleCheckFirstInvoice = async () => {
+    setCheckingFirstInvoice(true)
+    try {
+      const res = await fetch("/api/admin/brbyte/check-first-invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referralId }),
+      })
+
+      const data = (await res.json()) as {
+        ok?: boolean
+        paid?: boolean
+        idempotent?: boolean
+        message?: string
+      }
+
+      if (!res.ok || data.ok === false) {
+        toast.error(
+          data.message ??
+            "Não foi possível verificar a primeira mensalidade no Controllr."
+        )
+        await loadMeta()
+        onCreated?.()
+        return
+      }
+
+      if (data.paid) {
+        toast.success(
+          data.message ??
+            "Primeira mensalidade paga — recompensa liberada no CRM."
+        )
+      } else {
+        toast.message(
+          data.message ??
+            "Primeira mensalidade ainda não consta como paga no Controllr."
+        )
+      }
+
+      await loadMeta()
+      onCreated?.()
+    } catch {
+      toast.error("Erro inesperado ao verificar primeira mensalidade.")
+    } finally {
+      setCheckingFirstInvoice(false)
     }
   }
 
@@ -551,6 +628,18 @@ export function BrbyteCreateInterestCard({
 
             ) : null}
 
+            {contractPk ? (
+
+              <p>
+
+                <span className="text-muted-foreground">ID Contrato:</span>{" "}
+
+                {contractPk}
+
+              </p>
+
+            ) : null}
+
           </div>
 
         ) : null}
@@ -670,6 +759,58 @@ export function BrbyteCreateInterestCard({
               ) : (
 
                 "Verificar status no Controllr"
+
+              )}
+
+            </Button>
+
+          </div>
+
+        ) : null}
+
+        {canCheckFirstInvoice ? (
+
+          <div className="space-y-3 border-t border-border pt-3">
+
+            <p className="text-muted-foreground">
+
+              Consulta no Controllr se a primeira mensalidade do contrato está
+
+              paga e libera a recompensa do indicador (sem converter no ERP).
+
+            </p>
+
+            <Button
+
+              type="button"
+
+              variant="secondary"
+
+              className="w-full"
+
+              disabled={checkingFirstInvoice}
+
+              onClick={() => {
+
+                void handleCheckFirstInvoice()
+
+              }}
+
+            >
+
+              {checkingFirstInvoice ? (
+
+                <>
+
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+
+                  Verificando mensalidade…
+
+                </>
+
+              ) : (
+
+                "Verificar primeira mensalidade"
 
               )}
 

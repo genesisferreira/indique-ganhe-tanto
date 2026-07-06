@@ -9,6 +9,7 @@ const RESPONSE_LOG_TAG = "[brbyte:check-conversion:response-body]"
 
 export type BrbyteListInterestResolution = {
   clientPk: string | null
+  contractPk: string | null
   interestPk: string | null
   planPk: string | null
   addressPk: string | null
@@ -94,6 +95,7 @@ export function extractListInterestResolution(
   if (!row) {
     return {
       clientPk: null,
+      contractPk: null,
       interestPk: null,
       planPk: null,
       addressPk: null,
@@ -105,6 +107,10 @@ export function extractListInterestResolution(
 
   return {
     clientPk: readPkValue(row.client_pk),
+    contractPk:
+      readPkValue(row.contract_pk) ??
+      readPkValue(row.contractPk) ??
+      readPkValue(row.id_contrato),
     interestPk: readPkValue(row.interest_pk),
     planPk: readPkValue(row.plan_pk),
     addressPk: readPkValue(row.address_pk),
