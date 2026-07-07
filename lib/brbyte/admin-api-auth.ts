@@ -74,6 +74,7 @@ async function resolveAuthenticatedUser(
 
 export async function getAuthorizedBrbyteAdmin(options?: {
   requireMutation?: boolean
+  requireMaster?: boolean
   request?: NextRequest
 }): Promise<
   { userId: string; role: UserRole } | { error: NextResponse }
@@ -114,9 +115,11 @@ export async function getAuthorizedBrbyteAdmin(options?: {
   const role = ((profile as { role?: string } | null)?.role ??
     null) as UserRole | null
 
-  const allowed = options?.requireMutation
-    ? role && BRBYTE_ADMIN_MUTATION_ROLES.has(role)
-    : role && BRBYTE_ADMIN_READ_ROLES.has(role)
+  const allowed = options?.requireMaster
+    ? role === "admin_master"
+    : options?.requireMutation
+      ? role && BRBYTE_ADMIN_MUTATION_ROLES.has(role)
+      : role && BRBYTE_ADMIN_READ_ROLES.has(role)
 
   if (profileError || !allowed || !role) {
     if (isDev()) {
@@ -125,6 +128,7 @@ export async function getAuthorizedBrbyteAdmin(options?: {
         role,
         profileError: profileError?.message ?? null,
         requireMutation: Boolean(options?.requireMutation),
+        requireMaster: Boolean(options?.requireMaster),
       })
     }
     return {

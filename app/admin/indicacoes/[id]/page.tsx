@@ -437,6 +437,7 @@ export default function AdminIndicacaoDetalhePage({
           referralId={id}
           indicacao={indicacao}
           canMutate={canMutate}
+          isAdminMaster={role === "admin_master"}
           onCreated={() => {
             void reloadReferral()
           }}

@@ -90,6 +90,7 @@ export type BrbyteSyncRunPhase =
   | "create_interest"
   | "check_conversion"
   | "check_first_invoice"
+  | "reset_manual"
   | "find_interest"
   | "find_client"
   | "find_contract"

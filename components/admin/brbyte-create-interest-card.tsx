@@ -8,6 +8,18 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 import { getBrbyteSyncStatusLabel } from "@/lib/brbyte/sync-status-labels"
@@ -65,6 +77,8 @@ type BrbyteCreateInterestCardProps = {
 
   canMutate: boolean
 
+  isAdminMaster?: boolean
+
   onCreated?: () => void
 
 }
@@ -79,6 +93,8 @@ export function BrbyteCreateInterestCard({
 
   canMutate,
 
+  isAdminMaster = false,
+
   onCreated,
 
 }: BrbyteCreateInterestCardProps) {
@@ -92,6 +108,8 @@ export function BrbyteCreateInterestCard({
   const [checkingConversion, setCheckingConversion] = useState(false)
 
   const [checkingFirstInvoice, setCheckingFirstInvoice] = useState(false)
+
+  const [resetting, setResetting] = useState(false)
 
 
 
@@ -300,6 +318,12 @@ export function BrbyteCreateInterestCard({
       syncStatus === "waiting_contract") &&
     !firstInvoicePaid
 
+  const canResetBrbyte =
+    isAdminMaster &&
+    !firstInvoicePaid &&
+    syncStatus !== "paid_confirmed" &&
+    syncStatus !== "completed"
+
   const handleCheckConversion = async () => {
     setCheckingConversion(true)
     try {
@@ -389,6 +413,39 @@ export function BrbyteCreateInterestCard({
       toast.error("Erro inesperado ao verificar primeira mensalidade.")
     } finally {
       setCheckingFirstInvoice(false)
+    }
+  }
+
+  const handleResetBrbyte = async () => {
+    setResetting(true)
+    try {
+      const res = await fetch("/api/admin/brbyte/reset-referral", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referralId }),
+      })
+
+      const data = (await res.json()) as {
+        ok?: boolean
+        message?: string
+      }
+
+      if (!res.ok || data.ok === false) {
+        toast.error(
+          data.message ?? "Não foi possível resetar a integração BRByte."
+        )
+        return
+      }
+
+      toast.success(
+        data.message ?? "Integração BRByte resetada com sucesso."
+      )
+      await loadMeta()
+      onCreated?.()
+    } catch {
+      toast.error("Erro inesperado ao resetar integração BRByte.")
+    } finally {
+      setResetting(false)
     }
   }
 
@@ -818,6 +875,52 @@ export function BrbyteCreateInterestCard({
 
           </div>
 
+        ) : null}
+
+        {canResetBrbyte ? (
+          <div className="border-t border-border pt-3">
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs text-muted-foreground hover:text-destructive"
+                  disabled={resetting}
+                >
+                  {resetting ? (
+                    <>
+                      <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                      Resetando…
+                    </>
+                  ) : (
+                    "Resetar integração BRByte"
+                  )}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Resetar integração BRByte?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Isso limpa os vínculos BRByte desta indicação (interessado,
+                    cliente, contrato e faturas) para permitir um novo teste real.
+                    A indicação e o histórico geral não serão apagados. Recompensas
+                    já liberadas impedem este reset.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => {
+                      void handleResetBrbyte()
+                    }}
+                  >
+                    Confirmar reset
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
         ) : null}
 
       </CardContent>
