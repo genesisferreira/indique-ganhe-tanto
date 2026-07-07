@@ -3,11 +3,17 @@ import type { NextRequest } from "next/server"
 import { getAuthorizedBrbyteAdmin } from "@/lib/brbyte/admin-api-auth"
 import { createBrbyteInterestFromReferral } from "@/lib/brbyte/create-interest.service"
 import {
+  extractInvoiceFieldsFromPayload,
+  formatBrbyteFriendlyMessage,
+} from "@/lib/brbyte/observability"
+import {
   getBrbyteCreateInterestConfig,
   isBrbyteCreateInterestEnabled,
 } from "@/lib/brbyte/config"
 import { createClient } from "@/lib/supabase/server"
 import { normalizeBrbyteSyncStatus } from "@/types/referral"
+
+const RELEASED_REWARD_STATUSES = new Set(["disponivel", "solicitado", "pago"])
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -39,7 +45,9 @@ export async function GET(request: NextRequest) {
       `
       brbyte_id_interessado,
       brbyte_interessado_status,
+      brbyte_interessado_created_at,
       brbyte_interessado_last_sync_at,
+      brbyte_interessado_payload,
       brbyte_sync_status,
       brbyte_sync_error,
       brbyte_sync_attempts,
@@ -52,6 +60,7 @@ export async function GET(request: NextRequest) {
       brbyte_contract_pk,
       brbyte_first_invoice_pk,
       brbyte_first_invoice_paid_at,
+      brbyte_first_invoice_payload,
       first_invoice_paid
     `
     )
@@ -61,7 +70,9 @@ export async function GET(request: NextRequest) {
   const referralRow = row as {
     brbyte_id_interessado?: string | null
     brbyte_interessado_status?: string | null
+    brbyte_interessado_created_at?: string | null
     brbyte_interessado_last_sync_at?: string | null
+    brbyte_interessado_payload?: Record<string, unknown> | null
     brbyte_sync_status?: string | null
     brbyte_sync_error?: string | null
     brbyte_sync_attempts?: number | null
@@ -74,8 +85,45 @@ export async function GET(request: NextRequest) {
     brbyte_contract_pk?: string | null
     brbyte_first_invoice_pk?: string | null
     brbyte_first_invoice_paid_at?: string | null
+    brbyte_first_invoice_payload?: Record<string, unknown> | null
     first_invoice_paid?: boolean | null
   } | null
+
+  const { data: rewardRows } = await supabase
+    .from("rewards")
+    .select("id, status")
+    .eq("referral_id", referralId)
+    .order("created_at", { ascending: true })
+    .limit(1)
+
+  const primaryReward = (rewardRows ?? [])[0] as
+    | { id?: string; status?: string }
+    | undefined
+  const rewardId = primaryReward?.id ?? null
+  const rewardReleased = primaryReward
+    ? RELEASED_REWARD_STATUSES.has(String(primaryReward.status ?? ""))
+    : false
+
+  let walletTransactionId: string | null = null
+  if (rewardId) {
+    const { data: walletRows } = await supabase
+      .from("wallet_transactions")
+      .select("id")
+      .eq("reward_id", rewardId)
+      .eq("transaction_type", "credito")
+      .order("created_at", { ascending: false })
+      .limit(1)
+    walletTransactionId =
+      (walletRows?.[0] as { id?: string } | undefined)?.id ?? null
+  }
+
+  const invoicePayload =
+    referralRow?.brbyte_first_invoice_payload &&
+    typeof referralRow.brbyte_first_invoice_payload === "object"
+      ? referralRow.brbyte_first_invoice_payload
+      : null
+  const invoiceFields = extractInvoiceFieldsFromPayload(invoicePayload)
+  const syncStatus = normalizeBrbyteSyncStatus(referralRow?.brbyte_sync_status)
 
   return NextResponse.json({
     ok: true,
@@ -84,6 +132,7 @@ export async function GET(request: NextRequest) {
     referralId,
     brbyteIdInteressado: referralRow?.brbyte_id_interessado ?? null,
     brbyteInteressadoStatus: referralRow?.brbyte_interessado_status ?? null,
+    brbyteInteressadoCreatedAt: referralRow?.brbyte_interessado_created_at ?? null,
     brbyteInteressadoLastSyncAt:
       referralRow?.brbyte_interessado_last_sync_at ??
       referralRow?.brbyte_last_sync_at ??
@@ -93,9 +142,19 @@ export async function GET(request: NextRequest) {
     brbyteContractPk: referralRow?.brbyte_contract_pk ?? null,
     brbyteFirstInvoicePk: referralRow?.brbyte_first_invoice_pk ?? null,
     brbyteFirstInvoicePaidAt: referralRow?.brbyte_first_invoice_paid_at ?? null,
+    brbyteFirstInvoicePayload: invoicePayload,
+    invoiceMsg: invoiceFields.invoiceMsg,
+    invoiceDateCredit: invoiceFields.invoiceDateCredit,
     firstInvoicePaid: Boolean(referralRow?.first_invoice_paid),
-    brbyteSyncStatus: normalizeBrbyteSyncStatus(referralRow?.brbyte_sync_status),
-    brbyteSyncError: referralRow?.brbyte_sync_error ?? null,
+    rewardReleased,
+    rewardId,
+    walletTransactionId,
+    brbyteSyncStatus: syncStatus,
+    brbyteSyncError: formatBrbyteFriendlyMessage(referralRow?.brbyte_sync_error, {
+      syncStatus,
+      endpoint: referralRow?.brbyte_last_endpoint,
+    }),
+    brbyteSyncErrorRaw: referralRow?.brbyte_sync_error ?? null,
     brbyteSyncAttempts:
       typeof referralRow?.brbyte_sync_attempts === "number"
         ? referralRow.brbyte_sync_attempts
@@ -103,6 +162,7 @@ export async function GET(request: NextRequest) {
     brbyteLastErrorAt: referralRow?.brbyte_last_error_at ?? null,
     brbyteLastHttpStatus: referralRow?.brbyte_last_http_status ?? null,
     brbyteLastEndpoint: referralRow?.brbyte_last_endpoint ?? null,
+    brbyteLastSyncAt: referralRow?.brbyte_last_sync_at ?? null,
   })
 }
 

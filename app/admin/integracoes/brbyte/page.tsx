@@ -9,7 +9,10 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { getAuthProfileBasicsFromSupabase } from "@/lib/services"
-import { getBrbyteSyncStatusLabel } from "@/lib/brbyte/sync-status-labels"
+import {
+  BRBYTE_DASHBOARD_STATUS_ORDER,
+  BRBYTE_LEGACY_STATUS_ORDER,
+} from "@/lib/brbyte/observability"
 import type { BrbyteSyncStatus } from "@/types/referral"
 import type { UserRole } from "@/types/user"
 import {
@@ -35,10 +38,22 @@ type DashboardPayload = {
     id: string
     status: string
     phase: string | null
+    phaseLabel: string
+    referralId: string | null
     startedAt: string
     finishedAt: string | null
     durationMs: number | null
     errorsCount: number
+  } | null
+  lastActivity: {
+    referralId: string | null
+    phase: string | null
+    phaseLabel: string
+    httpStatus: number | null
+    message: string | null
+    endpoint: string | null
+    createdAt: string
+    isError: boolean
   } | null
   lastCreateInterest: {
     referralId: string
@@ -48,10 +63,13 @@ type DashboardPayload = {
   } | null
   lastError: {
     referralId: string | null
-    createdAt: string
+    phase: string | null
+    phaseLabel: string
+    httpStatus: number | null
     message: string | null
     endpoint: string | null
-    httpStatus: number | null
+    createdAt: string
+    isError: boolean
   } | null
   today: {
     attempts: number
@@ -59,9 +77,12 @@ type DashboardPayload = {
     errors: number
   }
   referralsByStatus: Record<BrbyteSyncStatus, number>
-  firstInvoice: {
-    waiting: number
-    paidOrCompleted: number
+  firstInvoicePipeline: {
+    awaitingContract: number
+    contractLocated: number
+    firstInvoiceLocated: number
+    firstInvoicePaid: number
+    rewardReleased: number
   }
 }
 
@@ -82,6 +103,7 @@ function buildEmptyDashboard(): DashboardPayload {
       isDemoEnvironment: false,
     },
     lastSyncRun: null,
+    lastActivity: null,
     lastCreateInterest: null,
     lastError: null,
     today: {
@@ -102,9 +124,12 @@ function buildEmptyDashboard(): DashboardPayload {
       error: 0,
       retry: 0,
     },
-    firstInvoice: {
-      waiting: 0,
-      paidOrCompleted: 0,
+    firstInvoicePipeline: {
+      awaitingContract: 0,
+      contractLocated: 0,
+      firstInvoiceLocated: 0,
+      firstInvoicePaid: 0,
+      rewardReleased: 0,
     },
   }
 }
@@ -258,13 +283,14 @@ export default function AdminBrbyteIntegracaoPage() {
           data.message ??
             "Sincronização automática desativada. Ative BRBYTE_SYNC_ENABLED para executar."
         )
+        await loadDashboard()
         return
       }
       if (!res.ok || !data.ok) {
         toast.error(data.error ?? data.message ?? "Falha na sincronização.")
         return
       }
-      toast.success("Sincronização executada.")
+      toast.success(data.message ?? "Sincronização executada com sucesso.")
       await loadDashboard()
     } catch {
       toast.error("Erro ao executar sincronização.")
@@ -287,6 +313,7 @@ export default function AdminBrbyteIntegracaoPage() {
   const flags = dashboard.flags
   const hasAnyHistory =
     Boolean(dashboard.lastSyncRun) ||
+    Boolean(dashboard.lastActivity) ||
     Boolean(dashboard.lastCreateInterest) ||
     Boolean(dashboard.lastError)
   const showEmptyMessage = !loading && !hasAnyHistory && !dashboardError
@@ -416,16 +443,63 @@ export default function AdminBrbyteIntegracaoPage() {
                 <p className="text-muted-foreground">
                   {dashboard.lastSyncRun.status} ·{" "}
                   {new Date(dashboard.lastSyncRun.startedAt).toLocaleString("pt-BR")}
-                  {dashboard.lastSyncRun.phase
-                    ? ` · fase ${dashboard.lastSyncRun.phase}`
-                    : ""}
                 </p>
+                <p className="text-muted-foreground">
+                  Fase: {dashboard.lastSyncRun.phaseLabel}
+                  {dashboard.lastSyncRun.referralId ? (
+                    <>
+                      {" "}
+                      · referral{" "}
+                      <Link
+                        href={`/admin/indicacoes/${dashboard.lastSyncRun.referralId}`}
+                        className="text-primary hover:underline"
+                      >
+                        {dashboard.lastSyncRun.referralId.slice(0, 8)}…
+                      </Link>
+                    </>
+                  ) : null}
+                </p>
+                {dashboard.lastSyncRun.errorsCount > 0 ? (
+                  <p className="text-destructive text-xs mt-1">
+                    {dashboard.lastSyncRun.errorsCount} erro(s) nesta execução
+                  </p>
+                ) : null}
               </div>
             ) : (
               <p className="text-muted-foreground">
                 Nenhuma execução registrada ainda.
               </p>
             )}
+
+            {dashboard.lastActivity ? (
+              <div className="rounded-lg border border-border p-3">
+                <p className="font-medium">Última atividade</p>
+                <p className="text-muted-foreground text-xs mt-1">
+                  {new Date(dashboard.lastActivity.createdAt).toLocaleString("pt-BR")}
+                  {dashboard.lastActivity.httpStatus !== null
+                    ? ` · HTTP ${dashboard.lastActivity.httpStatus}`
+                    : ""}
+                </p>
+                <p className="mt-1">{dashboard.lastActivity.phaseLabel}</p>
+                {dashboard.lastActivity.message ? (
+                  <p className="text-muted-foreground mt-1">
+                    {dashboard.lastActivity.message}
+                  </p>
+                ) : null}
+                {dashboard.lastActivity.referralId ? (
+                  <p className="text-xs mt-1">
+                    referral{" "}
+                    <Link
+                      href={`/admin/indicacoes/${dashboard.lastActivity.referralId}`}
+                      className="text-primary hover:underline"
+                    >
+                      {dashboard.lastActivity.referralId.slice(0, 8)}…
+                    </Link>
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             {dashboard.lastCreateInterest ? (
               <div>
                 <p className="font-medium">Última criação de interessado</p>
@@ -451,10 +525,12 @@ export default function AdminBrbyteIntegracaoPage() {
               <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
                 <p className="font-medium flex items-center gap-2 text-destructive">
                   <AlertTriangle className="h-4 w-4" />
-                  Último erro
+                  Último erro relevante
                 </p>
                 <p className="text-muted-foreground mt-1">
                   {new Date(dashboard.lastError.createdAt).toLocaleString("pt-BR")}
+                  {" · "}
+                  {dashboard.lastError.phaseLabel}
                 </p>
                 <p className="mt-1">{dashboard.lastError.message ?? "—"}</p>
                 {dashboard.lastError.endpoint ? (
@@ -465,9 +541,20 @@ export default function AdminBrbyteIntegracaoPage() {
                       : ""}
                   </p>
                 ) : null}
+                {dashboard.lastError.referralId ? (
+                  <p className="text-xs mt-1">
+                    referral{" "}
+                    <Link
+                      href={`/admin/indicacoes/${dashboard.lastError.referralId}`}
+                      className="text-primary hover:underline"
+                    >
+                      {dashboard.lastError.referralId.slice(0, 8)}…
+                    </Link>
+                  </p>
+                ) : null}
               </div>
             ) : (
-              <p className="text-muted-foreground">Nenhum erro recente registrado.</p>
+              <p className="text-muted-foreground">Nenhum erro recente relevante.</p>
             )}
           </CardContent>
         </Card>
@@ -478,19 +565,37 @@ export default function AdminBrbyteIntegracaoPage() {
           <CardHeader>
             <CardTitle className="text-base">Primeira mensalidade</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2">
+          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div className="rounded-lg border border-border p-3">
-              <p className="text-xs text-muted-foreground">
-                Aguardando 1ª mensalidade
-              </p>
+              <p className="text-xs text-muted-foreground">Aguardando contrato</p>
               <p className="text-2xl font-bold">
-                {dashboard.firstInvoice?.waiting ?? 0}
+                {dashboard.firstInvoicePipeline.awaitingContract}
               </p>
             </div>
             <div className="rounded-lg border border-border p-3">
-              <p className="text-xs text-muted-foreground">Pago / concluído</p>
+              <p className="text-xs text-muted-foreground">Contrato localizado</p>
+              <p className="text-2xl font-bold">
+                {dashboard.firstInvoicePipeline.contractLocated}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs text-muted-foreground">
+                Primeira fatura localizada
+              </p>
+              <p className="text-2xl font-bold">
+                {dashboard.firstInvoicePipeline.firstInvoiceLocated}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs text-muted-foreground">Primeira fatura paga</p>
               <p className="text-2xl font-bold text-emerald-600">
-                {dashboard.firstInvoice?.paidOrCompleted ?? 0}
+                {dashboard.firstInvoicePipeline.firstInvoicePaid}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs text-muted-foreground">Recompensa liberada</p>
+              <p className="text-2xl font-bold text-emerald-600">
+                {dashboard.firstInvoicePipeline.rewardReleased}
               </p>
             </div>
           </CardContent>
@@ -572,22 +677,39 @@ export default function AdminBrbyteIntegracaoPage() {
         <CardHeader>
           <CardTitle className="text-base">Indicações por status BRByte</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {(Object.keys(dashboard.referralsByStatus) as BrbyteSyncStatus[]).map(
-              (status) => (
+            {BRBYTE_DASHBOARD_STATUS_ORDER.map(({ key, label }) => (
+              <div
+                key={key}
+                className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
+              >
+                <span>{label}</span>
+                <span className="font-semibold">
+                  {dashboard.referralsByStatus[key]}
+                </span>
+              </div>
+            ))}
+          </div>
+          {BRBYTE_LEGACY_STATUS_ORDER.some(
+            ({ key }) => dashboard.referralsByStatus[key] > 0
+          ) ? (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 border-t border-border pt-4">
+              {BRBYTE_LEGACY_STATUS_ORDER.filter(
+                ({ key }) => dashboard.referralsByStatus[key] > 0
+              ).map(({ key, label }) => (
                 <div
-                  key={status}
-                  className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
+                  key={key}
+                  className="flex items-center justify-between rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground"
                 >
-                  <span>{getBrbyteSyncStatusLabel(status)}</span>
+                  <span>{label}</span>
                   <span className="font-semibold">
-                    {dashboard.referralsByStatus[status]}
+                    {dashboard.referralsByStatus[key]}
                   </span>
                 </div>
-              )
-            )}
-          </div>
+              ))}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
