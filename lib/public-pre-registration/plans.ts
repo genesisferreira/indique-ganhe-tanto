@@ -65,6 +65,7 @@ const PUBLIC_PLAN_SLOTS = [
       "1 giga",
       "1000 mega",
       "1000mega",
+      "mega 1000",
       "1000 mbps",
       "1000mb",
       "1gb",
@@ -105,10 +106,42 @@ export function matchesPublicPreRegistrationPlanSlot(
   )
 }
 
+/** Evita que um slot "roube" plano cujo nome pertence claramente a outro slot. */
+function rowNameMatchesSlotAliases(
+  name: string,
+  aliases: readonly string[]
+): boolean {
+  const n = normalizePlanName(name)
+  if (!n) return false
+  return aliases.some((alias) => n === alias || n.includes(alias))
+}
+
+function rowReservedForOtherSlot(
+  name: string,
+  speedLabel: string | null,
+  slotIndex: number
+): boolean {
+  for (let i = 0; i < PUBLIC_PLAN_SLOTS.length; i++) {
+    if (i === slotIndex) continue
+    if (
+      rowNameMatchesSlotAliases(name, PUBLIC_PLAN_SLOTS[i].aliases) &&
+      matchesPublicPreRegistrationPlanSlot(
+        name,
+        speedLabel,
+        PUBLIC_PLAN_SLOTS[i].aliases
+      )
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
 function findPlanRowForSlot(
   rows: PlanCatalogRow[],
   usedIds: Set<string>,
-  aliases: readonly string[]
+  aliases: readonly string[],
+  slotIndex: number
 ): PlanCatalogRow | null {
   const active = rows.filter(
     (row) => row.is_active && !usedIds.has(row.id)
@@ -122,6 +155,11 @@ function findPlanRowForSlot(
       const name = String(row.name ?? "").trim()
       const speedLabel =
         row.speed_label != null ? String(row.speed_label).trim() : null
+
+      if (rowReservedForOtherSlot(name, speedLabel, slotIndex)) {
+        continue
+      }
+
       if (matchesPublicPreRegistrationPlanSlot(name, speedLabel, aliases)) {
         return row
       }
@@ -142,16 +180,25 @@ export async function loadPublicPreRegistrationPlans(): Promise<
     .select("id, name, speed_label, is_active")
     .order("sort_order", { ascending: true })
 
+  const plans = data ?? []
+  console.log("ALL PLANS", plans)
+
   if (error || !data) return []
 
   const config = getBrbyteCreateInterestConfigForIntegration()
   const options: PublicPreRegistrationPlanOption[] = []
   const usedIds = new Set<string>()
+  const matchedPlans: Array<{
+    slot: string
+    row: PlanCatalogRow
+  }> = []
 
-  for (const slot of PUBLIC_PLAN_SLOTS) {
-    const row = findPlanRowForSlot(data, usedIds, slot.aliases)
+  for (let slotIndex = 0; slotIndex < PUBLIC_PLAN_SLOTS.length; slotIndex++) {
+    const slot = PUBLIC_PLAN_SLOTS[slotIndex]
+    const row = findPlanRowForSlot(data, usedIds, slot.aliases, slotIndex)
     if (!row) continue
 
+    matchedPlans.push({ slot: slot.displayName, row })
     usedIds.add(row.id)
     const speedLabel =
       row.speed_label != null ? String(row.speed_label).trim() : null
@@ -172,6 +219,16 @@ export async function loadPublicPreRegistrationPlans(): Promise<
       brbyteMapped: resolution.ok,
     })
   }
+
+  console.log("MATCHED PUBLIC PLANS", matchedPlans)
+
+  const responsePlans = options.map((p) => ({
+    id: p.id,
+    name: p.name,
+    speedLabel: p.speedLabel,
+    brbyteMapped: p.brbyteMapped,
+  }))
+  console.log("FINAL RESPONSE", responsePlans)
 
   return options
 }
