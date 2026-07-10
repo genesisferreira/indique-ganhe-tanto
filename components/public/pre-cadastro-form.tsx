@@ -96,6 +96,31 @@ export function PreCadastroForm() {
   })
 
   const [utm, setUtm] = useState<Record<string, string | null>>({})
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  const resetForm = () => {
+    setNome("")
+    setTelefone("")
+    setEmail("")
+    setCpf("")
+    setRg("")
+    setObservacao("")
+    setCep("")
+    setEstado("")
+    setCidade("")
+    setBairro("")
+    setEndereco("")
+    setNumero("")
+    setComplemento("")
+    setSelectedPlano("")
+    setPeriodo("")
+    setPeriodoContato("")
+    setPossuiWhatsapp("")
+    setLgpd(false)
+    setHoneypot("")
+    setValidationError(null)
+    setViacepLocked({ estado: false, cidade: false })
+  }
 
   useEffect(() => {
     setUtm({
@@ -195,10 +220,13 @@ export function PreCadastroForm() {
     return null
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    setValidationError(null)
+
     const err = validateClient()
     if (err) {
+      setValidationError(err)
       toast.error(err)
       return
     }
@@ -232,21 +260,34 @@ export function PreCadastroForm() {
         }),
       })
 
-      const data = (await res.json()) as { ok?: boolean; message?: string }
+      let data: { ok?: boolean; message?: string } = {}
+      try {
+        data = (await res.json()) as { ok?: boolean; message?: string }
+      } catch {
+        data = {}
+      }
 
       if (!res.ok || !data.ok) {
-        toast.error(data.message ?? "Não foi possível enviar o pré-cadastro.")
+        const message =
+          data.message ?? "Não foi possível enviar o pré-cadastro."
+        setValidationError(message)
+        toast.error(message)
         setFormState("form")
         return
       }
 
-      setSuccessMessage(
+      const message =
         data.message ??
-          "Pré-cadastro recebido com sucesso! Nossa equipe entrará em contato em breve."
-      )
+        "Pré-cadastro recebido com sucesso! Nossa equipe entrará em contato em breve."
+
+      toast.success(message)
+      resetForm()
+      setSuccessMessage(message)
       setFormState("success")
     } catch {
-      toast.error("Erro de conexão. Tente novamente em instantes.")
+      const message = "Erro de conexão. Tente novamente em instantes."
+      setValidationError(message)
+      toast.error(message)
       setFormState("form")
     }
   }
@@ -288,7 +329,11 @@ export function PreCadastroForm() {
           </p>
         </div>
 
-        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-6">
+        <form
+          onSubmit={(e) => void handleSubmit(e)}
+          noValidate
+          className="space-y-6"
+        >
           <input
             type="text"
             name="website"
@@ -558,6 +603,15 @@ export function PreCadastroForm() {
               privacidade (LGPD). *
             </Label>
           </div>
+
+          {validationError ? (
+            <div
+              role="alert"
+              className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            >
+              {validationError}
+            </div>
+          ) : null}
 
           <Button
             type="submit"
