@@ -6,9 +6,12 @@ import {
   emptyFirstInvoicePipeline,
   formatBrbyteFriendlyMessage,
   getBrbytePhaseLabel,
+  isBrbyteSummaryPhase,
   mapHistoryRowToLastActivity,
   pickRelevantBrbyteHistoryActivity,
   pickRelevantBrbyteHistoryError,
+  resolveBrbyteConnectionStatus,
+  type BrbyteConnectionStatus,
   type BrbyteFirstInvoicePipeline,
   type BrbyteLastActivity,
 } from "@/lib/brbyte/observability"
@@ -29,8 +32,6 @@ const STATUS_KEYS: BrbyteSyncStatus[] = [
   "error",
   "retry",
 ]
-
-const RELEASED_REWARD_STATUSES = new Set(["disponivel", "solicitado", "pago"])
 
 export type BrbyteIntegrationDashboard = {
   flags: ReturnType<typeof getBrbytePublicIntegrationFlags>
@@ -53,6 +54,7 @@ export type BrbyteIntegrationDashboard = {
     message: string | null
   } | null
   lastError: BrbyteLastActivity | null
+  connection: BrbyteConnectionStatus
   today: {
     attempts: number
     successes: number
@@ -85,6 +87,11 @@ export function buildEmptyBrbyteIntegrationDashboard(): BrbyteIntegrationDashboa
     lastActivity: null,
     lastCreateInterest: null,
     lastError: null,
+    connection: {
+      connected: false,
+      testedToday: false,
+      lastSuccessAt: null,
+    },
     today: {
       attempts: 0,
       successes: 0,
@@ -119,8 +126,7 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
       "id, status, phase, started_at, finished_at, duration_ms, errors_count, meta"
     )
     .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()
+    .limit(20)
 
   const lastCreatePromise = supabase
     .from("brbyte_referral_history")
@@ -136,11 +142,11 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
       "referral_id, created_at, message, endpoint, http_status, phase, new_status"
     )
     .order("created_at", { ascending: false })
-    .limit(40)
+    .limit(80)
 
   const todayHistoryPromise = supabase
     .from("brbyte_referral_history")
-    .select("new_status, phase")
+    .select("new_status, phase, created_at, http_status")
     .gte("created_at", todayIso)
 
   const referralsStatusPromise = supabase
@@ -156,17 +162,21 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
     `
     )
 
-  const rewardsPromise = supabase
-    .from("rewards")
-    .select("referral_id, status")
+  const rewardsPromise = supabase.from("rewards").select("id, referral_id")
+
+  const walletCreditsPromise = supabase
+    .from("wallet_transactions")
+    .select("reward_id")
+    .eq("transaction_type", "credito")
 
   const [
-    { data: lastRunRow },
+    { data: lastRunRows },
     { data: lastCreateRow },
     { data: recentHistoryRows },
     { data: todayRows },
     { data: referralRows },
     { data: rewardRows },
+    { data: walletCreditRows },
   ] = await Promise.all([
     lastRunPromise,
     lastCreatePromise,
@@ -174,21 +184,31 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
     todayHistoryPromise,
     referralsStatusPromise,
     rewardsPromise,
+    walletCreditsPromise,
   ])
 
-  const releasedReferralIds = new Set<string>()
+  const creditRewardIds = new Set<string>()
+  for (const wallet of walletCreditRows ?? []) {
+    const rewardId = wallet.reward_id
+    if (typeof rewardId === "string" && rewardId.trim()) {
+      creditRewardIds.add(rewardId.trim())
+    }
+  }
+
+  const referralHasReward = new Set<string>()
+  const referralCreditReleased = new Set<string>()
   for (const reward of rewardRows ?? []) {
-    if (
-      reward.referral_id &&
-      RELEASED_REWARD_STATUSES.has(String(reward.status))
-    ) {
-      releasedReferralIds.add(reward.referral_id)
+    if (!reward.referral_id) continue
+    referralHasReward.add(reward.referral_id)
+    if (reward.id && creditRewardIds.has(reward.id)) {
+      referralCreditReleased.add(reward.referral_id)
     }
   }
 
   let todayAttempts = 0
   let todaySuccesses = 0
   let todayErrors = 0
+  let lastSuccessfulActivityAt: string | null = null
 
   const currentPhases = new Set([
     "create_interest",
@@ -215,7 +235,8 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
         brbyte_contract_pk: row.brbyte_contract_pk,
         brbyte_first_invoice_pk: row.brbyte_first_invoice_pk,
         brbyte_first_invoice_paid_at: row.brbyte_first_invoice_paid_at,
-        reward_released: releasedReferralIds.has(row.id),
+        has_reward: referralHasReward.has(row.id),
+        credit_released: referralCreditReleased.has(row.id),
       },
       firstInvoicePipeline
     )
@@ -228,6 +249,26 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
       (row: { new_status: string | null }) => row.new_status === "error"
     )
   )
+
+  for (const row of historyRows) {
+    if (!currentPhases.has(String(row.phase))) continue
+    if (row.new_status === "error") continue
+    const httpStatus =
+      typeof row.http_status === "number" ? row.http_status : null
+    if (httpStatus !== null && (httpStatus < 200 || httpStatus >= 300)) continue
+    lastSuccessfulActivityAt = row.created_at
+    break
+  }
+
+  const lastRunRow =
+    (lastRunRows ?? []).find((row: { phase?: string | null }) =>
+      isBrbyteSummaryPhase(row.phase ?? null)
+    ) ?? null
+
+  const connection = resolveBrbyteConnectionStatus({
+    todayAttempts,
+    lastSuccessfulActivityAt,
+  })
 
   return {
     flags,
@@ -260,6 +301,7 @@ export async function loadBrbyteIntegrationDashboard(): Promise<BrbyteIntegratio
           }
         : null,
     lastError: lastErrorRow ? mapHistoryRowToLastActivity(lastErrorRow) : null,
+    connection,
     today: {
       attempts: todayAttempts,
       successes: todaySuccesses,

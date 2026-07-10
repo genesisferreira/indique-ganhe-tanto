@@ -49,9 +49,20 @@ export function normalizeBrbyteSyncStatus(
   return isBrbyteSyncStatus(value) ? value : 'pending'
 }
 
+export type PreferredInstallationPeriod =
+  | "morning"
+  | "afternoon"
+  | "no_preference"
+
+export type PreferredContactPeriod =
+  | "morning"
+  | "afternoon"
+  | "evening"
+  | "no_preference"
+
 export interface Indicacao {
   id: string
-  indicadorId: string
+  indicadorId?: string
   indicador?: Indicador
   nomeIndicado: string
   telefoneIndicado: string
@@ -72,6 +83,22 @@ export interface Indicacao {
   /** Observação do formulário de indicação (referrals.referred_observation) */
   observacaoIndicado?: string
   erpLeadSource?: string
+  /** referrals.source — ex.: public_pre_registration */
+  source?: string
+  rewardEligible?: boolean
+  preferredInstallationPeriod?: PreferredInstallationPeriod
+  preferredContactPeriod?: PreferredContactPeriod
+  phoneHasWhatsapp?: boolean
+  sourcePage?: string
+  publicPreRegistrationAt?: Date
+  utmSource?: string
+  utmMedium?: string
+  utmCampaign?: string
+  utmContent?: string
+  utmTerm?: string
+  gclid?: string
+  fbclid?: string
+  refCode?: string
   brbyteIdInteressado?: string
   brbyteInteressadoStatus?: string
   brbyteInteressadoCreatedAt?: Date
@@ -93,8 +120,8 @@ export interface Indicacao {
   plano?: Plano
   /** referrals.referral_contract_type */
   tipoContratacao?: ReferralContractType
-  tipoRecompensa: RecompensaTipo
-  valorRecompensa: number
+  tipoRecompensa?: RecompensaTipo
+  valorRecompensa?: number
   status: IndicacaoStatus
   comercialId?: string
   comercial?: Comercial

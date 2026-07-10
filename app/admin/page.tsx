@@ -10,7 +10,8 @@ import {
   REALTIME_TABLES_ADMIN,
   useRealtimeReload,
 } from "@/hooks/use-supabase-realtime"
-import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle } from "lucide-react"
+import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle, Globe } from "lucide-react"
+import type { PublicPreRegistrationMetrics } from "@/lib/public-pre-registration/dashboard"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts"
 
 function isDev(): boolean {
@@ -74,9 +75,30 @@ export default function AdminDashboard() {
   const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>(() =>
     isDataProviderMock() ? fallbackMetrics : EMPTY_ADMIN_DASHBOARD
   )
+  const [preRegistrationMetrics, setPreRegistrationMetrics] =
+    useState<PublicPreRegistrationMetrics | null>(null)
 
   const loadMetrics = useCallback(async () => {
     const metricsFromSupabase = await loadAdminDashboardMetricsFromSupabase()
+
+    if (!isDataProviderMock()) {
+      try {
+        const res = await fetch("/api/admin/public-pre-registration/metrics", {
+          cache: "no-store",
+        })
+        if (res.ok) {
+          const data = (await res.json()) as {
+            ok?: boolean
+            metrics?: PublicPreRegistrationMetrics
+          }
+          if (data.ok && data.metrics) {
+            setPreRegistrationMetrics(data.metrics)
+          }
+        }
+      } catch {
+        setPreRegistrationMetrics(null)
+      }
+    }
 
     if (!metricsFromSupabase) {
       if (isDev()) {
@@ -177,6 +199,61 @@ export default function AdminDashboard() {
           variant="success"
         />
       </div>
+
+      {!isDataProviderMock() && preRegistrationMetrics ? (
+        <Card className="border-border/50 bg-card/50">
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold flex items-center gap-2">
+              <Globe className="h-5 w-5 text-primary" />
+              Pré-cadastros Web
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="rounded-lg bg-muted/30 p-4">
+                <p className="text-sm text-muted-foreground">Hoje</p>
+                <p className="text-2xl font-bold">{preRegistrationMetrics.today}</p>
+              </div>
+              <div className="rounded-lg bg-muted/30 p-4">
+                <p className="text-sm text-muted-foreground">Últimos 7 dias</p>
+                <p className="text-2xl font-bold">
+                  {preRegistrationMetrics.last7Days}
+                </p>
+              </div>
+              <div className="rounded-lg bg-muted/30 p-4">
+                <p className="text-sm text-muted-foreground">Últimos 30 dias</p>
+                <p className="text-2xl font-bold">
+                  {preRegistrationMetrics.last30Days}
+                </p>
+              </div>
+              <div className="rounded-lg bg-muted/30 p-4">
+                <p className="text-sm text-muted-foreground">
+                  Enviados ao Controllr
+                </p>
+                <p className="text-2xl font-bold">
+                  {preRegistrationMetrics.sentToControllr}
+                </p>
+              </div>
+              <div className="rounded-lg bg-muted/30 p-4">
+                <p className="text-sm text-muted-foreground">
+                  Com erro de integração
+                </p>
+                <p className="text-2xl font-bold text-destructive">
+                  {preRegistrationMetrics.integrationErrors}
+                </p>
+              </div>
+              <div className="rounded-lg bg-muted/30 p-4">
+                <p className="text-sm text-muted-foreground">
+                  Convertidos em cliente
+                </p>
+                <p className="text-2xl font-bold text-emerald-600">
+                  {preRegistrationMetrics.convertedToClient}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="border-border/50 bg-card/50">

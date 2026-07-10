@@ -60,6 +60,40 @@ export function getBrbyteCreateInterestConfig(): BrbyteCreateInterestConfig | nu
   return config
 }
 
+/** Configuração BRByte para fluxo público (não exige BRBYTE_CREATE_INTEREST_ENABLED). */
+export function getBrbyteCreateInterestConfigForIntegration(): BrbyteCreateInterestConfig | null {
+  const apiUrl = process.env.BRBYTE_API_URL?.trim() ?? ""
+  const apiUser = process.env.BRBYTE_API_USER?.trim() ?? ""
+  const apiPassword = process.env.BRBYTE_API_PASSWORD?.trim() ?? ""
+  const defaultLeadPk = process.env.BRBYTE_DEFAULT_LEAD_PK?.trim() ?? ""
+  const defaultInterestStatus =
+    process.env.BRBYTE_DEFAULT_INTEREST_STATUS?.trim() ?? ""
+  const defaultPlanPk = process.env.BRBYTE_DEFAULT_PLAN_PK?.trim() ?? ""
+  const timeoutMs = Number(process.env.BRBYTE_SYNC_TIMEOUT_MS ?? "30000")
+
+  if (
+    !apiUrl ||
+    !apiUser ||
+    !apiPassword ||
+    !defaultLeadPk ||
+    !defaultInterestStatus ||
+    !defaultPlanPk
+  ) {
+    return null
+  }
+
+  return {
+    enabled: true,
+    apiUrl,
+    apiUser,
+    apiPassword,
+    defaultLeadPk,
+    defaultInterestStatus,
+    defaultPlanPk,
+    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 30_000,
+  }
+}
+
 export function isBrbyteCreateInterestConfigured(): boolean {
   return getBrbyteCreateInterestConfig() !== null
 }

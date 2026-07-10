@@ -28,6 +28,8 @@ import type {
   MarkFirstInvoicePaidErrorCode,
   MarkFirstInvoicePaidResult,
   RecompensaTipo,
+  PreferredInstallationPeriod,
+  PreferredContactPeriod,
 } from "@/types/referral"
 import type { UserRole } from "@/types/user"
 import type { Pagamento, PagamentoKind, PagamentoStatus } from "@/types/payment"
@@ -55,6 +57,7 @@ import {
   logLeadReject,
 } from "@/lib/referral-lost-reasons"
 import { moveReferralPipelineStageFromSupabase } from "@/lib/services/pipeline.service"
+import { isReferralRewardEligible } from "@/lib/referral-reward-eligibility"
 
 type ProfileRow = {
   id: string
@@ -70,7 +73,7 @@ type ProfileRow = {
 
 type ReferralRow = {
   id: string
-  indicator_profile_id: string
+  indicator_profile_id: string | null
   referred_name: string
   referred_phone: string
   referred_email: string | null
@@ -106,8 +109,23 @@ type ReferralRow = {
   contract_type_awareness?: boolean
   contract_type_awareness_at?: string | null
   plan_id: string
-  reward_type: string
-  reward_amount: number | string
+  reward_type: string | null
+  reward_amount: number | string | null
+  source?: string | null
+  reward_eligible?: boolean | null
+  preferred_installation_period?: string | null
+  preferred_contact_period?: string | null
+  phone_has_whatsapp?: boolean | null
+  source_page?: string | null
+  public_pre_registration_at?: string | null
+  utm_source?: string | null
+  utm_medium?: string | null
+  utm_campaign?: string | null
+  utm_content?: string | null
+  utm_term?: string | null
+  gclid?: string | null
+  fbclid?: string | null
+  ref_code?: string | null
   status: string
   commercial_profile_id: string | null
   notes: string | null
@@ -164,8 +182,69 @@ function mapReferralStatus(status: string): IndicacaoStatus {
   return (allowed.includes(status as IndicacaoStatus) ? status : "pendente") as IndicacaoStatus
 }
 
-function mapRewardType(t: string): RecompensaTipo {
+function mapRewardType(t: string | null | undefined): RecompensaTipo | undefined {
+  if (!t) return undefined
   return t === "desconto_fatura" ? "desconto_fatura" : "pix"
+}
+
+function mapReferralPublicPreRegistrationFields(row: ReferralRow): Pick<
+  Indicacao,
+  | "source"
+  | "rewardEligible"
+  | "preferredInstallationPeriod"
+  | "preferredContactPeriod"
+  | "phoneHasWhatsapp"
+  | "sourcePage"
+  | "publicPreRegistrationAt"
+  | "utmSource"
+  | "utmMedium"
+  | "utmCampaign"
+  | "utmContent"
+  | "utmTerm"
+  | "gclid"
+  | "fbclid"
+  | "refCode"
+> {
+  const period = row.preferred_installation_period?.trim()
+  const installAllowed = new Set(["morning", "afternoon", "no_preference"])
+  const contactPeriod = row.preferred_contact_period?.trim()
+  const contactAllowed = new Set([
+    "morning",
+    "afternoon",
+    "evening",
+    "no_preference",
+  ])
+  return {
+    source: row.source?.trim() || undefined,
+    rewardEligible:
+      row.reward_eligible === undefined || row.reward_eligible === null
+        ? undefined
+        : Boolean(row.reward_eligible),
+    preferredInstallationPeriod:
+      period && installAllowed.has(period)
+        ? (period as PreferredInstallationPeriod)
+        : undefined,
+    preferredContactPeriod:
+      contactPeriod && contactAllowed.has(contactPeriod)
+        ? (contactPeriod as PreferredContactPeriod)
+        : undefined,
+    phoneHasWhatsapp:
+      row.phone_has_whatsapp === null || row.phone_has_whatsapp === undefined
+        ? undefined
+        : Boolean(row.phone_has_whatsapp),
+    sourcePage: row.source_page?.trim() || undefined,
+    publicPreRegistrationAt: row.public_pre_registration_at
+      ? new Date(row.public_pre_registration_at)
+      : undefined,
+    utmSource: row.utm_source?.trim() || undefined,
+    utmMedium: row.utm_medium?.trim() || undefined,
+    utmCampaign: row.utm_campaign?.trim() || undefined,
+    utmContent: row.utm_content?.trim() || undefined,
+    utmTerm: row.utm_term?.trim() || undefined,
+    gclid: row.gclid?.trim() || undefined,
+    fbclid: row.fbclid?.trim() || undefined,
+    refCode: row.ref_code?.trim() || undefined,
+  }
 }
 
 function computeReferralSlaFields(row: ReferralRow): {
@@ -347,10 +426,10 @@ function planNomeFromRow(row: ReferralRow): Plano | undefined {
   }
 }
 
-function referralToIndicacao(row: ReferralRow, indicadorId: string): Indicacao {
+function referralToIndicacao(row: ReferralRow, indicadorId?: string): Indicacao {
   return {
     id: row.id,
-    indicadorId,
+    indicadorId: indicadorId || row.indicator_profile_id || undefined,
     nomeIndicado: row.referred_name,
     telefoneIndicado: row.referred_phone,
     emailIndicado: row.referred_email ?? undefined,
@@ -358,7 +437,8 @@ function referralToIndicacao(row: ReferralRow, indicadorId: string): Indicacao {
     planoId: row.plan_id,
     plano: planNomeFromRow(row),
     tipoRecompensa: mapRewardType(row.reward_type),
-    valorRecompensa: Number(row.reward_amount),
+    valorRecompensa:
+      row.reward_amount != null ? Number(row.reward_amount) : undefined,
     status: mapReferralStatus(row.status),
     comercialId: row.commercial_profile_id ?? undefined,
     observacoes: row.notes ?? undefined,
@@ -375,6 +455,7 @@ function referralToIndicacao(row: ReferralRow, indicadorId: string): Indicacao {
     ...computeReferralSlaFields(row),
     ...mapRedistributionFields(row),
     ...mapReferralInterestedFields(row),
+    ...mapReferralPublicPreRegistrationFields(row),
     ...mapReferralBrbyteSyncFields(row),
     ...mapReferralContractType(row),
     ...mapReferralAcknowledgements(row),
@@ -386,13 +467,13 @@ function referralToIndicacao(row: ReferralRow, indicadorId: string): Indicacao {
 /** Merge referrals + mapa de planos (consulta separada em plans). */
 function referralRowToIndicacaoMerged(
   row: ReferralRow,
-  indicadorId: string,
+  indicadorId: string | null | undefined,
   planoById: Map<string, Plano>
 ): Indicacao {
   const plano = planoById.get(row.plan_id)
   return {
     id: row.id,
-    indicadorId,
+    indicadorId: indicadorId ?? row.indicator_profile_id ?? undefined,
     nomeIndicado: row.referred_name,
     telefoneIndicado: row.referred_phone,
     emailIndicado: row.referred_email ?? undefined,
@@ -409,7 +490,8 @@ function referralRowToIndicacaoMerged(
         ativo: true,
       } satisfies Plano),
     tipoRecompensa: mapRewardType(row.reward_type),
-    valorRecompensa: Number(row.reward_amount),
+    valorRecompensa:
+      row.reward_amount != null ? Number(row.reward_amount) : undefined,
     status: mapReferralStatus(row.status),
     comercialId: row.commercial_profile_id ?? undefined,
     observacoes: row.notes ?? undefined,
@@ -426,6 +508,7 @@ function referralRowToIndicacaoMerged(
     ...computeReferralSlaFields(row),
     ...mapRedistributionFields(row),
     ...mapReferralInterestedFields(row),
+    ...mapReferralPublicPreRegistrationFields(row),
     ...mapReferralBrbyteSyncFields(row),
     ...mapReferralContractType(row),
     ...mapReferralAcknowledgements(row),
@@ -2283,6 +2366,13 @@ const REFERRALS_LIST_SELECT_EXTENDED = `
         last_redistributed_at,
         previous_commercial_profile_id,
         sla_redistributed,
+        source,
+        reward_eligible,
+        erp_lead_source,
+        preferred_installation_period,
+        preferred_contact_period,
+        phone_has_whatsapp,
+        source_page,
         created_at,
         updated_at
       `
@@ -2557,7 +2647,9 @@ export async function loadAdminReferralsFromSupabase(): Promise<
 
     const profileIds = new Set<string>()
     for (const r of referrals) {
-      profileIds.add(r.indicator_profile_id)
+      if (r.indicator_profile_id) {
+        profileIds.add(r.indicator_profile_id)
+      }
       if (r.commercial_profile_id) profileIds.add(r.commercial_profile_id)
       if (r.previous_commercial_profile_id) {
         profileIds.add(r.previous_commercial_profile_id)
@@ -2602,7 +2694,9 @@ export async function loadAdminReferralsFromSupabase(): Promise<
 
     const mapped: Indicacao[] = referrals.map((r) => {
       const base = referralRowToIndicacaoMerged(r, r.indicator_profile_id, planoById)
-      const ip = profileMap.get(r.indicator_profile_id)
+      const ip = r.indicator_profile_id
+        ? profileMap.get(r.indicator_profile_id)
+        : undefined
       const cp = r.commercial_profile_id
         ? profileMap.get(r.commercial_profile_id)
         : undefined
@@ -2854,7 +2948,9 @@ export async function loadAdminReferralDetailFromSupabase(
     }
 
     const profileIds = new Set<string>()
-    profileIds.add(refRow.indicator_profile_id)
+    if (refRow.indicator_profile_id) {
+      profileIds.add(refRow.indicator_profile_id)
+    }
     if (refRow.commercial_profile_id) profileIds.add(refRow.commercial_profile_id)
 
     const profileMap = new Map<string, AdminProfileShortRow>()
@@ -2873,7 +2969,9 @@ export async function loadAdminReferralDetailFromSupabase(
       }
     }
 
-    const ip = profileMap.get(refRow.indicator_profile_id)
+    const ip = refRow.indicator_profile_id
+      ? profileMap.get(refRow.indicator_profile_id)
+      : undefined
     const cp = refRow.commercial_profile_id
       ? profileMap.get(refRow.commercial_profile_id)
       : undefined
@@ -4085,8 +4183,10 @@ function buildLeadFromReferralRow(
     row.indicator_profile_id,
     planoById
   )
-  const nomeIndicador = indicadorNomeById.get(row.indicator_profile_id)
-  const indicacao: Indicacao = nomeIndicador
+  const nomeIndicador = row.indicator_profile_id
+    ? indicadorNomeById.get(row.indicator_profile_id)
+    : undefined
+  const indicacao: Indicacao = nomeIndicador && row.indicator_profile_id
     ? {
         ...indicacaoBase,
         indicador: stubIndicadorProfile(row.indicator_profile_id, nomeIndicador),
@@ -4295,7 +4395,9 @@ export async function loadComercialLeadsFromSupabase(): Promise<
 
     const profileIdsForNames = new Set<string>()
     for (const r of referrals) {
-      profileIdsForNames.add(r.indicator_profile_id)
+      if (r.indicator_profile_id) {
+        profileIdsForNames.add(r.indicator_profile_id)
+      }
       if (r.previous_commercial_profile_id) {
         profileIdsForNames.add(r.previous_commercial_profile_id)
       }
@@ -4407,7 +4509,22 @@ const REFERRAL_INTERESTED_FIELDS_SELECT = `
         installation_fee_awareness,
         installation_fee_awareness_at,
         contract_type_awareness,
-        contract_type_awareness_at
+        contract_type_awareness_at,
+        source,
+        reward_eligible,
+        preferred_installation_period,
+        preferred_contact_period,
+        phone_has_whatsapp,
+        source_page,
+        public_pre_registration_at,
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        utm_content,
+        utm_term,
+        gclid,
+        fbclid,
+        ref_code
       `
 
 const REFERRAL_DETAIL_SELECT_CORE = `
@@ -4494,8 +4611,19 @@ async function resolveIndicatorProfileForCommercialLead(
   supabase: ReturnType<typeof getSupabaseClient>,
   db: ReferralsDb,
   referralId: string,
-  indicatorProfileId: string
+  indicatorProfileId: string | null
 ): Promise<ResolvedIndicatorProfile> {
+  if (!indicatorProfileId) {
+    return {
+      id: "",
+      nome: "Captação direta",
+      email: "",
+      telefone: "",
+      found: false,
+      source: "fallback",
+    }
+  }
+
   const fallback: ResolvedIndicatorProfile = {
     id: indicatorProfileId,
     nome: "Indicador não identificado",
@@ -4817,10 +4945,12 @@ export async function loadComercialLeadDetailsFromSupabase(
     const lead = buildLeadFromReferralRow(
       referral,
       planoById,
-      new Map([[referral.indicator_profile_id, indicatorResolved.nome]])
+      referral.indicator_profile_id
+        ? new Map([[referral.indicator_profile_id, indicatorResolved.nome]])
+        : new Map()
     )
 
-    if (lead.indicacao) {
+    if (lead.indicacao && indicatorResolved.id) {
       lead.indicacao.indicador = stubIndicadorProfile(
         indicatorResolved.id,
         indicatorResolved.nome
@@ -4998,7 +5128,9 @@ export async function ensureRewardForReferralFromSupabase(
 
     const { data: refRow, error: refError } = await db
       .from("referrals")
-      .select("id, indicator_profile_id, reward_amount, reward_type, status")
+      .select(
+        "id, indicator_profile_id, reward_amount, reward_type, status, source, reward_eligible, erp_lead_source"
+      )
       .eq("id", referralId)
       .maybeSingle()
 
@@ -5013,6 +5145,16 @@ export async function ensureRewardForReferralFromSupabase(
       reward_amount: number | string | null
       reward_type: string | null
       status: string
+      source?: string | null
+      reward_eligible?: boolean | null
+      erp_lead_source?: string | null
+    }
+
+    if (!isReferralRewardEligible(ref)) {
+      return {
+        ok: false,
+        message: "Registro não elegível para recompensa.",
+      }
     }
 
     if (!ref.indicator_profile_id) {
@@ -8220,7 +8362,9 @@ export async function loadAdminIndicatorDetailFromSupabase(
 
     const indicacoes: Indicacao[] = referrals.map((r) => {
       const base = referralRowToIndicacaoMerged(r, r.indicator_profile_id, planoById)
-      const ip = profileMap.get(r.indicator_profile_id)
+      const ip = r.indicator_profile_id
+        ? profileMap.get(r.indicator_profile_id)
+        : undefined
       const cp = r.commercial_profile_id
         ? profileMap.get(r.commercial_profile_id)
         : undefined

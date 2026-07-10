@@ -2,6 +2,12 @@ import "server-only"
 
 import { buildBrbyteInterestedObservation } from "@/lib/brbyte/interested-observation"
 import {
+  buildPublicPreRegistrationObservation,
+  summarizeUtmCampaign,
+  type PreferredInstallationPeriod,
+  type PreferredContactPeriod,
+} from "@/lib/public-pre-registration/observation"
+import {
   BRBYTE_UNCONFIRMED_INTEREST_MESSAGE,
   extractInterestResolution,
   isCreateInterestResponseSuccessful,
@@ -14,6 +20,7 @@ import { truncateBrbyteField } from "@/lib/brbyte/truncate-field"
 import { brbyteAdminLogin, brbyteAdminPostForm } from "@/lib/brbyte/admin-http"
 import {
   getBrbyteCreateInterestConfig,
+  getBrbyteCreateInterestConfigForIntegration,
   isBrbyteCreateInterestEnabled,
   type BrbyteCreateInterestConfig,
 } from "@/lib/brbyte/config"
@@ -29,6 +36,12 @@ import {
   type BrbyteSyncRunStatus,
 } from "@/types/brbyte"
 import { normalizeBrbyteSyncStatus, type BrbyteSyncStatus } from "@/types/referral"
+import {
+  PUBLIC_PRE_REGISTRATION_SOURCE,
+  isPublicPreRegistrationReferral,
+} from "@/lib/referral-reward-eligibility"
+
+export type BrbyteCreateInterestSourceContext = "referral" | "public_pre_registration"
 
 const LOG_TAG = "[brbyte:create-interest]"
 const LOGIN_ENDPOINT = "/login"
@@ -55,6 +68,19 @@ type ReferralCreateInterestRow = {
   referred_observation: string | null
   referred_address: string | null
   erp_lead_source: string | null
+  source: string | null
+  preferred_installation_period: string | null
+  preferred_contact_period: string | null
+  phone_has_whatsapp: boolean | null
+  source_page: string | null
+  utm_source: string | null
+  utm_medium: string | null
+  utm_campaign: string | null
+  utm_content: string | null
+  utm_term: string | null
+  gclid: string | null
+  fbclid: string | null
+  ref_code: string | null
   referral_contract_type: string | null
   reward_type: string | null
   installation_fee_awareness: boolean | null
@@ -146,7 +172,8 @@ function requestFallbackFromForm(form: Record<string, string>): {
 async function createSyncRun(
   referralId: string,
   actorUserId: string | null,
-  configured: boolean
+  configured: boolean,
+  triggeredBy: string
 ): Promise<string | null> {
   try {
     const { data, error } = await getDb()
@@ -158,7 +185,7 @@ async function createSyncRun(
         meta: {
           phase: CREATE_INTEREST_PHASE,
           referral_id: referralId,
-          triggered_by: "admin_manual",
+          triggered_by: triggeredBy,
           actor_user_id: actorUserId,
         },
       })
@@ -243,6 +270,19 @@ async function loadReferralForCreateInterest(
       referred_observation,
       referred_address,
       erp_lead_source,
+      source,
+      preferred_installation_period,
+      preferred_contact_period,
+      phone_has_whatsapp,
+      source_page,
+      utm_source,
+      utm_medium,
+      utm_campaign,
+      utm_content,
+      utm_term,
+      gclid,
+      fbclid,
+      ref_code,
       referral_contract_type,
       reward_type,
       installation_fee_awareness,
@@ -278,25 +318,50 @@ function buildCreateInterestForm(
     ? row.referral_contract_type!.trim()
     : "tanto_vantagens"
   const { name: planoNome } = planFieldsFromRow(row)
-
-  const interestObsBuild = buildBrbyteInterestedObservation({
-    erpLeadSource: row.erp_lead_source,
-    indicadorNome: indicatorNameFromRow(row),
-    tipoContratacao: contractType,
-    planoNome,
-    tipoRecompensa: row.reward_type,
-    cpfIndicado: row.referred_document,
-    enderecoInstalacao: row.referred_street,
-    numeroInstalacao: row.referred_number,
-    bairroInstalacao: row.referred_neighborhood,
-    cidadeInstalacao: row.referred_city,
-    estadoInstalacao: row.referred_state,
-    cepInstalacao: row.referred_zipcode,
-    observacaoIndicado: row.referred_observation,
-    enderecoIndicado: row.referred_address,
-    installationFeeAwareness: row.installation_fee_awareness,
-    contractTypeAwareness: row.contract_type_awareness,
+  const isPublic = isPublicPreRegistrationReferral({
+    source: row.source,
+    erp_lead_source: row.erp_lead_source,
   })
+
+  const interestObsBuild = isPublic
+    ? buildPublicPreRegistrationObservation({
+        preferredInstallationPeriod:
+          (row.preferred_installation_period as PreferredInstallationPeriod) ??
+          "no_preference",
+        planoNome: planoNome ?? "Não informado",
+        phoneHasWhatsapp: row.phone_has_whatsapp === true,
+        preferredContactPeriod:
+          (row.preferred_contact_period as PreferredContactPeriod) ?? null,
+        campaignSummary: summarizeUtmCampaign({
+          utm_source: row.utm_source,
+          utm_medium: row.utm_medium,
+          utm_campaign: row.utm_campaign,
+          utm_content: row.utm_content,
+          utm_term: row.utm_term,
+          gclid: row.gclid,
+          fbclid: row.fbclid,
+          ref_code: row.ref_code,
+        }),
+        observacaoCliente: row.referred_observation,
+      })
+    : buildBrbyteInterestedObservation({
+        erpLeadSource: row.erp_lead_source,
+        indicadorNome: indicatorNameFromRow(row),
+        tipoContratacao: contractType,
+        planoNome,
+        tipoRecompensa: row.reward_type,
+        cpfIndicado: row.referred_document,
+        enderecoInstalacao: row.referred_street,
+        numeroInstalacao: row.referred_number,
+        bairroInstalacao: row.referred_neighborhood,
+        cidadeInstalacao: row.referred_city,
+        estadoInstalacao: row.referred_state,
+        cepInstalacao: row.referred_zipcode,
+        observacaoIndicado: row.referred_observation,
+        enderecoIndicado: row.referred_address,
+        installationFeeAwareness: row.installation_fee_awareness,
+        contractTypeAwareness: row.contract_type_awareness,
+      })
   const interestObsResult = truncateBrbyteField(interestObsBuild.value)
   if (interestObsBuild.truncated || interestObsResult.truncated) {
     console.warn(LOG_TAG, {
@@ -509,11 +574,12 @@ function syncRunAuditMeta(input: {
   success?: boolean
   error?: string
   request?: Record<string, string>
+  triggeredBy?: string
 }): Record<string, unknown> {
   return {
     phase: CREATE_INTEREST_PHASE,
     referral_id: input.referralId,
-    triggered_by: "admin_manual",
+    triggered_by: input.triggeredBy ?? "admin_manual",
     endpoint: input.endpoint,
     http_status: input.httpStatus ?? null,
     success: input.success ?? false,
@@ -525,11 +591,16 @@ function syncRunAuditMeta(input: {
 export async function createBrbyteInterestFromReferral(input: {
   referralId: string
   actorUserId?: string | null
+  sourceContext?: BrbyteCreateInterestSourceContext
 }): Promise<BrbyteCreateInterestResult> {
   const started = Date.now()
   const referralId = input.referralId.trim()
+  const isPublicFlow = input.sourceContext === "public_pre_registration"
+  const triggeredBy = isPublicFlow
+    ? PUBLIC_PRE_REGISTRATION_SOURCE
+    : "admin_manual"
 
-  if (!isBrbyteCreateInterestEnabled()) {
+  if (!isPublicFlow && !isBrbyteCreateInterestEnabled()) {
     return {
       ok: false,
       skipped: true,
@@ -543,7 +614,9 @@ export async function createBrbyteInterestFromReferral(input: {
     }
   }
 
-  const config = getBrbyteCreateInterestConfig()
+  const config = isPublicFlow
+    ? getBrbyteCreateInterestConfigForIntegration()
+    : getBrbyteCreateInterestConfig()
   if (!config) {
     return {
       ok: false,
@@ -561,7 +634,8 @@ export async function createBrbyteInterestFromReferral(input: {
   const syncRunId = await createSyncRun(
     referralId,
     input.actorUserId ?? null,
-    true
+    true,
+    triggeredBy
   )
 
   const row = await loadReferralForCreateInterest(referralId)

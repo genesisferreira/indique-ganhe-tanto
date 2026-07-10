@@ -31,6 +31,7 @@ import { Search, Eye, MoreHorizontal, UserPlus, RefreshCw } from "lucide-react"
 import { CommercialSlaOverdueBadge } from "@/components/commercial/commercial-sla-overdue-badge"
 import { CommercialRedistributedBadge } from "@/components/commercial/commercial-redistributed-badge"
 import { devLogCommercialSla } from "@/lib/commercial-sla"
+import { isPublicPreRegistrationReferral } from "@/lib/referral-reward-eligibility"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -159,8 +160,17 @@ export default function AdminIndicacoesPage() {
     return matchesSearch && matchesStatus
   })
 
-  const getIndicadorNome = (indicacao: Indicacao) =>
-    indicacao.indicador?.nome ?? "—"
+  const getIndicadorNome = (indicacao: Indicacao) => {
+    if (
+      isPublicPreRegistrationReferral({
+        source: indicacao.source,
+        erp_lead_source: indicacao.erpLeadSource,
+      })
+    ) {
+      return "Captação direta"
+    }
+    return indicacao.indicador?.nome ?? "—"
+  }
 
   const getComercialNome = (indicacao: Indicacao) => {
     if (!indicacao.comercialId) return "Não atribuído"

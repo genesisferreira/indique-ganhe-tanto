@@ -54,6 +54,13 @@ import {
 import { ReferralInterestedFields } from "@/components/referral/referral-interested-fields"
 import { ReferralRegistrationAcknowledgements } from "@/components/referral/referral-registration-acknowledgements"
 import { getReferralContractTypeLabel } from "@/lib/referral-contract-type"
+import { isPublicPreRegistrationReferral } from "@/lib/referral-reward-eligibility"
+import {
+  getPreferredContactPeriodLabel,
+  getPreferredInstallationPeriodLabel,
+  getPhoneHasWhatsappLabel,
+} from "@/lib/public-pre-registration/observation"
+import { Badge } from "@/components/ui/badge"
 import type { Lead, LeadStatus, Historico } from "@/types"
 import type { UserRole } from "@/types/user"
 
@@ -352,9 +359,14 @@ export default function DetalheLeadPage({
 
   const indicacao = lead.indicacao
   const plano = indicacao.plano
+  const isPublicPreReg = isPublicPreRegistrationReferral({
+    source: indicacao.source,
+    erp_lead_source: indicacao.erpLeadSource,
+  })
   const indicador = indicacao.indicador
-  const indicadorNome =
-    indicador?.nome?.trim() || "Indicador não identificado"
+  const indicadorNome = isPublicPreReg
+    ? "Captação direta"
+    : indicador?.nome?.trim() || "Indicador não identificado"
   const exigeMotivoRecusa = isComercialLeadRejectStatus(status)
   const podeSalvarStatus =
     !isSaving && (!exigeMotivoRecusa || Boolean(lostReason.trim()))
@@ -369,7 +381,10 @@ export default function DetalheLeadPage({
   })
 
   const aptoConfirmarPrimeiraMensalidade =
-    Boolean(lead.indicacaoId) && !indicacao.primeiraFaturaPaga
+    Boolean(lead.indicacaoId) &&
+    !indicacao.primeiraFaturaPaga &&
+    !isPublicPreReg &&
+    indicacao.rewardEligible !== false
 
   return (
     <div>
@@ -387,7 +402,12 @@ export default function DetalheLeadPage({
         title={indicacao.nomeIndicado}
         description={`Lead #${lead.id}`}
       >
-        <StatusBadge status={lead.status} />
+        <div className="flex items-center gap-2">
+          {isPublicPreReg ? (
+            <Badge variant="secondary">Pré-cadastro Web</Badge>
+          ) : null}
+          <StatusBadge status={lead.status} />
+        </div>
       </PageHeader>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -631,6 +651,7 @@ export default function DetalheLeadPage({
           )}
 
           {/* Indicador */}
+          {!isPublicPreReg ? (
           <div className="rounded-xl border bg-card p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">
               Indicado por
@@ -650,6 +671,43 @@ export default function DetalheLeadPage({
               </div>
             </div>
           </div>
+          ) : (
+          <div className="rounded-xl border bg-card p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">
+              Origem
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Captação direta (Pré-cadastro Web)
+            </p>
+            {indicacao.sourcePage ? (
+              <p className="text-sm text-muted-foreground mt-2">
+                Página de origem: {indicacao.sourcePage}
+              </p>
+            ) : null}
+            {indicacao.phoneHasWhatsapp !== undefined ? (
+              <p className="text-sm text-muted-foreground mt-2">
+                WhatsApp:{" "}
+                {getPhoneHasWhatsappLabel(indicacao.phoneHasWhatsapp)}
+              </p>
+            ) : null}
+            {indicacao.preferredInstallationPeriod ? (
+              <p className="text-sm text-muted-foreground mt-2">
+                Melhor período para instalação:{" "}
+                {getPreferredInstallationPeriodLabel(
+                  indicacao.preferredInstallationPeriod
+                )}
+              </p>
+            ) : null}
+            {indicacao.preferredContactPeriod ? (
+              <p className="text-sm text-muted-foreground mt-2">
+                Melhor horário para contato:{" "}
+                {getPreferredContactPeriodLabel(
+                  indicacao.preferredContactPeriod
+                )}
+              </p>
+            ) : null}
+          </div>
+          )}
 
           {(lead.status === "perdido" || indicacao.status === "recusada") &&
           (indicacao.motivoRecusa || indicacao.observacoesRecusa) ? (

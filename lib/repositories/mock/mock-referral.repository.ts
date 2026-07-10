@@ -119,7 +119,7 @@ export const mockReferralRepository: ReferralRepository = {
       ok: true,
       rewardId: `mock-reward-${referralId}`,
       transactionId: `mock-wt-${Date.now()}`,
-      balanceAfter: indicacao.valorRecompensa,
+      balanceAfter: indicacao.valorRecompensa ?? 0,
     }
   },
 

@@ -24,6 +24,7 @@ import {
   type BrbyteSyncRunStatus,
 } from "@/types/brbyte"
 import { normalizeBrbyteSyncStatus } from "@/types/referral"
+import { isReferralRewardEligible } from "@/lib/referral-reward-eligibility"
 
 const LOG_TAG = "[brbyte:check-first-invoice]"
 const LOGIN_ENDPOINT = "/login"
@@ -36,6 +37,9 @@ type ReferralCheckFirstInvoiceRow = {
   indicator_profile_id: string | null
   reward_amount: number | string | null
   reward_type: string | null
+  source: string | null
+  reward_eligible: boolean | null
+  erp_lead_source: string | null
   status: string
   first_invoice_paid: boolean
   first_invoice_paid_at: string | null
@@ -176,6 +180,9 @@ async function loadReferralForCheck(
       indicator_profile_id,
       reward_amount,
       reward_type,
+      source,
+      reward_eligible,
+      erp_lead_source,
       status,
       first_invoice_paid,
       first_invoice_paid_at,
@@ -291,6 +298,13 @@ async function hasExistingFirstInvoiceReward(
 async function ensureRewardForReferral(
   row: ReferralCheckFirstInvoiceRow
 ): Promise<{ ok: boolean; rewardId?: string; message?: string }> {
+  if (!isReferralRewardEligible(row)) {
+    return {
+      ok: true,
+      message: "Registro sem elegibilidade financeira (pré-cadastro público).",
+    }
+  }
+
   if (!row.indicator_profile_id) {
     return { ok: false, message: "Indicação sem indicador vinculado." }
   }
@@ -966,6 +980,74 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
   const paidAtIso =
     parseInvoiceCreditDate(infoResult.info.invoiceDateCredit) ??
     new Date().toISOString()
+
+  const rewardEligible = isReferralRewardEligible(referral)
+
+  if (!rewardEligible) {
+    await persistPaidInvoice(referralId, {
+      contractPk,
+      invoicePk,
+      paidAtIso,
+      listPayload: listResult.payload,
+      infoPayload: infoResult.payload,
+      syncRunId,
+      httpStatus: infoResult.httpStatus,
+      rpcResult: {
+        skipped_financial: true,
+        reason: "public_pre_registration_or_not_reward_eligible",
+      },
+    })
+    await finishSyncRun(syncRunId, {
+      status: "ok",
+      api_reachable: true,
+      processed: 1,
+      duration_ms: Date.now() - started,
+      meta: syncRunAuditMeta({
+        referralId,
+        endpoint: BRBYTE_API_PATHS.invoiceListInfo,
+        httpStatus: infoResult.httpStatus,
+        success: true,
+        paid: true,
+        contractPk,
+        invoicePk,
+      }),
+    })
+    await logBrbyteReferralHistory({
+      referralId,
+      phase: CHECK_FIRST_INVOICE_PHASE,
+      oldStatus: referral.brbyte_sync_status,
+      newStatus: "paid_confirmed",
+      endpoint: BRBYTE_API_PATHS.invoiceListInfo,
+      httpStatus: infoResult.httpStatus,
+      message:
+        "Primeira mensalidade paga confirmada (sem liberação financeira — pré-cadastro).",
+      payload: {
+        list: listResult.payload,
+        info: infoResult.payload,
+        financial_skipped: true,
+      },
+      createdBy: input.actorUserId ?? null,
+    })
+    await logAudit(input.actorUserId ?? null, referralId, {
+      paid: true,
+      financial_skipped: true,
+      contract_pk: contractPk,
+      invoice_pk: invoicePk,
+    })
+    return {
+      ok: true,
+      paid: true,
+      idempotent: false,
+      referralId,
+      syncRunId,
+      contractPk,
+      invoicePk,
+      brbyteClientPk: clientPk,
+      message:
+        "Primeira mensalidade confirmada no ERP. Registro sem recompensa (pré-cadastro).",
+      durationMs: Date.now() - started,
+    }
+  }
 
   const rewardEnsure = await ensureRewardForReferral(referral)
   if (!rewardEnsure.ok) {

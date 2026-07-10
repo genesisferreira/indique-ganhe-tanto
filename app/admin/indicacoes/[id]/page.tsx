@@ -49,7 +49,14 @@ import { ArrowLeft, Calendar, Mail, Phone, User } from "lucide-react"
 import { ReferralInterestedFields } from "@/components/referral/referral-interested-fields"
 import { ReferralRegistrationAcknowledgements } from "@/components/referral/referral-registration-acknowledgements"
 import { BrbyteCreateInterestCard } from "@/components/admin/brbyte-create-interest-card"
+import { Badge } from "@/components/ui/badge"
 import { getReferralContractTypeLabel } from "@/lib/referral-contract-type"
+import {
+  getPreferredInstallationPeriodLabel,
+  getPreferredContactPeriodLabel,
+  getPhoneHasWhatsappLabel,
+} from "@/lib/public-pre-registration/observation"
+import { isPublicPreRegistrationReferral } from "@/lib/referral-reward-eligibility"
 
 const STATUS_OPTIONS: IndicacaoStatus[] = [
   "pendente",
@@ -295,10 +302,17 @@ export default function AdminIndicacaoDetalhePage({
     commercialProfileId: indicacao.comercialId ?? null,
   })
 
+  const isPublicPreReg = isPublicPreRegistrationReferral({
+    source: indicacao.source,
+    erp_lead_source: indicacao.erpLeadSource,
+  })
+
   const showFirstInvoiceButton =
     !isDataProviderMock() &&
     canConfirmFirstInvoiceAction &&
-    !indicacao.primeiraFaturaPaga
+    !indicacao.primeiraFaturaPaga &&
+    !isPublicPreReg &&
+    indicacao.rewardEligible !== false
 
   return (
     <div className="space-y-6">
@@ -314,7 +328,11 @@ export default function AdminIndicacaoDetalhePage({
       <PageHeader
         title={indicacao.nomeIndicado}
         description={`Indicação #${indicacao.id.slice(0, 8)}…`}
-      />
+      >
+        {isPublicPreReg ? (
+          <Badge variant="secondary">Pré-cadastro Web</Badge>
+        ) : null}
+      </PageHeader>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
@@ -372,8 +390,83 @@ export default function AdminIndicacaoDetalhePage({
             </div>
             <div>
               <p className="text-muted-foreground">Indicador</p>
-              <p>{indicacao.indicador?.nome ?? "—"}</p>
+              <p>
+                {isPublicPreReg
+                  ? "Captação direta"
+                  : indicacao.indicador?.nome ?? "—"}
+              </p>
             </div>
+            {isPublicPreReg ? (
+              <>
+                <div>
+                  <p className="text-muted-foreground">Origem</p>
+                  <p>Pré-cadastro Web</p>
+                </div>
+                {indicacao.sourcePage ? (
+                  <div>
+                    <p className="text-muted-foreground">Página de origem</p>
+                    <p>{indicacao.sourcePage}</p>
+                  </div>
+                ) : null}
+                {indicacao.phoneHasWhatsapp !== undefined ? (
+                  <div>
+                    <p className="text-muted-foreground">WhatsApp</p>
+                    <p>
+                      {getPhoneHasWhatsappLabel(indicacao.phoneHasWhatsapp)}
+                    </p>
+                  </div>
+                ) : null}
+                {indicacao.preferredInstallationPeriod ? (
+                  <div>
+                    <p className="text-muted-foreground">
+                      Melhor período para instalação
+                    </p>
+                    <p>
+                      {getPreferredInstallationPeriodLabel(
+                        indicacao.preferredInstallationPeriod
+                      )}
+                    </p>
+                  </div>
+                ) : null}
+                {indicacao.preferredContactPeriod ? (
+                  <div>
+                    <p className="text-muted-foreground">
+                      Melhor horário para contato
+                    </p>
+                    <p>
+                      {getPreferredContactPeriodLabel(
+                        indicacao.preferredContactPeriod
+                      )}
+                    </p>
+                  </div>
+                ) : null}
+                {indicacao.publicPreRegistrationAt ? (
+                  <div>
+                    <p className="text-muted-foreground">Pré-cadastro em</p>
+                    <p>
+                      {indicacao.publicPreRegistrationAt.toLocaleString("pt-BR")}
+                    </p>
+                  </div>
+                ) : null}
+                {indicacao.utmSource ||
+                indicacao.utmCampaign ||
+                indicacao.refCode ? (
+                  <div>
+                    <p className="text-muted-foreground">Campanha / UTM</p>
+                    <p className="text-xs break-all">
+                      {[
+                        indicacao.utmSource,
+                        indicacao.utmMedium,
+                        indicacao.utmCampaign,
+                        indicacao.refCode,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
             <div>
               <p className="text-muted-foreground">Comercial</p>
               <p>{indicacao.comercial?.nome ?? "Não atribuído"}</p>

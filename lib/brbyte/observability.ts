@@ -17,13 +17,15 @@ export const BRBYTE_RELEVANT_ERROR_PHASES = new Set<string>([
   "reset_manual",
 ])
 
-export const BRBYTE_RELEVANT_ACTIVITY_PHASES = new Set<string>([
+/** Fases exibidas no resumo principal do dashboard (sem legado). */
+export const BRBYTE_DASHBOARD_SUMMARY_PHASES = new Set<string>([
   "create_interest",
   "check_conversion",
   "check_first_invoice",
   "reset_manual",
-  "release_reward",
 ])
+
+export const BRBYTE_RELEVANT_ACTIVITY_PHASES = BRBYTE_DASHBOARD_SUMMARY_PHASES
 
 export const BRBYTE_DEPRECATED_ENDPOINT_MARKERS = [
   "/controllrctl/client_interest/convert",
@@ -35,13 +37,13 @@ export const BRBYTE_DASHBOARD_STATUS_ORDER: {
   key: BrbyteSyncStatus
   label: string
 }[] = [
-  { key: "pending", label: "Pendentes" },
+  { key: "pending", label: "Pendente" },
   { key: "created", label: "Interessado criado" },
   { key: "converted", label: "Cliente convertido" },
   { key: "waiting_contract", label: "Aguardando contrato" },
   { key: "waiting_invoice", label: "Aguardando primeira mensalidade" },
   { key: "paid_confirmed", label: "Primeira mensalidade paga" },
-  { key: "completed", label: "Concluído" },
+  { key: "completed", label: "Concluído / crédito liberado" },
   { key: "error", label: "Erro" },
   { key: "retry", label: "Nova tentativa pendente" },
 ]
@@ -59,7 +61,8 @@ export type BrbyteFirstInvoicePipeline = {
   contractLocated: number
   firstInvoiceLocated: number
   firstInvoicePaid: number
-  rewardReleased: number
+  rewardReserved: number
+  creditReleased: number
 }
 
 export type BrbyteReferralObservabilityInput = {
@@ -75,8 +78,10 @@ export type BrbyteReferralObservabilityInput = {
   brbyteFirstInvoicePayload?: Record<string, unknown> | null
   brbyteLastSyncAt?: string | null
   firstInvoicePaid?: boolean
-  rewardReleased?: boolean
+  rewardReserved?: boolean
+  creditReleased?: boolean
   rewardId?: string | null
+  walletTransactionId?: string | null
 }
 
 export type BrbyteTimelineStepState = "pending" | "done" | "error"
@@ -128,7 +133,7 @@ export function getBrbytePhaseLabel(phase: string | null | undefined): string {
     case "reset_manual":
       return "Reset manual"
     case "release_reward":
-      return "Liberação de recompensa"
+      return "Crédito liberado ao indicador"
     case "find_invoice":
       return "Consulta de faturas"
     case "convert_interest":
@@ -218,7 +223,7 @@ export function formatBrbyteFriendlyMessage(
     lower.includes("já havia sido liberada") ||
     lower.includes("idempotente")
   ) {
-    return "Recompensa já havia sido liberada anteriormente."
+    return "Crédito já havia sido liberado anteriormente."
   }
 
   if (lower.includes("ainda não convertido")) {
@@ -236,6 +241,7 @@ export function buildBrbyteTimeline(
   input: BrbyteReferralObservabilityInput
 ): BrbyteTimelineStep[] {
   const syncStatus = input.brbyteSyncStatus ?? "pending"
+  const isPendingFlow = syncStatus === "pending"
   const hasError = syncStatus === "error"
   const invoiceFields = extractInvoiceFieldsFromPayload(
     input.brbyteFirstInvoicePayload
@@ -248,12 +254,18 @@ export function buildBrbyteTimeline(
   const invoicePaid = Boolean(
     input.firstInvoicePaid || input.brbyteFirstInvoicePaidAt
   )
-  const rewardDone = Boolean(input.rewardReleased || input.firstInvoicePaid)
+  const creditReleased = Boolean(
+    input.creditReleased ?? input.walletTransactionId
+  )
+  const rewardReserved = Boolean(
+    input.rewardReserved ?? (input.rewardId && !creditReleased)
+  )
 
   const stepState = (
     done: boolean,
     isErrorStep = false
   ): BrbyteTimelineStepState => {
+    if (isPendingFlow) return "pending"
     if (done) return "done"
     if (hasError && isErrorStep) return "error"
     return "pending"
@@ -313,14 +325,24 @@ export function buildBrbyteTimeline(
         : "Primeira mensalidade encontrada, aguardando baixa/pagamento no ERP.",
     },
     {
-      id: "reward_released",
-      label: "Recompensa liberada",
-      state: stepState(rewardDone, invoicePaid && !rewardDone),
-      date: input.brbyteFirstInvoicePaidAt ?? null,
+      id: "reward_reserved",
+      label: "Recompensa reservada",
+      state: stepState(rewardReserved, invoicePaid && !rewardReserved),
+      date: rewardReserved ? input.brbyteFirstInvoicePaidAt ?? null : null,
       entityId: input.rewardId ?? null,
-      hint: rewardDone
-        ? "Recompensa liberada no CRM (idempotente)."
-        : "Aguardando liberação após confirmação da primeira mensalidade.",
+      hint: rewardReserved
+        ? "Recompensa registrada no CRM; crédito na carteira ainda pendente."
+        : "Aguardando criação da recompensa após confirmação da mensalidade.",
+    },
+    {
+      id: "credit_released",
+      label: "Crédito liberado ao indicador",
+      state: stepState(creditReleased, rewardReserved && !creditReleased),
+      date: creditReleased ? input.brbyteFirstInvoicePaidAt ?? null : null,
+      entityId: input.walletTransactionId ?? null,
+      hint: creditReleased
+        ? "Crédito disponível na carteira do indicador."
+        : "Aguardando liberação do crédito na carteira do indicador.",
     },
   ]
 }
@@ -344,7 +366,8 @@ export function accumulateFirstInvoicePipeline(
     brbyte_contract_pk: string | null
     brbyte_first_invoice_pk: string | null
     brbyte_first_invoice_paid_at: string | null
-    reward_released?: boolean | null
+    has_reward?: boolean | null
+    credit_released?: boolean | null
   },
   acc: BrbyteFirstInvoicePipeline
 ): void {
@@ -354,7 +377,8 @@ export function accumulateFirstInvoicePipeline(
   const invoicePaid = Boolean(
     row.first_invoice_paid || row.brbyte_first_invoice_paid_at
   )
-  const rewardReleased = Boolean(row.reward_released)
+  const hasReward = Boolean(row.has_reward)
+  const creditReleased = Boolean(row.credit_released)
 
   if (
     !hasContract &&
@@ -373,12 +397,16 @@ export function accumulateFirstInvoicePipeline(
     acc.firstInvoiceLocated += 1
   }
 
-  if (invoicePaid && !rewardReleased) {
+  if (invoicePaid) {
     acc.firstInvoicePaid += 1
   }
 
-  if (rewardReleased) {
-    acc.rewardReleased += 1
+  if (hasReward && !creditReleased) {
+    acc.rewardReserved += 1
+  }
+
+  if (creditReleased) {
+    acc.creditReleased += 1
   }
 }
 
@@ -425,8 +453,35 @@ export function emptyFirstInvoicePipeline(): BrbyteFirstInvoicePipeline {
     contractLocated: 0,
     firstInvoiceLocated: 0,
     firstInvoicePaid: 0,
-    rewardReleased: 0,
+    rewardReserved: 0,
+    creditReleased: 0,
   }
+}
+
+export type BrbyteConnectionStatus = {
+  /** Última operação BRByte atual teve sucesso (HTTP 2xx, sem erro). */
+  connected: boolean
+  /** Houve tentativa válida nas fases atuais hoje. */
+  testedToday: boolean
+  lastSuccessAt: string | null
+}
+
+export function resolveBrbyteConnectionStatus(input: {
+  todayAttempts: number
+  lastSuccessfulActivityAt: string | null
+}): BrbyteConnectionStatus {
+  const testedToday = input.todayAttempts > 0
+  const connected = Boolean(input.lastSuccessfulActivityAt)
+  return {
+    connected,
+    testedToday,
+    lastSuccessAt: input.lastSuccessfulActivityAt,
+  }
+}
+
+export function isBrbyteSummaryPhase(phase: string | null | undefined): boolean {
+  if (!phase) return false
+  return BRBYTE_DASHBOARD_SUMMARY_PHASES.has(phase)
 }
 
 export type BrbyteLastActivity = {

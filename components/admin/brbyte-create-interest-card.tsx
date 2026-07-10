@@ -56,7 +56,8 @@ type BrbyteMeta = {
   invoiceMsg: string | null
   invoiceDateCredit: string | null
   firstInvoicePaid: boolean
-  rewardReleased: boolean
+  creditReleased: boolean
+  rewardReserved: boolean
   rewardId: string | null
   walletTransactionId: string | null
 }
@@ -125,7 +126,8 @@ export function BrbyteCreateInterestCard({
         invoiceMsg?: string | null
         invoiceDateCredit?: string | null
         firstInvoicePaid?: boolean
-        rewardReleased?: boolean
+        creditReleased?: boolean
+        rewardReserved?: boolean
         rewardId?: string | null
         walletTransactionId?: string | null
       }
@@ -158,7 +160,8 @@ export function BrbyteCreateInterestCard({
         invoiceMsg: data.invoiceMsg ?? null,
         invoiceDateCredit: data.invoiceDateCredit ?? null,
         firstInvoicePaid: Boolean(data.firstInvoicePaid),
-        rewardReleased: Boolean(data.rewardReleased),
+        creditReleased: Boolean(data.creditReleased),
+        rewardReserved: Boolean(data.rewardReserved),
         rewardId: data.rewardId ?? null,
         walletTransactionId: data.walletTransactionId ?? null,
       })
@@ -176,8 +179,15 @@ export function BrbyteCreateInterestCard({
   const syncAttempts = meta?.brbyteSyncAttempts ?? indicacao.brbyteSyncAttempts ?? 0
   const syncError = meta?.brbyteSyncError ?? indicacao.brbyteSyncError ?? null
   const firstInvoicePaid =
-    meta?.firstInvoicePaid ?? indicacao.primeiraFaturaPaga ?? false
-  const rewardReleased = meta?.rewardReleased ?? firstInvoicePaid
+    meta?.firstInvoicePaid ??
+    indicacao.primeiraFaturaPaga ??
+    Boolean(indicacao.brbyteFirstInvoicePaidAt)
+  const creditReleased = Boolean(
+    meta?.creditReleased ?? meta?.walletTransactionId
+  )
+  const rewardReserved = Boolean(
+    meta?.rewardReserved ?? (meta?.rewardId && !creditReleased)
+  )
   const flowFinalized = isBrbyteFlowFinalized({
     firstInvoicePaid,
     brbyteSyncStatus: syncStatus,
@@ -212,10 +222,12 @@ export function BrbyteCreateInterestCard({
           indicacao.brbyteInteressadoLastSyncAt?.toISOString() ??
           null,
         firstInvoicePaid,
-        rewardReleased,
+        creditReleased,
+        rewardReserved,
         rewardId: meta?.rewardId ?? null,
+        walletTransactionId: meta?.walletTransactionId ?? null,
       }),
-    [meta, indicacao, syncStatus, syncError, firstInvoicePaid, rewardReleased]
+    [meta, indicacao, syncStatus, syncError, firstInvoicePaid, creditReleased, rewardReserved]
   )
 
   if (!canMutate) return null
@@ -330,7 +342,7 @@ export function BrbyteCreateInterestCard({
           formatApiMessage(
             data.message,
             data.idempotent
-              ? "Recompensa já havia sido liberada anteriormente."
+              ? "Crédito já havia sido liberado anteriormente."
               : "Primeira mensalidade paga confirmada no ERP."
           )
         )
@@ -457,9 +469,11 @@ export function BrbyteCreateInterestCard({
             <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5 shrink-0" />
             <div>
               <p className="font-medium text-emerald-700 dark:text-emerald-400">
-                {rewardReleased
-                  ? "Recompensa liberada"
-                  : "Primeira mensalidade confirmada"}
+                {creditReleased
+                  ? "Crédito liberado ao indicador"
+                  : rewardReserved
+                    ? "Recompensa reservada"
+                    : "Primeira mensalidade confirmada"}
               </p>
               <p className="text-muted-foreground text-xs mt-1">
                 Fluxo BRByte concluído para esta indicação. Não há mais ações
@@ -528,14 +542,18 @@ export function BrbyteCreateInterestCard({
               <span className="text-muted-foreground">Invoice date credit:</span>{" "}
               {meta?.invoiceDateCredit ?? "—"}
             </p>
-            <p>
-              <span className="text-muted-foreground">Reward ID:</span>{" "}
-              {meta?.rewardId ?? "—"}
-            </p>
-            <p>
-              <span className="text-muted-foreground">Wallet transaction:</span>{" "}
-              {meta?.walletTransactionId ?? "—"}
-            </p>
+            {meta?.rewardId ? (
+              <p>
+                <span className="text-muted-foreground">Reward ID:</span>{" "}
+                {meta.rewardId}
+              </p>
+            ) : null}
+            {meta?.walletTransactionId ? (
+              <p>
+                <span className="text-muted-foreground">Wallet transaction:</span>{" "}
+                {meta.walletTransactionId}
+              </p>
+            ) : null}
             <p>
               <span className="text-muted-foreground">Último sync:</span>{" "}
               {meta?.brbyteLastSyncAt

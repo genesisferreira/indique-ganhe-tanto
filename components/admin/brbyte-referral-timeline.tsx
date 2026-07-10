@@ -42,7 +42,12 @@ export function BrbyteReferralTimeline({ steps }: BrbyteReferralTimelineProps) {
             </p>
             {step.entityId ? (
               <p className="text-xs text-muted-foreground break-all">
-                ID: {step.entityId}
+                {step.id === "reward_reserved"
+                  ? "Reward ID"
+                  : step.id === "credit_released"
+                    ? "Transação"
+                    : "ID"}
+                : {step.entityId}
               </p>
             ) : null}
             {step.date ? (

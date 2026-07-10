@@ -13,8 +13,6 @@ import {
 import { createClient } from "@/lib/supabase/server"
 import { normalizeBrbyteSyncStatus } from "@/types/referral"
 
-const RELEASED_REWARD_STATUSES = new Set(["disponivel", "solicitado", "pago"])
-
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
@@ -100,9 +98,6 @@ export async function GET(request: NextRequest) {
     | { id?: string; status?: string }
     | undefined
   const rewardId = primaryReward?.id ?? null
-  const rewardReleased = primaryReward
-    ? RELEASED_REWARD_STATUSES.has(String(primaryReward.status ?? ""))
-    : false
 
   let walletTransactionId: string | null = null
   if (rewardId) {
@@ -116,6 +111,9 @@ export async function GET(request: NextRequest) {
     walletTransactionId =
       (walletRows?.[0] as { id?: string } | undefined)?.id ?? null
   }
+
+  const creditReleased = Boolean(walletTransactionId)
+  const rewardReserved = Boolean(rewardId) && !creditReleased
 
   const invoicePayload =
     referralRow?.brbyte_first_invoice_payload &&
@@ -145,8 +143,11 @@ export async function GET(request: NextRequest) {
     brbyteFirstInvoicePayload: invoicePayload,
     invoiceMsg: invoiceFields.invoiceMsg,
     invoiceDateCredit: invoiceFields.invoiceDateCredit,
-    firstInvoicePaid: Boolean(referralRow?.first_invoice_paid),
-    rewardReleased,
+    firstInvoicePaid: Boolean(
+      referralRow?.first_invoice_paid || referralRow?.brbyte_first_invoice_paid_at
+    ),
+    creditReleased,
+    rewardReserved,
     rewardId,
     walletTransactionId,
     brbyteSyncStatus: syncStatus,

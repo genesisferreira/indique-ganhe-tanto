@@ -186,7 +186,7 @@ export default function MinhasIndicacoesPage() {
                     </td>
                     <td className="px-4 py-3 text-sm font-medium text-foreground">
                       R${" "}
-                      {indicacao.valorRecompensa.toLocaleString("pt-BR", {
+                      {(indicacao.valorRecompensa ?? 0).toLocaleString("pt-BR", {
                         minimumFractionDigits: 2,
                       })}
                     </td>

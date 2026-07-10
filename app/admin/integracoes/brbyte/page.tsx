@@ -71,6 +71,11 @@ type DashboardPayload = {
     createdAt: string
     isError: boolean
   } | null
+  connection: {
+    connected: boolean
+    testedToday: boolean
+    lastSuccessAt: string | null
+  }
   today: {
     attempts: number
     successes: number
@@ -82,7 +87,8 @@ type DashboardPayload = {
     contractLocated: number
     firstInvoiceLocated: number
     firstInvoicePaid: number
-    rewardReleased: number
+    rewardReserved: number
+    creditReleased: number
   }
 }
 
@@ -106,6 +112,11 @@ function buildEmptyDashboard(): DashboardPayload {
     lastActivity: null,
     lastCreateInterest: null,
     lastError: null,
+    connection: {
+      connected: false,
+      testedToday: false,
+      lastSuccessAt: null,
+    },
     today: {
       attempts: 0,
       successes: 0,
@@ -129,7 +140,8 @@ function buildEmptyDashboard(): DashboardPayload {
       contractLocated: 0,
       firstInvoiceLocated: 0,
       firstInvoicePaid: 0,
-      rewardReleased: 0,
+      rewardReserved: 0,
+      creditReleased: 0,
     },
   }
 }
@@ -318,6 +330,28 @@ export default function AdminBrbyteIntegracaoPage() {
     Boolean(dashboard.lastError)
   const showEmptyMessage = !loading && !hasAnyHistory && !dashboardError
 
+  const connectionTestedToday =
+    dashboard.connection.testedToday ||
+    (healthResult
+      ? new Date(healthResult.executedAt).toDateString() ===
+        new Date().toDateString()
+      : false)
+  const connectionConnected =
+    healthResult?.ok === true || dashboard.connection.connected
+
+  const syncSummary = dashboard.lastActivity ?? (
+    dashboard.lastSyncRun
+      ? {
+          phaseLabel: dashboard.lastSyncRun.phaseLabel,
+          createdAt: dashboard.lastSyncRun.startedAt,
+          referralId: dashboard.lastSyncRun.referralId,
+          httpStatus: null,
+          message: null,
+          isError: dashboard.lastSyncRun.errorsCount > 0,
+        }
+      : null
+  )
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -396,10 +430,14 @@ export default function AdminBrbyteIntegracaoPage() {
             <CardTitle className="text-sm font-medium">Status da conexão</CardTitle>
           </CardHeader>
           <CardContent className="text-sm">
-            {healthResult ? (
-              <span>{healthResult.ok ? "Conectado" : "Falha no teste"}</span>
+            {connectionConnected ? (
+              <span className="text-emerald-600">Conectado</span>
+            ) : connectionTestedToday ? (
+              <span className="text-destructive">Falha na conexão</span>
             ) : (
-              <span className="text-muted-foreground">Conexão ainda não testada.</span>
+              <span className="text-muted-foreground">
+                Conexão ainda não testada.
+              </span>
             )}
           </CardContent>
         </Card>
@@ -437,6 +475,38 @@ export default function AdminBrbyteIntegracaoPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
+            {syncSummary ? (
+              <div className="rounded-lg border border-border p-3">
+                <p className="font-medium">Última atividade relevante</p>
+                <p className="text-muted-foreground text-xs mt-1">
+                  {new Date(syncSummary.createdAt).toLocaleString("pt-BR")}
+                  {"httpStatus" in syncSummary &&
+                  syncSummary.httpStatus !== null
+                    ? ` · HTTP ${syncSummary.httpStatus}`
+                    : ""}
+                </p>
+                <p className="mt-1">{syncSummary.phaseLabel}</p>
+                {"message" in syncSummary && syncSummary.message ? (
+                  <p className="text-muted-foreground mt-1">{syncSummary.message}</p>
+                ) : null}
+                {syncSummary.referralId ? (
+                  <p className="text-xs mt-1">
+                    referral{" "}
+                    <Link
+                      href={`/admin/indicacoes/${syncSummary.referralId}`}
+                      className="text-primary hover:underline"
+                    >
+                      {syncSummary.referralId.slice(0, 8)}…
+                    </Link>
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-muted-foreground">
+                Nenhuma atividade recente nas fases atuais.
+              </p>
+            )}
+
             {dashboard.lastSyncRun ? (
               <div>
                 <p className="font-medium">Último sync run</p>
@@ -462,39 +532,6 @@ export default function AdminBrbyteIntegracaoPage() {
                 {dashboard.lastSyncRun.errorsCount > 0 ? (
                   <p className="text-destructive text-xs mt-1">
                     {dashboard.lastSyncRun.errorsCount} erro(s) nesta execução
-                  </p>
-                ) : null}
-              </div>
-            ) : (
-              <p className="text-muted-foreground">
-                Nenhuma execução registrada ainda.
-              </p>
-            )}
-
-            {dashboard.lastActivity ? (
-              <div className="rounded-lg border border-border p-3">
-                <p className="font-medium">Última atividade</p>
-                <p className="text-muted-foreground text-xs mt-1">
-                  {new Date(dashboard.lastActivity.createdAt).toLocaleString("pt-BR")}
-                  {dashboard.lastActivity.httpStatus !== null
-                    ? ` · HTTP ${dashboard.lastActivity.httpStatus}`
-                    : ""}
-                </p>
-                <p className="mt-1">{dashboard.lastActivity.phaseLabel}</p>
-                {dashboard.lastActivity.message ? (
-                  <p className="text-muted-foreground mt-1">
-                    {dashboard.lastActivity.message}
-                  </p>
-                ) : null}
-                {dashboard.lastActivity.referralId ? (
-                  <p className="text-xs mt-1">
-                    referral{" "}
-                    <Link
-                      href={`/admin/indicacoes/${dashboard.lastActivity.referralId}`}
-                      className="text-primary hover:underline"
-                    >
-                      {dashboard.lastActivity.referralId.slice(0, 8)}…
-                    </Link>
                   </p>
                 ) : null}
               </div>
@@ -587,15 +624,23 @@ export default function AdminBrbyteIntegracaoPage() {
               </p>
             </div>
             <div className="rounded-lg border border-border p-3">
-              <p className="text-xs text-muted-foreground">Primeira fatura paga</p>
+              <p className="text-xs text-muted-foreground">
+                Primeira mensalidade paga
+              </p>
               <p className="text-2xl font-bold text-emerald-600">
                 {dashboard.firstInvoicePipeline.firstInvoicePaid}
               </p>
             </div>
             <div className="rounded-lg border border-border p-3">
-              <p className="text-xs text-muted-foreground">Recompensa liberada</p>
+              <p className="text-xs text-muted-foreground">Recompensa reservada</p>
+              <p className="text-2xl font-bold">
+                {dashboard.firstInvoicePipeline.rewardReserved}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs text-muted-foreground">Crédito liberado</p>
               <p className="text-2xl font-bold text-emerald-600">
-                {dashboard.firstInvoicePipeline.rewardReleased}
+                {dashboard.firstInvoicePipeline.creditReleased}
               </p>
             </div>
           </CardContent>

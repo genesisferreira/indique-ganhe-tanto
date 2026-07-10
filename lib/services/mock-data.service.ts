@@ -77,7 +77,9 @@ function buildIndicacoes(
 ): Indicacao[] {
   return indicacoesRaw.map((indicacao) => ({
     ...indicacao,
-    indicador: indicadoresMap.get(indicacao.indicadorId),
+    indicador: indicacao.indicadorId
+      ? indicadoresMap.get(indicacao.indicadorId)
+      : undefined,
     comercial: indicacao.comercialId ? comerciaisMap.get(indicacao.comercialId) : undefined,
     plano: planosMap.get(indicacao.planoId),
     dataAprovacao: toDate(indicacao.dataAprovacao),

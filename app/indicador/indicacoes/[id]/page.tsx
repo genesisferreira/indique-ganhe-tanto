@@ -382,7 +382,7 @@ export default function DetalheIndicacaoPage({
                 <span className="text-muted-foreground">Valor</span>
                 <span className="text-2xl font-bold text-primary">
                   R${" "}
-                  {indicacao.valorRecompensa.toLocaleString("pt-BR", {
+                  {(indicacao.valorRecompensa ?? 0).toLocaleString("pt-BR", {
                     minimumFractionDigits: 2,
                   })}
                 </span>

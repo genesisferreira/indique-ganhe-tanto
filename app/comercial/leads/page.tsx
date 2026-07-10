@@ -262,7 +262,7 @@ export default function LeadsPage() {
                     </span>
                     <span className="font-medium text-foreground text-right">
                       R${" "}
-                      {indicacao.valorRecompensa.toLocaleString("pt-BR", {
+                      {(indicacao.valorRecompensa ?? 0).toLocaleString("pt-BR", {
                         minimumFractionDigits: 2,
                       })}
                     </span>
