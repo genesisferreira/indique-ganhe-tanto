@@ -45,3 +45,13 @@ export const PUBLIC_PRE_REGISTRATION_ALLOWED_PLAN_NAMES = [
 export const PUBLIC_PRE_REGISTRATION_UTM_MAX_LENGTH = 120
 
 export const PUBLIC_PRE_REGISTRATION_DEFAULT_SOURCE_PAGE = "/pre-cadastro"
+
+export function getPublicPreRegistrationPlan500Id(): string | null {
+  const value = process.env.PUBLIC_PRE_REGISTRATION_PLAN_500_ID?.trim()
+  return value || null
+}
+
+export function getPublicPreRegistrationPlan1000Id(): string | null {
+  const value = process.env.PUBLIC_PRE_REGISTRATION_PLAN_1000_ID?.trim()
+  return value || null
+}

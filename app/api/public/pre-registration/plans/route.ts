@@ -13,11 +13,25 @@ export async function GET() {
     )
   }
 
-  const plans = await loadPublicPreRegistrationPlans()
+  const result = await loadPublicPreRegistrationPlans()
+
+  if (!result.ok) {
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          ok: false,
+          error: result.error,
+          plans: [],
+        },
+        { status: 503 }
+      )
+    )
+  }
+
   return applyNoStoreHeaders(
     NextResponse.json({
       ok: true,
-      plans: plans.map((p) => ({
+      plans: result.plans.map((p) => ({
         id: p.id,
         name: p.name,
         speedLabel: p.speedLabel,
