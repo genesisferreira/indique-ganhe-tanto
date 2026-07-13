@@ -375,9 +375,28 @@ export default function AdminIndicacaoDetalhePage({
               <StatusBadge status={indicacao.status} />
             </div>
             <div>
-              <p className="text-muted-foreground">Plano</p>
-              <p>{indicacao.plano?.nome ?? "—"}</p>
+              <p className="text-muted-foreground">
+                {isPublicPreReg && indicacao.publicOfferName
+                  ? "Oferta escolhida"
+                  : "Plano"}
+              </p>
+              <p>
+                {isPublicPreReg && indicacao.publicOfferName
+                  ? indicacao.publicOfferName
+                  : (indicacao.plano?.nome ?? "—")}
+              </p>
             </div>
+            {isPublicPreReg && indicacao.publicOfferPrice != null ? (
+              <div>
+                <p className="text-muted-foreground">Valor informado</p>
+                <p>
+                  {indicacao.publicOfferPrice.toLocaleString("pt-BR", {
+                    style: "currency",
+                    currency: "BRL",
+                  })}
+                </p>
+              </div>
+            ) : null}
             <div>
               <p className="text-muted-foreground">Tipo de contratação</p>
               <p>
@@ -438,6 +457,12 @@ export default function AdminIndicacaoDetalhePage({
                         indicacao.preferredContactPeriod
                       )}
                     </p>
+                  </div>
+                ) : null}
+                {indicacao.brbyteSyncStatus ? (
+                  <div>
+                    <p className="text-muted-foreground">Status BRByte</p>
+                    <p>{indicacao.brbyteSyncStatus}</p>
                   </div>
                 ) : null}
                 {indicacao.publicPreRegistrationAt ? (

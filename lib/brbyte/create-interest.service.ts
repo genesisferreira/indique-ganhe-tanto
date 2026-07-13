@@ -29,6 +29,11 @@ import { logBrbyteReferralHistory } from "@/lib/brbyte/referral-history"
 import { splitPersonName } from "@/lib/brbyte/split-name"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { isReferralContractType } from "@/lib/referral-contract-type"
+import { getPublicPreRegistrationDefaultBrbytePlanPk } from "@/lib/public-pre-registration/config"
+import {
+  formatPublicOfferPrice,
+  getPublicPreRegistrationOfferByCode,
+} from "@/lib/public-pre-registration/offers"
 import {
   BRBYTE_API_PATHS,
   type BrbyteCreateInterestResult,
@@ -73,6 +78,9 @@ type ReferralCreateInterestRow = {
   preferred_contact_period: string | null
   phone_has_whatsapp: boolean | null
   source_page: string | null
+  public_offer_code: string | null
+  public_offer_name: string | null
+  public_offer_price: number | string | null
   utm_source: string | null
   utm_medium: string | null
   utm_campaign: string | null
@@ -275,6 +283,9 @@ async function loadReferralForCreateInterest(
       preferred_contact_period,
       phone_has_whatsapp,
       source_page,
+      public_offer_code,
+      public_offer_name,
+      public_offer_price,
       utm_source,
       utm_medium,
       utm_campaign,
@@ -323,12 +334,26 @@ function buildCreateInterestForm(
     erp_lead_source: row.erp_lead_source,
   })
 
+  const catalogOffer = getPublicPreRegistrationOfferByCode(row.public_offer_code)
+  const offerName =
+    row.public_offer_name?.trim() ||
+    catalogOffer?.name ||
+    planoNome ||
+    "Não informado"
+  const offerPriceLabel =
+    catalogOffer?.displayPrice ||
+    formatPublicOfferPrice(
+      row.public_offer_price != null ? Number(row.public_offer_price) : null
+    ) ||
+    "Não informado"
+
   const interestObsBuild = isPublic
     ? buildPublicPreRegistrationObservation({
         preferredInstallationPeriod:
           (row.preferred_installation_period as PreferredInstallationPeriod) ??
           "no_preference",
-        planoNome: planoNome ?? "Não informado",
+        offerName,
+        offerPriceLabel,
         phoneHasWhatsapp: row.phone_has_whatsapp === true,
         preferredContactPeriod:
           (row.preferred_contact_period as PreferredContactPeriod) ?? null,
@@ -695,17 +720,42 @@ export async function createBrbyteInterestFromReferral(input: {
   }
 
   const { name: planName, code: planCode } = planFieldsFromRow(row)
-  const planResolution = await resolveBrbytePlanPkForReferral(
-    {
-      planId: row.plan_id,
-      planCode,
-      planName,
-    },
-    config
-  )
+  const isPublicRow = isPublicPreRegistrationReferral({
+    source: row.source,
+    erp_lead_source: row.erp_lead_source,
+  })
 
-  if (!planResolution.ok) {
-    const message = planResolution.message
+  let planPk: string | null = null
+  let planResolutionMessage: string | null = null
+  let planPkSource: string = "plan_mapping"
+
+  if (isPublicRow) {
+    planPk = getPublicPreRegistrationDefaultBrbytePlanPk()
+    planPkSource = "public_default_plan_pk"
+    if (!planPk) {
+      planResolutionMessage =
+        "PUBLIC_PRE_REGISTRATION_DEFAULT_BRBYTE_PLAN_PK não configurado"
+    }
+  } else {
+    const planResolution = await resolveBrbytePlanPkForReferral(
+      {
+        planId: row.plan_id,
+        planCode,
+        planName,
+      },
+      config
+    )
+    if (planResolution.ok) {
+      planPk = planResolution.planPk
+      planPkSource = planResolution.source
+    } else {
+      planResolutionMessage = planResolution.message
+    }
+  }
+
+  if (!planPk) {
+    const message =
+      planResolutionMessage ?? "Plano Controllr não configurado."
     const oldStatus = normalizeBrbyteSyncStatus(row.brbyte_sync_status)
     await persistReferralSyncState(referralId, currentAttempts, {
       brbyteSyncStatus: "error",
@@ -720,7 +770,7 @@ export async function createBrbyteInterestFromReferral(input: {
       newStatus: "error",
       endpoint: BRBYTE_API_PATHS.createClientInterest,
       message,
-      payload: { reason: "plan_mapping" },
+      payload: { reason: isPublicRow ? "public_default_plan_pk" : "plan_mapping" },
       createdBy: input.actorUserId ?? null,
     })
     await finishSyncRun(syncRunId, {
@@ -801,7 +851,7 @@ export async function createBrbyteInterestFromReferral(input: {
     }
   }
 
-  const form = buildCreateInterestForm(row, config, planResolution.planPk)
+  const form = buildCreateInterestForm(row, config, planPk)
   const apiResult = await brbyteAdminPostForm(
     config,
     login.cookie,
@@ -962,7 +1012,7 @@ export async function createBrbyteInterestFromReferral(input: {
     planPk: resolution.planPk,
     payload: buildInterestPayload({
       resolution,
-      planPkSource: planResolution.source,
+      planPkSource,
       syncRunId,
       request: form,
       response: payload,
@@ -1025,7 +1075,7 @@ export async function createBrbyteInterestFromReferral(input: {
     message: "Interessado criado no Controllr com sucesso.",
     payload: {
       brbyte_id_interessado: brbyteId,
-      plan_pk_source: planResolution.source,
+      plan_pk_source: planPkSource,
       sync_run_id: syncRunId,
     },
     createdBy: input.actorUserId ?? null,
@@ -1053,7 +1103,7 @@ export async function createBrbyteInterestFromReferral(input: {
     brbyteIdInteressado: brbyteId,
     resolutionSource: resolution.source,
     syncRunId,
-    planPkSource: planResolution.source,
+    planPkSource,
   })
 
   return {

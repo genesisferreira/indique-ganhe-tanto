@@ -12,6 +12,10 @@ import {
 import type { PreferredInstallationPeriod } from "@/types/referral"
 import type { PreferredContactPeriod } from "@/types/referral"
 import { PUBLIC_PRE_REGISTRATION_UTM_MAX_LENGTH } from "@/lib/public-pre-registration/config"
+import {
+  getPublicPreRegistrationOfferByCode,
+  type PublicPreRegistrationOffer,
+} from "@/lib/public-pre-registration/offers"
 
 export type { PreferredInstallationPeriod, PreferredContactPeriod }
 
@@ -29,7 +33,9 @@ export type PublicPreRegistrationPayload = {
   street: string
   number: string
   complement?: string | null
-  planId: string
+  /** Código da oferta do catálogo público (não é plans.id). */
+  offerCode: string
+  offer: PublicPreRegistrationOffer
   preferredInstallationPeriod: PreferredInstallationPeriod
   preferredContactPeriod?: PreferredContactPeriod | null
   clientObservation?: string | null
@@ -51,10 +57,10 @@ const INSTALL_PERIODS = new Set<PreferredInstallationPeriod>([
   "no_preference",
 ])
 
-const CONTACT_PERIODS = new Set<PreferredContactPeriod>([
+/** Novos cadastros — sem "evening" (Noite). */
+const CONTACT_PERIODS_NEW = new Set<string>([
   "morning",
   "afternoon",
-  "evening",
   "no_preference",
 ])
 
@@ -92,7 +98,7 @@ export function parsePublicPreRegistrationPayload(
   const neighborhood = sanitizeText(raw.neighborhood, 120)
   const street = sanitizeText(raw.street, 200)
   const number = sanitizeText(raw.number, 20)
-  const planId = sanitizeText(raw.planId, 64)
+  const offerCode = sanitizeText(raw.offerCode, 64)
   const period = String(raw.preferredInstallationPeriod ?? "").trim()
 
   if (!fullName || fullName.length < 3) {
@@ -122,9 +128,15 @@ export function parsePublicPreRegistrationPayload(
   if (!number) {
     return { ok: false, message: "Informe o número." }
   }
-  if (!planId) {
-    return { ok: false, message: "Selecione um plano." }
+  if (!offerCode) {
+    return { ok: false, message: "Selecione um plano ou serviço de interesse." }
   }
+
+  const offer = getPublicPreRegistrationOfferByCode(offerCode)
+  if (!offer) {
+    return { ok: false, message: "Oferta inválida ou indisponível." }
+  }
+
   if (!INSTALL_PERIODS.has(period as PreferredInstallationPeriod)) {
     return { ok: false, message: "Selecione o melhor período para instalação." }
   }
@@ -140,7 +152,7 @@ export function parsePublicPreRegistrationPayload(
   const contactPeriodRaw = String(raw.preferredContactPeriod ?? "").trim()
   let preferredContactPeriod: PreferredContactPeriod | null = null
   if (contactPeriodRaw) {
-    if (!CONTACT_PERIODS.has(contactPeriodRaw as PreferredContactPeriod)) {
+    if (!CONTACT_PERIODS_NEW.has(contactPeriodRaw)) {
       return {
         ok: false,
         message: "Selecione um horário de contato válido.",
@@ -179,7 +191,8 @@ export function parsePublicPreRegistrationPayload(
       street,
       number,
       complement: sanitizeText(raw.complement, 120),
-      planId,
+      offerCode: offer.code,
+      offer,
       preferredInstallationPeriod: period as PreferredInstallationPeriod,
       preferredContactPeriod,
       clientObservation: sanitizeText(raw.clientObservation, 500),

@@ -117,6 +117,9 @@ type ReferralRow = {
   preferred_contact_period?: string | null
   phone_has_whatsapp?: boolean | null
   source_page?: string | null
+  public_offer_code?: string | null
+  public_offer_name?: string | null
+  public_offer_price?: number | string | null
   public_pre_registration_at?: string | null
   utm_source?: string | null
   utm_medium?: string | null
@@ -195,6 +198,9 @@ function mapReferralPublicPreRegistrationFields(row: ReferralRow): Pick<
   | "preferredContactPeriod"
   | "phoneHasWhatsapp"
   | "sourcePage"
+  | "publicOfferCode"
+  | "publicOfferName"
+  | "publicOfferPrice"
   | "publicPreRegistrationAt"
   | "utmSource"
   | "utmMedium"
@@ -214,6 +220,11 @@ function mapReferralPublicPreRegistrationFields(row: ReferralRow): Pick<
     "evening",
     "no_preference",
   ])
+  const offerPriceRaw = row.public_offer_price
+  const offerPrice =
+    offerPriceRaw === null || offerPriceRaw === undefined
+      ? undefined
+      : Number(offerPriceRaw)
   return {
     source: row.source?.trim() || undefined,
     rewardEligible:
@@ -233,6 +244,12 @@ function mapReferralPublicPreRegistrationFields(row: ReferralRow): Pick<
         ? undefined
         : Boolean(row.phone_has_whatsapp),
     sourcePage: row.source_page?.trim() || undefined,
+    publicOfferCode: row.public_offer_code?.trim() || undefined,
+    publicOfferName: row.public_offer_name?.trim() || undefined,
+    publicOfferPrice:
+      offerPrice !== undefined && Number.isFinite(offerPrice)
+        ? offerPrice
+        : undefined,
     publicPreRegistrationAt: row.public_pre_registration_at
       ? new Date(row.public_pre_registration_at)
       : undefined,
@@ -2373,6 +2390,9 @@ const REFERRALS_LIST_SELECT_EXTENDED = `
         preferred_contact_period,
         phone_has_whatsapp,
         source_page,
+        public_offer_code,
+        public_offer_name,
+        public_offer_price,
         created_at,
         updated_at
       `
@@ -4516,6 +4536,9 @@ const REFERRAL_INTERESTED_FIELDS_SELECT = `
         preferred_contact_period,
         phone_has_whatsapp,
         source_page,
+        public_offer_code,
+        public_offer_name,
+        public_offer_price,
         public_pre_registration_at,
         utm_source,
         utm_medium,

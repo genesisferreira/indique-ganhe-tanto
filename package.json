@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test:public-plans": "npx tsx --test lib/public-pre-registration/plan-resolver.test.ts"
+    "test:public-plans": "npx tsx --test lib/public-pre-registration/plan-resolver.test.ts lib/public-pre-registration/offers.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

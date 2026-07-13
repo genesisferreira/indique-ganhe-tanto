@@ -90,6 +90,9 @@ export interface Indicacao {
   preferredContactPeriod?: PreferredContactPeriod
   phoneHasWhatsapp?: boolean
   sourcePage?: string
+  publicOfferCode?: string
+  publicOfferName?: string
+  publicOfferPrice?: number
   publicPreRegistrationAt?: Date
   utmSource?: string
   utmMedium?: string

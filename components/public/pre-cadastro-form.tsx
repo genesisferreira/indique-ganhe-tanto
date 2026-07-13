@@ -26,13 +26,15 @@ import {
   onlyDigits,
 } from "@/lib/client/formatters"
 import { fetchAddressByCEP } from "@/lib/client/viacep"
+import {
+  formatPublicOfferSelectLabel,
+  PUBLIC_PRE_REGISTRATION_OFFERS,
+} from "@/lib/public-pre-registration/offers"
 import type {
   PreferredInstallationPeriod,
   PreferredContactPeriod,
 } from "@/types/referral"
 import { CheckCircle2, Loader2, Zap } from "lucide-react"
-
-type PlanOption = { id: string; name: string; speedLabel: string | null }
 
 type FormState = "form" | "submitting" | "success"
 
@@ -45,13 +47,13 @@ const INSTALL_PERIOD_OPTIONS: {
   { value: "no_preference", label: "Sem preferência" },
 ]
 
+/** Novos cadastros — sem opção Noite (evening). */
 const CONTACT_PERIOD_OPTIONS: {
-  value: PreferredContactPeriod
+  value: Exclude<PreferredContactPeriod, "evening">
   label: string
 }[] = [
   { value: "morning", label: "Manhã" },
   { value: "afternoon", label: "Tarde" },
-  { value: "evening", label: "Noite" },
   { value: "no_preference", label: "Sem preferência" },
 ]
 
@@ -61,8 +63,6 @@ export function PreCadastroForm() {
 
   const [formState, setFormState] = useState<FormState>("form")
   const [successMessage, setSuccessMessage] = useState("")
-  const [planos, setPlanos] = useState<PlanOption[]>([])
-  const [plansLoading, setPlansLoading] = useState(true)
 
   const [nome, setNome] = useState("")
   const [telefone, setTelefone] = useState("")
@@ -77,7 +77,7 @@ export function PreCadastroForm() {
   const [endereco, setEndereco] = useState("")
   const [numero, setNumero] = useState("")
   const [complemento, setComplemento] = useState("")
-  const [selectedPlano, setSelectedPlano] = useState("")
+  const [selectedOfferCode, setSelectedOfferCode] = useState("")
   const [periodo, setPeriodo] = useState<PreferredInstallationPeriod | "">("")
   const [periodoContato, setPeriodoContato] = useState<
     PreferredContactPeriod | ""
@@ -112,7 +112,7 @@ export function PreCadastroForm() {
     setEndereco("")
     setNumero("")
     setComplemento("")
-    setSelectedPlano("")
+    setSelectedOfferCode("")
     setPeriodo("")
     setPeriodoContato("")
     setPossuiWhatsapp("")
@@ -134,27 +134,6 @@ export function PreCadastroForm() {
       ref: searchParams.get("ref"),
     })
   }, [searchParams])
-
-  useEffect(() => {
-    void (async () => {
-      setPlansLoading(true)
-      try {
-        const res = await fetch("/api/public/pre-registration/plans", {
-          cache: "no-store",
-        })
-        if (!res.ok) {
-          setPlanos([])
-          return
-        }
-        const data = (await res.json()) as {
-          plans?: PlanOption[]
-        }
-        setPlanos(data.plans ?? [])
-      } finally {
-        setPlansLoading(false)
-      }
-    })()
-  }, [])
 
   const cepDigits = onlyDigits(cep)
 
@@ -208,7 +187,9 @@ export function PreCadastroForm() {
     if (!bairro.trim()) return "Informe o bairro."
     if (!endereco.trim()) return "Informe o endereço."
     if (!numero.trim()) return "Informe o número."
-    if (!selectedPlano) return "Selecione um plano."
+    if (!selectedOfferCode) {
+      return "Selecione um plano ou serviço de interesse."
+    }
     if (!periodo) return "Selecione o melhor período para instalação."
     if (!possuiWhatsapp) {
       return "Informe se o número possui WhatsApp."
@@ -249,7 +230,7 @@ export function PreCadastroForm() {
           street: endereco.trim(),
           number: numero.trim(),
           complement: complemento.trim() || null,
-          planId: selectedPlano,
+          offerCode: selectedOfferCode,
           preferredInstallationPeriod: periodo,
           preferredContactPeriod: periodoContato || null,
           phoneHasWhatsapp: possuiWhatsapp === "true",
@@ -324,8 +305,8 @@ export function PreCadastroForm() {
         <div className="mb-8">
           <h2 className="text-2xl font-bold">Faça seu pré-cadastro</h2>
           <p className="text-muted-foreground mt-2">
-            Preencha seus dados para que nossa equipe verifique a disponibilidade
-            e entre em contato.
+            Estamos quase lá! Preencha seus dados para prosseguirmos com o seu
+            cadastro e agendar a sua instalação.
           </p>
         </div>
 
@@ -392,7 +373,7 @@ export function PreCadastroForm() {
                       setPossuiWhatsapp(v as "true" | "false")
                     }
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="w-full">
                       <SelectValue placeholder="Selecione" />
                     </SelectTrigger>
                     <SelectContent>
@@ -506,31 +487,30 @@ export function PreCadastroForm() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Plano *</Label>
+                <Label>Plano ou serviço de interesse *</Label>
                 <Select
-                  value={selectedPlano}
-                  onValueChange={setSelectedPlano}
-                  disabled={plansLoading || planos.length === 0}
+                  value={selectedOfferCode}
+                  onValueChange={setSelectedOfferCode}
                 >
-                  <SelectTrigger>
-                    <SelectValue
-                      placeholder={
-                        plansLoading
-                          ? "Carregando planos…"
-                          : planos.length === 0
-                            ? "Planos indisponíveis"
-                            : "Selecione o plano"
-                      }
-                    />
+                  <SelectTrigger className="w-full h-auto min-h-9 py-2">
+                    <SelectValue placeholder="Selecione uma opção" />
                   </SelectTrigger>
-                  <SelectContent>
-                    {planos.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.name}
+                  <SelectContent className="max-h-[min(20rem,var(--radix-select-content-available-height))]">
+                    {PUBLIC_PRE_REGISTRATION_OFFERS.map((offer) => (
+                      <SelectItem
+                        key={offer.code}
+                        value={offer.code}
+                        className="whitespace-normal py-2"
+                      >
+                        {formatPublicOfferSelectLabel(offer)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  Os valores e condições serão confirmados pela nossa equipe
+                  durante o atendimento.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label>Melhor período para instalação *</Label>
@@ -540,7 +520,7 @@ export function PreCadastroForm() {
                     setPeriodo(v as PreferredInstallationPeriod)
                   }
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Selecione o período" />
                   </SelectTrigger>
                   <SelectContent>
@@ -564,7 +544,7 @@ export function PreCadastroForm() {
                     setPeriodoContato(v as PreferredContactPeriod)
                   }
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Opcional" />
                   </SelectTrigger>
                   <SelectContent>

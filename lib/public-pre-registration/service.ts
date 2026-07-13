@@ -3,7 +3,9 @@ import "server-only"
 import { createBrbyteInterestFromReferral } from "@/lib/brbyte/create-interest.service"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import {
+  getPublicPreRegistrationBaseCrmPlanId,
   getPublicPreRegistrationDedupMinutes,
+  getPublicPreRegistrationDefaultBrbytePlanPk,
   isPublicPreRegistrationEnabled,
   PUBLIC_PRE_REGISTRATION_DEFAULT_SOURCE_PAGE,
 } from "@/lib/public-pre-registration/config"
@@ -11,7 +13,6 @@ import {
   buildPublicPreRegistrationObservation,
   summarizeUtmCampaign,
 } from "@/lib/public-pre-registration/observation"
-import { resolvePublicPreRegistrationPlan } from "@/lib/public-pre-registration/plans"
 import {
   normalizePublicPreRegistrationFields,
   type PublicPreRegistrationPayload,
@@ -32,7 +33,10 @@ type LooseQueryBuilder = {
   ) => LooseQueryBuilder
   limit: (n: number) => LooseQueryBuilder
   maybeSingle: () => Promise<{
-    data: { id: string; brbyte_sync_status: string | null } | null
+    data:
+      | { id: string; brbyte_sync_status: string | null }
+      | { id: string }
+      | null
     error: { message: string } | null
   }>
   single: () => Promise<{
@@ -42,7 +46,7 @@ type LooseQueryBuilder = {
 }
 
 type PublicPreRegistrationDb = {
-  from: (table: "referrals" | "audit_logs") => {
+  from: (table: "referrals" | "audit_logs" | "plans") => {
     insert: (
       row: Record<string, unknown>
     ) => {
@@ -101,7 +105,35 @@ async function findRecentDuplicate(
     .limit(1)
     .maybeSingle()
 
-  return data ?? null
+  return (data as { id: string; brbyte_sync_status: string | null } | null) ?? null
+}
+
+/**
+ * Resolve UUID técnico para referrals.plan_id (FK obrigatória).
+ * A oferta comercial fica em public_offer_* — não usa o catálogo do formulário.
+ */
+async function resolveBaseCrmPlanId(): Promise<string | null> {
+  const fromEnv = getPublicPreRegistrationBaseCrmPlanId()
+  if (fromEnv) return fromEnv
+
+  const supabase = getPublicPreRegistrationDb()
+  const { data, error } = await supabase
+    .from("plans")
+    .select("id")
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (error || !data || !("id" in data)) {
+    console.error(LOG_TAG, {
+      step: "resolve_base_crm_plan",
+      message: error?.message ?? "no_plan",
+    })
+    return null
+  }
+
+  return data.id
 }
 
 async function logPublicPreRegistrationAudit(
@@ -157,7 +189,18 @@ export async function submitPublicPreRegistration(
     }
   }
 
-  const planResolution = await resolvePublicPreRegistrationPlan(payload.planId)
+  const basePlanId = await resolveBaseCrmPlanId()
+  if (!basePlanId) {
+    console.error(LOG_TAG, {
+      step: "missing_base_crm_plan",
+      document: maskDocumentForLog(normalized.referred_document),
+    })
+    return {
+      ok: false,
+      message: "Pré-cadastro temporariamente indisponível. Tente novamente em breve.",
+    }
+  }
+
   const campaignSummary = summarizeUtmCampaign({
     utm_source: payload.utm_source,
     utm_medium: payload.utm_medium,
@@ -175,6 +218,8 @@ export async function submitPublicPreRegistration(
     options?.sourcePage ?? PUBLIC_PRE_REGISTRATION_DEFAULT_SOURCE_PAGE
   )
 
+  const brbytePlanPk = getPublicPreRegistrationDefaultBrbytePlanPk()
+
   const insertRow: Record<string, unknown> = {
     indicator_profile_id: null,
     ...normalized,
@@ -187,7 +232,10 @@ export async function submitPublicPreRegistration(
     ]
       .filter(Boolean)
       .join(", "),
-    plan_id: payload.planId,
+    plan_id: basePlanId,
+    public_offer_code: payload.offer.code,
+    public_offer_name: payload.offer.name,
+    public_offer_price: payload.offer.price,
     reward_type: null,
     reward_amount: null,
     status: "pendente",
@@ -236,7 +284,9 @@ export async function submitPublicPreRegistration(
   const referralId = inserted.id
 
   await logPublicPreRegistrationAudit(referralId, {
-    plan_id: payload.planId,
+    public_offer_code: payload.offer.code,
+    public_offer_name: payload.offer.name,
+    public_offer_price: payload.offer.price,
     preferred_installation_period: payload.preferredInstallationPeriod,
     preferred_contact_period: payload.preferredContactPeriod,
     phone_has_whatsapp: payload.phoneHasWhatsapp,
@@ -246,32 +296,10 @@ export async function submitPublicPreRegistration(
     utm_campaign: payload.utm_campaign,
   })
 
-  if (!planResolution.ok) {
-    await supabase
-      .from("referrals")
-      .update({
-        brbyte_sync_status: "error",
-        brbyte_sync_error: planResolution.message,
-        brbyte_last_error_at: nowIso,
-      })
-      .eq("id", referralId)
-
-    console.warn(LOG_TAG, {
-      step: "plan_mapping_failed",
-      referralId,
-      message: planResolution.message,
-    })
-
-    return {
-      ok: true,
-      message: SUCCESS_ERP_DEFERRED_MESSAGE,
-      referralId,
-    }
-  }
-
   const obsPreview = buildPublicPreRegistrationObservation({
     preferredInstallationPeriod: payload.preferredInstallationPeriod,
-    planoNome: planResolution.planName,
+    offerName: payload.offer.name,
+    offerPriceLabel: payload.offer.displayPrice,
     phoneHasWhatsapp: payload.phoneHasWhatsapp,
     preferredContactPeriod: payload.preferredContactPeriod,
     campaignSummary,
@@ -281,10 +309,34 @@ export async function submitPublicPreRegistration(
   console.log(LOG_TAG, {
     step: "submit",
     referralId,
-    plan: planResolution.planName,
+    offer: payload.offer.code,
     interest_obs_length: obsPreview.value.length,
     interest_obs_truncated: obsPreview.truncated,
+    has_brbyte_plan_pk: Boolean(brbytePlanPk),
   })
+
+  if (!brbytePlanPk) {
+    await supabase
+      .from("referrals")
+      .update({
+        brbyte_sync_status: "error",
+        brbyte_sync_error:
+          "PUBLIC_PRE_REGISTRATION_DEFAULT_BRBYTE_PLAN_PK não configurado",
+        brbyte_last_error_at: nowIso,
+      })
+      .eq("id", referralId)
+
+    console.warn(LOG_TAG, {
+      step: "missing_brbyte_plan_pk",
+      referralId,
+    })
+
+    return {
+      ok: true,
+      message: SUCCESS_ERP_DEFERRED_MESSAGE,
+      referralId,
+    }
+  }
 
   const brbyteResult = await createBrbyteInterestFromReferral({
     referralId,

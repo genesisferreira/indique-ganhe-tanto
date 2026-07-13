@@ -68,7 +68,10 @@ export function getBrbyteCreateInterestConfigForIntegration(): BrbyteCreateInter
   const defaultLeadPk = process.env.BRBYTE_DEFAULT_LEAD_PK?.trim() ?? ""
   const defaultInterestStatus =
     process.env.BRBYTE_DEFAULT_INTEREST_STATUS?.trim() ?? ""
-  const defaultPlanPk = process.env.BRBYTE_DEFAULT_PLAN_PK?.trim() ?? ""
+  const defaultPlanPk =
+    process.env.PUBLIC_PRE_REGISTRATION_DEFAULT_BRBYTE_PLAN_PK?.trim() ||
+    process.env.BRBYTE_DEFAULT_PLAN_PK?.trim() ||
+    ""
   const timeoutMs = Number(process.env.BRBYTE_SYNC_TIMEOUT_MS ?? "30000")
 
   if (

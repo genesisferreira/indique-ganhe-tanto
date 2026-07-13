@@ -55,3 +55,31 @@ export function getPublicPreRegistrationPlan1000Id(): string | null {
   const value = process.env.PUBLIC_PRE_REGISTRATION_PLAN_1000_ID?.trim()
   return value || null
 }
+
+/**
+ * plan_pk base exigido pelo Controllr no pré-cadastro público.
+ * As ofertas comerciais do formulário NÃO têm mapeamento individual.
+ */
+export function getPublicPreRegistrationDefaultBrbytePlanPk(): string | null {
+  const dedicated =
+    process.env.PUBLIC_PRE_REGISTRATION_DEFAULT_BRBYTE_PLAN_PK?.trim()
+  if (dedicated) return dedicated
+
+  const fallback = process.env.BRBYTE_DEFAULT_PLAN_PK?.trim()
+  return fallback || null
+}
+
+/**
+ * UUID técnico em `referrals.plan_id` (FK obrigatória).
+ * Não representa a oferta comercial — essa fica em `public_offer_*`.
+ */
+export function getPublicPreRegistrationBaseCrmPlanId(): string | null {
+  const dedicated =
+    process.env.PUBLIC_PRE_REGISTRATION_BASE_CRM_PLAN_ID?.trim()
+  if (dedicated) return dedicated
+
+  return (
+    getPublicPreRegistrationPlan500Id() ??
+    getPublicPreRegistrationPlan1000Id()
+  )
+}

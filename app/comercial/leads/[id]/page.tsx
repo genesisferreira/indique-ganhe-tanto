@@ -460,7 +460,7 @@ export default function DetalheLeadPage({
                   </div>
                 </div>
               )}
-              {plano && (
+              {plano && !isPublicPreReg ? (
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
                     <Zap className="w-5 h-5 text-primary" />
@@ -485,7 +485,31 @@ export default function DetalheLeadPage({
                     </p>
                   </div>
                 </div>
-              )}
+              ) : null}
+              {isPublicPreReg && indicacao.publicOfferName ? (
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                    <Zap className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Oferta escolhida
+                    </p>
+                    <p className="font-medium text-foreground">
+                      {indicacao.publicOfferName}
+                    </p>
+                    {indicacao.publicOfferPrice != null ? (
+                      <p className="text-sm text-muted-foreground mt-0.5">
+                        Valor informado:{" "}
+                        {indicacao.publicOfferPrice.toLocaleString("pt-BR", {
+                          style: "currency",
+                          currency: "BRL",
+                        })}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {/* Quick Actions */}
@@ -704,6 +728,11 @@ export default function DetalheLeadPage({
                 {getPreferredContactPeriodLabel(
                   indicacao.preferredContactPeriod
                 )}
+              </p>
+            ) : null}
+            {indicacao.brbyteSyncStatus ? (
+              <p className="text-sm text-muted-foreground mt-2">
+                Status BRByte: {indicacao.brbyteSyncStatus}
               </p>
             ) : null}
           </div>
