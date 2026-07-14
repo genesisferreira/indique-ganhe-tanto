@@ -7,7 +7,8 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Zap, Eye, EyeOff, ArrowLeft } from "lucide-react"
+import { Eye, EyeOff, ArrowLeft } from "lucide-react"
+import { TantoBrand } from "@/components/branding/tanto-brand"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/components/auth/auth-provider"
 import { getDashboardHomeForRole } from "@/lib/auth/auth-audit"
@@ -201,9 +202,7 @@ function LoginForm() {
           </Link>
 
           <div className="flex items-center gap-3 mb-8">
-            <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-primary">
-              <Zap className="w-7 h-7 text-primary-foreground" />
-            </div>
+            <TantoBrand variant="symbol" size="lg" className="w-12 h-12" priority />
             <div>
               <h1 className="text-2xl font-bold text-foreground">Entrar</h1>
               <p className="text-sm text-muted-foreground">
@@ -350,8 +349,8 @@ function LoginForm() {
       <div className="hidden lg:flex lg:flex-1 relative bg-primary/5 items-center justify-center p-12">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-primary/20 via-transparent to-transparent" />
         <div className="relative max-w-md text-center">
-          <div className="flex items-center justify-center w-20 h-20 rounded-2xl bg-primary mx-auto mb-8">
-            <Zap className="w-10 h-10 text-primary-foreground" />
+          <div className="flex items-center justify-center mx-auto mb-8">
+            <TantoBrand variant="symbol" size="xl" className="w-20 h-20" priority />
           </div>
           <h2 className="text-3xl font-bold text-foreground mb-4">
             Bem-vindo de volta!

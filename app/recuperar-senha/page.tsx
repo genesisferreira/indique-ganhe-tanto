@@ -5,7 +5,8 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Zap, ArrowLeft, Mail, CheckCircle2 } from "lucide-react"
+import { ArrowLeft, Mail, CheckCircle2 } from "lucide-react"
+import { TantoBrand } from "@/components/branding/tanto-brand"
 
 export default function RecuperarSenhaPage() {
   const [isLoading, setIsLoading] = useState(false)
@@ -31,9 +32,7 @@ export default function RecuperarSenhaPage() {
         </Link>
 
         <div className="flex items-center gap-3 mb-8">
-          <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-primary">
-            <Zap className="w-7 h-7 text-primary-foreground" />
-          </div>
+          <TantoBrand variant="symbol" size="lg" className="w-12 h-12" priority />
           <div>
             <h1 className="text-2xl font-bold text-foreground">
               Recuperar Senha

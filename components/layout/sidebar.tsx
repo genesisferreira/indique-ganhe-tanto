@@ -31,6 +31,7 @@ import {
   CircleHelp,
   Cable,
 } from "lucide-react"
+import { TantoBrand } from "@/components/branding/tanto-brand"
 import { Button } from "@/components/ui/button"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { NotificationCenter } from "@/components/layout/notification-center"
@@ -381,9 +382,7 @@ export function Sidebar({
       {/* Mobile Header */}
       <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-4 py-3 bg-sidebar border-b border-sidebar-border lg:hidden">
         <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary">
-            <Zap className="w-5 h-5 text-primary-foreground" />
-          </div>
+          <TantoBrand variant="symbol" size="sm" className="w-8 h-8" />
           <span className="font-semibold text-foreground">Tanto Telecom</span>
         </div>
         <div className="flex items-center gap-1">
@@ -417,9 +416,7 @@ export function Sidebar({
       >
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 py-5 border-b border-sidebar-border">
-          <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary shrink-0">
-            <Zap className="w-6 h-6 text-primary-foreground" />
-          </div>
+          <TantoBrand variant="symbol" size="md" className="w-10 h-10 shrink-0" />
           <div className="min-w-0 flex-1">
             <h1 className="font-bold text-foreground">Tanto Telecom</h1>
             <p className="text-xs text-muted-foreground">Indique e Ganhe</p>

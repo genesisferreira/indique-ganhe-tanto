@@ -13,7 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Zap, Eye, EyeOff, ArrowLeft, CheckCircle2 } from "lucide-react"
+import { Eye, EyeOff, ArrowLeft, CheckCircle2 } from "lucide-react"
+import { TantoBrand } from "@/components/branding/tanto-brand"
 import { getSupabaseAuthNetworkHint, getSupabaseClient } from "@/lib/supabase/client"
 
 const pixTypes = [
@@ -178,9 +179,7 @@ export default function CadastroPage() {
           </Link>
 
           <div className="flex items-center gap-3 mb-8">
-            <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-primary">
-              <Zap className="w-7 h-7 text-primary-foreground" />
-            </div>
+            <TantoBrand variant="symbol" size="lg" className="w-12 h-12" priority />
             <div>
               <h1 className="text-2xl font-bold text-foreground">
                 Criar Conta
@@ -396,8 +395,8 @@ export default function CadastroPage() {
       <div className="hidden lg:flex lg:flex-1 relative bg-primary/5 items-center justify-center p-12">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-primary/20 via-transparent to-transparent" />
         <div className="relative max-w-md text-center">
-          <div className="flex items-center justify-center w-20 h-20 rounded-2xl bg-primary mx-auto mb-8">
-            <Zap className="w-10 h-10 text-primary-foreground" />
+          <div className="flex items-center justify-center mx-auto mb-8">
+            <TantoBrand variant="symbol" size="xl" className="w-20 h-20" />
           </div>
           <h2 className="text-3xl font-bold text-foreground mb-4">
             Comece a ganhar hoje!

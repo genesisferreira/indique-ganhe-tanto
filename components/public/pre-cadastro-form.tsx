@@ -34,7 +34,8 @@ import type {
   PreferredInstallationPeriod,
   PreferredContactPeriod,
 } from "@/types/referral"
-import { CheckCircle2, Loader2, Zap } from "lucide-react"
+import { CheckCircle2, Loader2 } from "lucide-react"
+import { TantoBrand } from "@/components/branding/tanto-brand"
 
 type FormState = "form" | "submitting" | "success"
 
@@ -291,9 +292,7 @@ export function PreCadastroForm() {
     <div className="min-h-screen bg-background">
       <div className="border-b border-border bg-card">
         <div className="max-w-2xl mx-auto px-4 py-6 flex items-center gap-3">
-          <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary">
-            <Zap className="w-6 h-6 text-primary-foreground" />
-          </div>
+          <TantoBrand variant="symbol" size="md" className="w-10 h-10" priority />
           <div>
             <h1 className="text-xl font-bold">Tanto Telecom</h1>
             <p className="text-sm text-muted-foreground">Pré-cadastro</p>
