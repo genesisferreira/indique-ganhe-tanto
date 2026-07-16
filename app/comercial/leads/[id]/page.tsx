@@ -60,6 +60,7 @@ import {
   getPreferredInstallationPeriodLabel,
   getPhoneHasWhatsappLabel,
 } from "@/lib/public-pre-registration/observation"
+import { formatPublicPreRegistrationBirthDate } from "@/lib/public-pre-registration/normalize"
 import { Badge } from "@/components/ui/badge"
 import type { Lead, LeadStatus, Historico } from "@/types"
 import type { UserRole } from "@/types/user"
@@ -712,6 +713,20 @@ export default function DetalheLeadPage({
               <p className="text-sm text-muted-foreground mt-2">
                 WhatsApp:{" "}
                 {getPhoneHasWhatsappLabel(indicacao.phoneHasWhatsapp)}
+              </p>
+            ) : null}
+            {indicacao.referredBirthDate ? (
+              <p className="text-sm text-muted-foreground mt-2">
+                Data de nascimento:{" "}
+                {formatPublicPreRegistrationBirthDate(
+                  indicacao.referredBirthDate
+                ) ?? "—"}
+              </p>
+            ) : null}
+            {indicacao.preferredInvoiceDueDay != null ? (
+              <p className="text-sm text-muted-foreground mt-2">
+                Dia de vencimento:{" "}
+                {String(indicacao.preferredInvoiceDueDay).padStart(2, "0")}
               </p>
             ) : null}
             {indicacao.preferredInstallationPeriod ? (

@@ -58,6 +58,8 @@ const CONTACT_PERIOD_OPTIONS: {
   { value: "no_preference", label: "Sem preferência" },
 ]
 
+const INVOICE_DUE_DAY_OPTIONS = [5, 10, 15, 20, 25, 30] as const
+
 export function PreCadastroForm() {
   const searchParams = useSearchParams()
   const numeroRef = useRef<HTMLInputElement>(null)
@@ -70,6 +72,7 @@ export function PreCadastroForm() {
   const [email, setEmail] = useState("")
   const [cpf, setCpf] = useState("")
   const [rg, setRg] = useState("")
+  const [birthDate, setBirthDate] = useState("")
   const [observacao, setObservacao] = useState("")
   const [cep, setCep] = useState("")
   const [estado, setEstado] = useState("")
@@ -83,6 +86,7 @@ export function PreCadastroForm() {
   const [periodoContato, setPeriodoContato] = useState<
     PreferredContactPeriod | ""
   >("")
+  const [preferredInvoiceDueDay, setPreferredInvoiceDueDay] = useState("")
   const [possuiWhatsapp, setPossuiWhatsapp] = useState<"true" | "false" | "">(
     ""
   )
@@ -105,6 +109,7 @@ export function PreCadastroForm() {
     setEmail("")
     setCpf("")
     setRg("")
+    setBirthDate("")
     setObservacao("")
     setCep("")
     setEstado("")
@@ -116,6 +121,7 @@ export function PreCadastroForm() {
     setSelectedOfferCode("")
     setPeriodo("")
     setPeriodoContato("")
+    setPreferredInvoiceDueDay("")
     setPossuiWhatsapp("")
     setLgpd(false)
     setHoneypot("")
@@ -181,6 +187,16 @@ export function PreCadastroForm() {
   const validateClient = (): string | null => {
     if (!nome.trim() || nome.trim().length < 3) return "Informe o nome completo."
     if (!isValidCPF(cpf)) return "CPF inválido."
+    if (!birthDate) return "Informe a data de nascimento."
+    const today = new Date()
+    const todayIso = [
+      today.getFullYear().toString().padStart(4, "0"),
+      (today.getMonth() + 1).toString().padStart(2, "0"),
+      today.getDate().toString().padStart(2, "0"),
+    ].join("-")
+    if (birthDate > todayIso) {
+      return "A data de nascimento não pode estar no futuro."
+    }
     if (!isValidPhoneBR(telefone)) return "Telefone inválido."
     if (!isValidCEP(cep)) return "CEP inválido."
     if (!estado.trim() || estado.trim().length !== 2) return "Informe o estado."
@@ -192,6 +208,7 @@ export function PreCadastroForm() {
       return "Selecione um plano ou serviço de interesse."
     }
     if (!periodo) return "Selecione o melhor período para instalação."
+    if (!preferredInvoiceDueDay) return "Escolha um dia de vencimento."
     if (!possuiWhatsapp) {
       return "Informe se o número possui WhatsApp."
     }
@@ -224,6 +241,7 @@ export function PreCadastroForm() {
           phone: telefone,
           email: email.trim() || null,
           rg: rg.trim() || null,
+          birthDate,
           cep,
           state: estado.trim().toUpperCase(),
           city: cidade.trim(),
@@ -234,6 +252,7 @@ export function PreCadastroForm() {
           offerCode: selectedOfferCode,
           preferredInstallationPeriod: periodo,
           preferredContactPeriod: periodoContato || null,
+          preferredInvoiceDueDay: Number(preferredInvoiceDueDay),
           phoneHasWhatsapp: possuiWhatsapp === "true",
           clientObservation: observacao.trim() || null,
           lgpdAccepted: lgpd,
@@ -336,6 +355,7 @@ export function PreCadastroForm() {
                   id="nome"
                   value={nome}
                   onChange={(e) => setNome(e.target.value)}
+                  className="uppercase"
                   required
                 />
               </div>
@@ -351,8 +371,24 @@ export function PreCadastroForm() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="rg">RG</Label>
-                  <Input id="rg" value={rg} onChange={(e) => setRg(e.target.value)} />
+                  <Input
+                    id="rg"
+                    value={rg}
+                    onChange={(e) => setRg(e.target.value)}
+                    className="uppercase"
+                  />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="birthDate">Data de nascimento *</Label>
+                <Input
+                  id="birthDate"
+                  type="date"
+                  value={birthDate}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setBirthDate(e.target.value)}
+                  required
+                />
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -435,6 +471,7 @@ export function PreCadastroForm() {
                     value={cidade}
                     readOnly={viacepLocked.cidade}
                     onChange={(e) => setCidade(e.target.value)}
+                    className="uppercase"
                     required
                   />
                 </div>
@@ -445,6 +482,7 @@ export function PreCadastroForm() {
                   id="bairro"
                   value={bairro}
                   onChange={(e) => setBairro(e.target.value)}
+                  className="uppercase"
                   required
                 />
               </div>
@@ -454,6 +492,7 @@ export function PreCadastroForm() {
                   id="endereco"
                   value={endereco}
                   onChange={(e) => setEndereco(e.target.value)}
+                  className="uppercase"
                   required
                 />
               </div>
@@ -465,6 +504,7 @@ export function PreCadastroForm() {
                     ref={numeroRef}
                     value={numero}
                     onChange={(e) => setNumero(e.target.value)}
+                    className="uppercase"
                     required
                   />
                 </div>
@@ -474,6 +514,7 @@ export function PreCadastroForm() {
                     id="complemento"
                     value={complemento}
                     onChange={(e) => setComplemento(e.target.value)}
+                    className="uppercase"
                   />
                 </div>
               </div>
@@ -536,6 +577,28 @@ export function PreCadastroForm() {
                 </p>
               </div>
               <div className="space-y-2">
+                <Label>Dia de vencimento da fatura *</Label>
+                <Select
+                  value={preferredInvoiceDueDay}
+                  onValueChange={setPreferredInvoiceDueDay}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Escolha um dia de vencimento" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INVOICE_DUE_DAY_OPTIONS.map((day) => (
+                      <SelectItem key={day} value={String(day)}>
+                        {String(day).padStart(2, "0")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Essa escolha será considerada pela nossa equipe no momento da
+                  contratação.
+                </p>
+              </div>
+              <div className="space-y-2">
                 <Label>Melhor horário para contato</Label>
                 <Select
                   value={periodoContato}
@@ -565,6 +628,7 @@ export function PreCadastroForm() {
                   id="observacao"
                   value={observacao}
                   onChange={(e) => setObservacao(e.target.value)}
+                  className="uppercase"
                   rows={3}
                 />
               </div>

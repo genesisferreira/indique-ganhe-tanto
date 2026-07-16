@@ -56,6 +56,7 @@ import {
   getPreferredContactPeriodLabel,
   getPhoneHasWhatsappLabel,
 } from "@/lib/public-pre-registration/observation"
+import { formatPublicPreRegistrationBirthDate } from "@/lib/public-pre-registration/normalize"
 import { isPublicPreRegistrationReferral } from "@/lib/referral-reward-eligibility"
 
 const STATUS_OPTIONS: IndicacaoStatus[] = [
@@ -432,6 +433,24 @@ export default function AdminIndicacaoDetalhePage({
                     <p className="text-muted-foreground">WhatsApp</p>
                     <p>
                       {getPhoneHasWhatsappLabel(indicacao.phoneHasWhatsapp)}
+                    </p>
+                  </div>
+                ) : null}
+                {indicacao.referredBirthDate ? (
+                  <div>
+                    <p className="text-muted-foreground">Data de nascimento</p>
+                    <p>
+                      {formatPublicPreRegistrationBirthDate(
+                        indicacao.referredBirthDate
+                      ) ?? "—"}
+                    </p>
+                  </div>
+                ) : null}
+                {indicacao.preferredInvoiceDueDay != null ? (
+                  <div>
+                    <p className="text-muted-foreground">Dia de vencimento</p>
+                    <p>
+                      {String(indicacao.preferredInvoiceDueDay).padStart(2, "0")}
                     </p>
                   </div>
                 ) : null}

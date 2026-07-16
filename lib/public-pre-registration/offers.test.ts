@@ -31,6 +31,8 @@ describe("buildPublicPreRegistrationObservation", () => {
       preferredInstallationPeriod: "afternoon",
       offerName: "TANTO PLAY ELITE",
       offerPriceLabel: "R$ 184,90",
+      birthDate: "1990-08-15",
+      preferredInvoiceDueDay: 10,
       phoneHasWhatsapp: true,
       preferredContactPeriod: "morning",
       campaignSummary: "google/cpc/lancamento",
@@ -38,10 +40,12 @@ describe("buildPublicPreRegistrationObservation", () => {
         "Observação muito longa do cliente para forçar truncamento do interest_obs no Controllr e validar o limite de caracteres do campo.",
     })
 
-    assert.ok(result.value.includes("Origem:"))
-    assert.ok(result.value.includes("Oferta: TANTO PLAY ELITE"))
-    assert.ok(result.value.includes("Valor: R$ 184,90"))
-    assert.ok(result.value.includes("Instalação: Tarde"))
+    assert.ok(result.value.includes("ORIGEM:"))
+    assert.ok(result.value.includes("OFERTA: TANTO PLAY ELITE"))
+    assert.ok(result.value.includes("VALOR: R$ 184,90"))
+    assert.ok(result.value.includes("NASCIMENTO: 15/08/1990"))
+    assert.ok(result.value.includes("VENCIMENTO: DIA 10"))
+    assert.ok(result.value.includes("INSTALAÇÃO: TARDE"))
     assert.ok(result.value.length <= BRBYTE_FIELD_MAX_LENGTH)
   })
 
@@ -50,9 +54,14 @@ describe("buildPublicPreRegistrationObservation", () => {
       preferredInstallationPeriod: "morning",
       offerName: "500 MEGA",
       offerPriceLabel: "R$ 89,90",
+      birthDate: "1985-01-02",
+      preferredInvoiceDueDay: 5,
       phoneHasWhatsapp: false,
       preferredContactPeriod: "evening",
     })
-    assert.ok(result.value.includes("Contato: Noite") || result.value.length <= BRBYTE_FIELD_MAX_LENGTH)
+    assert.ok(
+      result.value.includes("CONTATO: NOITE") ||
+        result.value.length <= BRBYTE_FIELD_MAX_LENGTH
+    )
   })
 })

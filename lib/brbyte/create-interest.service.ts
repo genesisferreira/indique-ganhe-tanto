@@ -35,6 +35,9 @@ import {
   getPublicPreRegistrationOfferByCode,
 } from "@/lib/public-pre-registration/offers"
 import {
+  normalizePublicPreRegistrationErpTextFields,
+} from "@/lib/public-pre-registration/normalize"
+import {
   BRBYTE_API_PATHS,
   type BrbyteCreateInterestResult,
   type BrbyteSyncRunPhase,
@@ -81,6 +84,8 @@ type ReferralCreateInterestRow = {
   public_offer_code: string | null
   public_offer_name: string | null
   public_offer_price: number | string | null
+  referred_birth_date: string | null
+  preferred_invoice_due_day: number | null
   utm_source: string | null
   utm_medium: string | null
   utm_campaign: string | null
@@ -286,6 +291,8 @@ async function loadReferralForCreateInterest(
       public_offer_code,
       public_offer_name,
       public_offer_price,
+      referred_birth_date,
+      preferred_invoice_due_day,
       utm_source,
       utm_medium,
       utm_campaign,
@@ -324,7 +331,6 @@ function buildCreateInterestForm(
   config: BrbyteCreateInterestConfig,
   planPk: string
 ): Record<string, string> {
-  const { firstName, lastName } = splitPersonName(row.referred_name)
   const contractType = isReferralContractType(row.referral_contract_type?.trim())
     ? row.referral_contract_type!.trim()
     : "tanto_vantagens"
@@ -333,6 +339,22 @@ function buildCreateInterestForm(
     source: row.source,
     erp_lead_source: row.erp_lead_source,
   })
+  const publicErpText = normalizePublicPreRegistrationErpTextFields({
+    name: row.referred_name,
+    rg: row.referred_rg,
+    state: row.referred_state,
+    city: row.referred_city,
+    neighborhood: row.referred_neighborhood,
+    street: row.referred_street,
+    number: row.referred_number,
+    complement: row.referred_complement,
+  })
+  const nameForErp = isPublic ? publicErpText.name : row.referred_name
+  const { firstName, lastName } = splitPersonName(nameForErp)
+  const erpText = (
+    publicValue: string,
+    originalValue: string | null | undefined
+  ): string => (isPublic ? publicValue : (originalValue ?? "").trim())
 
   const catalogOffer = getPublicPreRegistrationOfferByCode(row.public_offer_code)
   const offerName =
@@ -354,6 +376,8 @@ function buildCreateInterestForm(
           "no_preference",
         offerName,
         offerPriceLabel,
+        birthDate: row.referred_birth_date ?? "",
+        preferredInvoiceDueDay: row.preferred_invoice_due_day ?? 0,
         phoneHasWhatsapp: row.phone_has_whatsapp === true,
         preferredContactPeriod:
           (row.preferred_contact_period as PreferredContactPeriod) ?? null,
@@ -410,16 +434,28 @@ function buildCreateInterestForm(
     interest_name: firstName,
     interest_lastname: lastName,
     interest_doc1: onlyDigits(row.referred_document),
-    interest_doc2: (row.referred_rg ?? "").trim(),
+    interest_doc2: erpText(publicErpText.rg, row.referred_rg),
     interest_phone_number: onlyDigits(row.referred_phone),
     interest_email_addr: (row.referred_email ?? "").trim(),
     interest_addr_zipcode: onlyDigits(row.referred_zipcode),
-    interest_addr_state: (row.referred_state ?? "").trim().toUpperCase(),
-    interest_addr_city: (row.referred_city ?? "").trim(),
-    interest_addr_neighborhood: (row.referred_neighborhood ?? "").trim(),
-    interest_addr_address: (row.referred_street ?? "").trim(),
-    interest_addr_number: (row.referred_number ?? "").trim(),
-    interest_addr_obs: (row.referred_complement ?? "").trim(),
+    interest_addr_state: erpText(
+      publicErpText.state,
+      row.referred_state
+    ).toUpperCase(),
+    interest_addr_city: erpText(publicErpText.city, row.referred_city),
+    interest_addr_neighborhood: erpText(
+      publicErpText.neighborhood,
+      row.referred_neighborhood
+    ),
+    interest_addr_address: erpText(publicErpText.street, row.referred_street),
+    interest_addr_number: erpText(publicErpText.number, row.referred_number),
+    interest_addr_obs: erpText(
+      publicErpText.complement,
+      row.referred_complement
+    ),
+    ...(isPublic && row.referred_birth_date
+      ? { client_date_birth: row.referred_birth_date }
+      : {}),
     plan_pk: planPk,
     interest_obs: interestObs,
   }

@@ -7,6 +7,10 @@ import type {
   PreferredContactPeriod,
   PreferredInstallationPeriod,
 } from "@/types/referral"
+import {
+  formatPublicPreRegistrationBirthDate,
+  normalizePublicPreRegistrationText,
+} from "@/lib/public-pre-registration/normalize"
 
 const LOG_TAG = "[brbyte:public-pre-registration:interest_obs_truncated]"
 const SEP = " | "
@@ -19,6 +23,8 @@ export type PublicPreRegistrationObservationInput = {
   offerName: string
   /** Preço formatado, ex.: "R$ 184,90". */
   offerPriceLabel: string
+  birthDate: string
+  preferredInvoiceDueDay: number
   phoneHasWhatsapp: boolean
   preferredContactPeriod?: PreferredContactPeriod | null
   campaignSummary?: string | null
@@ -112,48 +118,76 @@ export function summarizeUtmCampaign(input: {
  * Monta interest_obs para pré-cadastro público (máx. 255 caracteres).
  *
  * Prioridade:
- * 1. Origem  2. Oferta  3. Valor  4. Período instalação
- * 5. WhatsApp  6. Horário contato  7. Campanha  8. Obs  9. LGPD
+ * 1. Origem  2. Oferta  3. Valor  4. Nascimento  5. Vencimento
+ * 6. Instalação  7. WhatsApp  8. Contato  9. Campanha  10. Obs  11. LGPD
  *
- * Obrigatórios (nunca removidos): Origem, Oferta, Valor, Período instalação.
- * Truncar primeiro: Obs → Campanha → Contato.
+ * Obrigatórios (nunca removidos): Origem, Oferta, Valor, Nascimento,
+ * Vencimento e Instalação.
+ * Truncar primeiro: Obs → Campanha → Contato → WhatsApp.
  */
 export function buildPublicPreRegistrationObservation(
   input: PublicPreRegistrationObservationInput
 ): PublicPreRegistrationObservationBuild {
   const maxLength = BRBYTE_FIELD_MAX_LENGTH
 
-  const origem = segment("Origem", PUBLIC_ERP_LEAD_SOURCE)
-  const oferta = segment("Oferta", input.offerName.trim() || "Não informado")
+  const origem = segment(
+    "ORIGEM",
+    normalizePublicPreRegistrationText(PUBLIC_ERP_LEAD_SOURCE) ?? "NÃO INFORMADO"
+  )
+  const oferta = segment(
+    "OFERTA",
+    normalizePublicPreRegistrationText(input.offerName) ?? "NÃO INFORMADO"
+  )
   const valor = segment(
-    "Valor",
-    input.offerPriceLabel.trim() || "Não informado"
+    "VALOR",
+    normalizePublicPreRegistrationText(input.offerPriceLabel) ?? "NÃO INFORMADO"
+  )
+  const nascimento = segment(
+    "NASCIMENTO",
+    formatPublicPreRegistrationBirthDate(input.birthDate) ?? "NÃO INFORMADO"
+  )
+  const vencimento = segment(
+    "VENCIMENTO",
+    `DIA ${input.preferredInvoiceDueDay.toString().padStart(2, "0")}`
   )
   const periodo = segment(
-    "Instalação",
-    getPreferredInstallationPeriodLabel(input.preferredInstallationPeriod)
+    "INSTALAÇÃO",
+    normalizePublicPreRegistrationText(
+      getPreferredInstallationPeriodLabel(input.preferredInstallationPeriod)
+    ) ?? "SEM PREFERÊNCIA"
   )
   const whatsapp = segment(
-    "WhatsApp",
-    getPhoneHasWhatsappLabel(input.phoneHasWhatsapp)
+    "WHATSAPP",
+    normalizePublicPreRegistrationText(
+      getPhoneHasWhatsappLabel(input.phoneHasWhatsapp)
+    ) ?? "NÃO"
   )
-  const lgpd = segment("LGPD", "Sim")
+  const lgpd = segment("LGPD", "SIM")
 
-  const requiredCore = [origem, oferta, valor, periodo]
+  const requiredCore = [
+    origem,
+    oferta,
+    valor,
+    nascimento,
+    vencimento,
+    periodo,
+  ]
   const segments = [...requiredCore, whatsapp]
 
   const contactLabel = input.preferredContactPeriod
-    ? getPreferredContactPeriodLabel(input.preferredContactPeriod)
+    ? normalizePublicPreRegistrationText(
+        getPreferredContactPeriodLabel(input.preferredContactPeriod)
+      )
     : null
   const campaign = input.campaignSummary?.trim() || null
-  const obs = input.observacaoCliente?.trim() || null
+  const obs = normalizePublicPreRegistrationText(input.observacaoCliente)
 
   const fullDraftParts = [
     ...requiredCore,
     whatsapp,
-    ...(contactLabel ? [segment("Contato", contactLabel)] : []),
-    ...(campaign ? [segment("Campanha", campaign)] : []),
-    ...(obs ? [segment("Obs", obs)] : []),
+    ...(contactLabel ? [segment("CONTATO", contactLabel)] : []),
+    ...(campaign ? [segment("CAMPANHA", campaign)] : []),
+    ...(obs ? [segment("OBS", obs)] : []),
     lgpd,
   ]
   const fullDraft = joinSegments(fullDraftParts)
@@ -171,15 +205,15 @@ export function buildPublicPreRegistrationObservation(
   }
 
   // Contato e campanha só entram se couberem (truncados primeiro se necessário)
-  tryAppend("Contato", contactLabel)
-  tryAppend("Campanha", campaign)
+  tryAppend("CONTATO", contactLabel)
+  tryAppend("CAMPANHA", campaign)
 
   let assembled = joinSegments([...segments, lgpd])
 
   if (obs) {
     // Obs usa o espaço restante; truncada antes de outros campos obrigatórios
     const withoutLgpd = joinSegments(segments)
-    const prefix = withoutLgpd ? `${withoutLgpd}${SEP}Obs: ` : "Obs: "
+    const prefix = withoutLgpd ? `${withoutLgpd}${SEP}OBS: ` : "OBS: "
     const suffix = `${SEP}${lgpd}`
     const remaining = maxLength - prefix.length - suffix.length
     if (remaining > 0) {

@@ -120,6 +120,8 @@ type ReferralRow = {
   public_offer_code?: string | null
   public_offer_name?: string | null
   public_offer_price?: number | string | null
+  referred_birth_date?: string | null
+  preferred_invoice_due_day?: number | null
   public_pre_registration_at?: string | null
   utm_source?: string | null
   utm_medium?: string | null
@@ -201,6 +203,8 @@ function mapReferralPublicPreRegistrationFields(row: ReferralRow): Pick<
   | "publicOfferCode"
   | "publicOfferName"
   | "publicOfferPrice"
+  | "referredBirthDate"
+  | "preferredInvoiceDueDay"
   | "publicPreRegistrationAt"
   | "utmSource"
   | "utmMedium"
@@ -250,6 +254,11 @@ function mapReferralPublicPreRegistrationFields(row: ReferralRow): Pick<
       offerPrice !== undefined && Number.isFinite(offerPrice)
         ? offerPrice
         : undefined,
+    referredBirthDate: row.referred_birth_date?.trim() || undefined,
+    preferredInvoiceDueDay:
+      row.preferred_invoice_due_day == null
+        ? undefined
+        : Number(row.preferred_invoice_due_day),
     publicPreRegistrationAt: row.public_pre_registration_at
       ? new Date(row.public_pre_registration_at)
       : undefined,
@@ -2393,6 +2402,8 @@ const REFERRALS_LIST_SELECT_EXTENDED = `
         public_offer_code,
         public_offer_name,
         public_offer_price,
+        referred_birth_date,
+        preferred_invoice_due_day,
         created_at,
         updated_at
       `
@@ -4539,6 +4550,8 @@ const REFERRAL_INTERESTED_FIELDS_SELECT = `
         public_offer_code,
         public_offer_name,
         public_offer_price,
+        referred_birth_date,
+        preferred_invoice_due_day,
         public_pre_registration_at,
         utm_source,
         utm_medium,

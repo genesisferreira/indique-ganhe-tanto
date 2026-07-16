@@ -16,6 +16,11 @@ import {
   getPublicPreRegistrationOfferByCode,
   type PublicPreRegistrationOffer,
 } from "@/lib/public-pre-registration/offers"
+import {
+  isValidPublicPreRegistrationDueDay,
+  normalizePublicPreRegistrationText,
+  validatePublicPreRegistrationBirthDate,
+} from "@/lib/public-pre-registration/normalize"
 
 export type { PreferredInstallationPeriod, PreferredContactPeriod }
 
@@ -33,6 +38,8 @@ export type PublicPreRegistrationPayload = {
   street: string
   number: string
   complement?: string | null
+  birthDate: string
+  preferredInvoiceDueDay: number
   /** Código da oferta do catálogo público (não é plans.id). */
   offerCode: string
   offer: PublicPreRegistrationOffer
@@ -100,6 +107,8 @@ export function parsePublicPreRegistrationPayload(
   const number = sanitizeText(raw.number, 20)
   const offerCode = sanitizeText(raw.offerCode, 64)
   const period = String(raw.preferredInstallationPeriod ?? "").trim()
+  const birthDateResult = validatePublicPreRegistrationBirthDate(raw.birthDate)
+  const preferredInvoiceDueDay = Number(raw.preferredInvoiceDueDay)
 
   if (!fullName || fullName.length < 3) {
     return { ok: false, message: "Informe o nome completo." }
@@ -127,6 +136,18 @@ export function parsePublicPreRegistrationPayload(
   }
   if (!number) {
     return { ok: false, message: "Informe o número." }
+  }
+  if (!birthDateResult.ok) {
+    if (birthDateResult.reason === "future") {
+      return {
+        ok: false,
+        message: "A data de nascimento não pode estar no futuro.",
+      }
+    }
+    return { ok: false, message: "Informe a data de nascimento." }
+  }
+  if (!isValidPublicPreRegistrationDueDay(preferredInvoiceDueDay)) {
+    return { ok: false, message: "Escolha um dia de vencimento." }
   }
   if (!offerCode) {
     return { ok: false, message: "Selecione um plano ou serviço de interesse." }
@@ -178,24 +199,30 @@ export function parsePublicPreRegistrationPayload(
   return {
     ok: true,
     data: {
-      fullName,
+      fullName: normalizePublicPreRegistrationText(fullName)!,
       cpf,
       phone,
       phoneHasWhatsapp: phoneHasWhatsappRaw,
       email,
-      rg: sanitizeText(raw.rg, 30),
+      rg: normalizePublicPreRegistrationText(sanitizeText(raw.rg, 30)),
       cep,
-      state: state.toUpperCase(),
-      city,
-      neighborhood,
-      street,
-      number,
-      complement: sanitizeText(raw.complement, 120),
+      state: normalizePublicPreRegistrationText(state)!,
+      city: normalizePublicPreRegistrationText(city)!,
+      neighborhood: normalizePublicPreRegistrationText(neighborhood)!,
+      street: normalizePublicPreRegistrationText(street)!,
+      number: normalizePublicPreRegistrationText(number)!,
+      complement: normalizePublicPreRegistrationText(
+        sanitizeText(raw.complement, 120)
+      ),
+      birthDate: birthDateResult.value,
+      preferredInvoiceDueDay,
       offerCode: offer.code,
       offer,
       preferredInstallationPeriod: period as PreferredInstallationPeriod,
       preferredContactPeriod,
-      clientObservation: sanitizeText(raw.clientObservation, 500),
+      clientObservation: normalizePublicPreRegistrationText(
+        sanitizeText(raw.clientObservation, 500)
+      ),
       lgpdAccepted: true,
       utm_source: sanitizeUtmField(raw.utm_source),
       utm_medium: sanitizeUtmField(raw.utm_medium),
