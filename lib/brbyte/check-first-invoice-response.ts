@@ -1,5 +1,3 @@
-import "server-only"
-
 import { summarizeCreateInterestResponseBody } from "@/lib/brbyte/create-interest-response"
 import type { BrbyteInvoiceInfo, BrbyteInvoiceListRow } from "@/types/brbyte"
 
@@ -157,6 +155,15 @@ function parseSortableDate(value: string | null): number {
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY
 }
 
+function earliestSortKey(row: BrbyteInvoiceListRow): number {
+  const keys = [
+    parseSortableDate(row.invoiceDueDate),
+    parseSortableDate(row.invoiceDate),
+    parseSortableDate(row.invoicePeriod),
+  ]
+  return Math.min(...keys)
+}
+
 /** Primeira mensalidade válida: fatura não excluída, ordenada pela data de vencimento/emissão. */
 export function pickFirstValidInvoice(
   rows: BrbyteInvoiceListRow[]
@@ -164,17 +171,7 @@ export function pickFirstValidInvoice(
   const candidates = rows.filter((row) => row.invoicePk && !row.invoiceDeleted)
   if (candidates.length === 0) return null
 
-  candidates.sort((a, b) => {
-    const aKey =
-      parseSortableDate(a.invoiceDueDate) ||
-      parseSortableDate(a.invoiceDate) ||
-      parseSortableDate(a.invoicePeriod)
-    const bKey =
-      parseSortableDate(b.invoiceDueDate) ||
-      parseSortableDate(b.invoiceDate) ||
-      parseSortableDate(b.invoicePeriod)
-    return aKey - bKey
-  })
+  candidates.sort((a, b) => earliestSortKey(a) - earliestSortKey(b))
 
   return candidates[0] ?? null
 }

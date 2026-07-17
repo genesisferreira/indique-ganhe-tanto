@@ -32,6 +32,11 @@ import {
   REFERRAL_CONTRACT_TYPE_OPTIONS,
 } from "@/lib/referral-contract-type"
 import {
+  CONTROLLR_INVOICE_DUE_DAYS,
+  isValidControllrInvoiceDueDay,
+  validateControllrBirthDate,
+} from "@/lib/brbyte/normalize-controllr-text"
+import {
   normalizeReferralDocument,
   normalizeReferralPhone,
   normalizeReferralZipcode,
@@ -50,6 +55,7 @@ export default function NovaIndicacaoPage() {
   const router = useRouter()
   const numeroRef = useRef<HTMLInputElement>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const submittingRef = useRef(false)
   const [planos, setPlanos] = useState<Plano[]>(() =>
     isDataProviderMock() ? mockPlanosFallback : []
   )
@@ -61,6 +67,8 @@ export default function NovaIndicacaoPage() {
   const [telefone, setTelefone] = useState("")
   const [email, setEmail] = useState("")
   const [cpf, setCpf] = useState("")
+  const [dataNascimento, setDataNascimento] = useState("")
+  const [diaVencimento, setDiaVencimento] = useState<string>("")
   const [rg, setRg] = useState("")
   const [observacao, setObservacao] = useState("")
   const [cep, setCep] = useState("")
@@ -179,6 +187,7 @@ export default function NovaIndicacaoPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!planoSelecionado) return
+    if (submittingRef.current || isLoading) return
 
     if (!isValidPhoneBR(telefone)) {
       toast.error("Informe um telefone válido com DDD (10 ou 11 dígitos).")
@@ -204,6 +213,24 @@ export default function NovaIndicacaoPage() {
     const normalizedCpf = normalizeReferralDocument(cpf)
     if (!normalizedCpf || normalizedCpf.length !== 11) {
       toast.error("CPF deve ter 11 dígitos.")
+      return
+    }
+
+    const birthValidation = validateControllrBirthDate(dataNascimento)
+    if (!birthValidation.ok) {
+      if (birthValidation.reason === "missing") {
+        toast.error("Informe a data de nascimento.")
+      } else if (birthValidation.reason === "future") {
+        toast.error("A data de nascimento não pode estar no futuro.")
+      } else {
+        toast.error("Informe uma data de nascimento válida.")
+      }
+      return
+    }
+
+    const dueDayNumber = Number(diaVencimento)
+    if (!isValidControllrInvoiceDueDay(dueDayNumber)) {
+      toast.error("Escolha o dia de vencimento: 05, 10, 15, 20, 25 ou 30.")
       return
     }
 
@@ -235,45 +262,86 @@ export default function NovaIndicacaoPage() {
 
     const normalizedCep = cep.trim() ? normalizeReferralZipcode(cep) : null
 
+    submittingRef.current = true
     setIsLoading(true)
     const rewardTypeDb =
       tipoRecompensa === "pix" ? "pix" : "desconto_fatura"
     const rewardAmount =
       planoSelecionado.valorRecompensa ?? planoSelecionado.preco
 
-    const result = await insertIndicadorReferral({
-      referred_name: nome,
-      referred_phone: normalizedPhone,
-      referred_email: email.trim() || null,
-      referred_address: null,
-      referred_document: normalizedCpf,
-      referred_rg: rg.trim() || null,
-      referred_person_type: "pf",
-      referred_zipcode: normalizedCep,
-      referred_state: estado.trim() || null,
-      referred_city: cidade.trim() || null,
-      referred_neighborhood: bairro.trim() || null,
-      referred_street: endereco.trim() || null,
-      referred_number: numero.trim() || null,
-      referred_complement: complemento.trim() || null,
-      referred_observation: observacao.trim() || null,
-      referral_contract_type: tipoContratacao,
-      installation_fee_awareness: true,
-      contract_type_awareness: true,
-      plan_id: planoSelecionado.id,
-      reward_type: rewardTypeDb,
-      reward_amount: rewardAmount,
-    })
+    try {
+      const result = await insertIndicadorReferral({
+        referred_name: nome,
+        referred_phone: normalizedPhone,
+        referred_email: email.trim() || null,
+        referred_address: null,
+        referred_document: normalizedCpf,
+        referred_rg: rg.trim() || null,
+        referred_person_type: "pf",
+        referred_zipcode: normalizedCep,
+        referred_state: estado.trim() || null,
+        referred_city: cidade.trim() || null,
+        referred_neighborhood: bairro.trim() || null,
+        referred_street: endereco.trim() || null,
+        referred_number: numero.trim() || null,
+        referred_complement: complemento.trim() || null,
+        referred_observation: observacao.trim() || null,
+        referred_birth_date: birthValidation.value,
+        preferred_invoice_due_day: dueDayNumber,
+        referral_contract_type: tipoContratacao,
+        installation_fee_awareness: true,
+        contract_type_awareness: true,
+        plan_id: planoSelecionado.id,
+        reward_type: rewardTypeDb,
+        reward_amount: rewardAmount,
+      })
 
-    setIsLoading(false)
+      if (!result.ok) {
+        toast.error(result.message)
+        return
+      }
 
-    if (result.ok) {
-      toast.success("Indicação cadastrada com sucesso!")
+      let friendlyMessage =
+        "Indicação cadastrada com sucesso. Nossa equipe dará continuidade ao processamento."
+
+      if (result.referralId) {
+        try {
+          const createRes = await fetch(
+            `/api/indicador/referrals/${encodeURIComponent(result.referralId)}/create-interest`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({}),
+            }
+          )
+          const createJson = (await createRes.json().catch(() => null)) as {
+            ok?: boolean
+            message?: string
+            skipped?: boolean
+            reason?: string
+          } | null
+
+          if (
+            createJson?.message &&
+            typeof createJson.message === "string" &&
+            createJson.message.trim()
+          ) {
+            friendlyMessage = createJson.message.trim()
+          } else if (createRes.ok && createJson?.ok) {
+            friendlyMessage =
+              "Indicação cadastrada com sucesso. Indicação recebida pela equipe comercial."
+          }
+        } catch {
+          // Cadastro local já foi persistido; falha do ERP não desfaz a indicação.
+        }
+      }
+
+      toast.success(friendlyMessage)
       router.push("/indicador/indicacoes")
-      return
+    } finally {
+      submittingRef.current = false
+      setIsLoading(false)
     }
-
-    toast.error(result.message)
   }
 
   return (
@@ -329,6 +397,44 @@ export default function NovaIndicacaoPage() {
               />
               <p className="text-xs text-muted-foreground">
                 Usado apenas para validação do cadastro.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="data-nascimento">Data de nascimento *</Label>
+              <Input
+                id="data-nascimento"
+                type="date"
+                required
+                value={dataNascimento}
+                max={new Date().toISOString().slice(0, 10)}
+                onChange={(e) => setDataNascimento(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="dia-vencimento">
+                Dia de vencimento da fatura *
+              </Label>
+              <Select
+                value={diaVencimento}
+                onValueChange={setDiaVencimento}
+                required
+              >
+                <SelectTrigger id="dia-vencimento">
+                  <SelectValue placeholder="Selecione o dia" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CONTROLLR_INVOICE_DUE_DAYS.map((day) => (
+                    <SelectItem key={day} value={String(day)}>
+                      {String(day).padStart(2, "0")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Essa escolha será considerada pela nossa equipe no momento da
+                contratação.
               </p>
             </div>
 

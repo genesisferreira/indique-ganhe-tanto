@@ -191,6 +191,7 @@ export async function POST(request: NextRequest) {
   const result = await createBrbyteInterestFromReferral({
     referralId,
     actorUserId: auth.userId,
+    sourceContext: "admin_manual",
   })
 
   const status = result.ok ? 200 : result.skipped ? 409 : 502

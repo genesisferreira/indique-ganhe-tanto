@@ -1,6 +1,8 @@
 import type { ReactNode } from "react"
 import type { Indicacao } from "@/types/referral"
+import { formatControllrBirthDate } from "@/lib/brbyte/normalize-controllr-text"
 import {
+  Calendar,
   CreditCard,
   FileText,
   Hash,
@@ -24,7 +26,9 @@ function hasComplementaryData(indicacao: Indicacao): boolean {
   return Boolean(
     indicacao.cpfIndicado ||
       indicacao.rgIndicado ||
-      indicacao.observacaoIndicado
+      indicacao.observacaoIndicado ||
+      indicacao.referredBirthDate ||
+      indicacao.preferredInvoiceDueDay != null
   )
 }
 
@@ -82,6 +86,12 @@ export function ReferralInterestedFields({
   const showComplementary = hasComplementaryData(indicacao)
   const showAddress = hasInstallationAddress(indicacao)
   const showErp = hasErpInteressadoData(indicacao)
+  const birthLabel =
+    formatControllrBirthDate(indicacao.referredBirthDate) ?? null
+  const dueDayLabel =
+    indicacao.preferredInvoiceDueDay != null
+      ? String(indicacao.preferredInvoiceDueDay).padStart(2, "0")
+      : null
 
   if (!showComplementary && !showAddress && !showErp) {
     return null
@@ -103,6 +113,18 @@ export function ReferralInterestedFields({
               <div className="flex items-center gap-2">
                 <FileText className="h-4 w-4 text-muted-foreground" />
                 <span>RG: {indicacao.rgIndicado}</span>
+              </div>
+            ) : null}
+            {birthLabel ? (
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-muted-foreground" />
+                <span>Nascimento: {birthLabel}</span>
+              </div>
+            ) : null}
+            {dueDayLabel ? (
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-muted-foreground" />
+                <span>Vencimento: dia {dueDayLabel}</span>
               </div>
             ) : null}
             {indicacao.observacaoIndicado ? (
@@ -165,6 +187,20 @@ export function ReferralInterestedFields({
                 icon={<FileText className="w-5 h-5 text-primary" />}
                 label="RG"
                 value={indicacao.rgIndicado}
+              />
+            ) : null}
+            {birthLabel ? (
+              <FieldRow
+                icon={<Calendar className="w-5 h-5 text-primary" />}
+                label="Data de nascimento"
+                value={birthLabel}
+              />
+            ) : null}
+            {dueDayLabel ? (
+              <FieldRow
+                icon={<Calendar className="w-5 h-5 text-primary" />}
+                label="Dia de vencimento"
+                value={dueDayLabel}
               />
             ) : null}
           </div>

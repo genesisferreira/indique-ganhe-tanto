@@ -9,6 +9,8 @@ import {
 import { brbyteAdminLogin } from "@/lib/brbyte/admin-http"
 import {
   getBrbyteCreateInterestConfig,
+  getBrbyteOperationalConfig,
+  isBrbyteAutoCheckConversionEnabled,
   isBrbyteCreateInterestEnabled,
 } from "@/lib/brbyte/config"
 import { logBrbyteReferralHistory } from "@/lib/brbyte/referral-history"
@@ -70,7 +72,8 @@ function getDb(): BrbyteLooseDb {
 async function createSyncRun(
   referralId: string,
   actorUserId: string | null,
-  configured: boolean
+  configured: boolean,
+  triggeredBy: string
 ): Promise<string | null> {
   try {
     const { data, error } = await getDb()
@@ -82,7 +85,7 @@ async function createSyncRun(
         meta: {
           phase: CHECK_CONVERSION_PHASE,
           referral_id: referralId,
-          triggered_by: "admin_manual",
+          triggered_by: triggeredBy,
           actor_user_id: actorUserId,
         },
       })
@@ -196,11 +199,12 @@ function syncRunAuditMeta(input: {
   success?: boolean
   converted?: boolean
   error?: string
+  triggeredBy?: string
 }): Record<string, unknown> {
   return {
     phase: CHECK_CONVERSION_PHASE,
     referral_id: input.referralId,
-    triggered_by: "admin_manual",
+    triggered_by: input.triggeredBy ?? "admin_manual",
     endpoint: input.endpoint,
     http_status: input.httpStatus ?? null,
     success: input.success ?? false,
@@ -299,11 +303,29 @@ async function persistReferralCheckPending(
 export async function checkBrbyteInterestConversionFromReferral(input: {
   referralId: string
   actorUserId?: string | null
+  triggeredBy?: "admin_manual" | "cron_automatic"
 }): Promise<BrbyteCheckConversionResult> {
   const started = Date.now()
   const referralId = input.referralId.trim()
+  const triggeredBy = input.triggeredBy ?? "admin_manual"
+  const isCron = triggeredBy === "cron_automatic"
 
-  if (!isBrbyteCreateInterestEnabled()) {
+  if (isCron) {
+    if (!isBrbyteAutoCheckConversionEnabled()) {
+      return {
+        ok: false,
+        converted: false,
+        skipped: true,
+        reason: "disabled",
+        referralId,
+        syncRunId: null,
+        brbyteClientPk: null,
+        brbyteIdInteressado: null,
+        message: "Verificação automática de conversão desabilitada.",
+        durationMs: Date.now() - started,
+      }
+    }
+  } else if (!isBrbyteCreateInterestEnabled()) {
     return {
       ok: false,
       converted: false,
@@ -318,7 +340,9 @@ export async function checkBrbyteInterestConversionFromReferral(input: {
     }
   }
 
-  const config = getBrbyteCreateInterestConfig()
+  const config = isCron
+    ? getBrbyteOperationalConfig()
+    : getBrbyteCreateInterestConfig()
   if (!config) {
     return {
       ok: false,
@@ -337,7 +361,8 @@ export async function checkBrbyteInterestConversionFromReferral(input: {
   const syncRunId = await createSyncRun(
     referralId,
     input.actorUserId ?? null,
-    true
+    true,
+    triggeredBy
   )
 
   const row = await loadReferralForCheckConversion(referralId)

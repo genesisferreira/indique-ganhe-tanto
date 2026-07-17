@@ -1,10 +1,15 @@
 import { getReferralContractTypeLabel } from "@/lib/referral-contract-type"
 import {
+  formatControllrBirthDate,
+  normalizeControllrText,
+} from "@/lib/brbyte/normalize-controllr-text"
+import {
   BRBYTE_FIELD_MAX_LENGTH,
   truncateBrbyteField,
 } from "@/lib/brbyte/truncate-field"
-import type { RecompensaTipo, ReferralContractType } from "@/types/referral"
+import type { ReferralContractType } from "@/types/referral"
 
+const LOG_TAG = "[brbyte:interested-observation:truncated]"
 const OBSERVATION_SEPARATOR = " | "
 
 /** Entrada mínima para montar observação de Interessado no ERP (sem I/O). */
@@ -13,19 +18,29 @@ export type BrbyteInterestedObservationInput = {
   indicadorNome?: string | null
   tipoContratacao?: ReferralContractType | string | null
   planoNome?: string | null
-  tipoRecompensa?: RecompensaTipo | string | null
-  cpfIndicado?: string | null
-  enderecoInstalacao?: string | null
-  numeroInstalacao?: string | null
-  bairroInstalacao?: string | null
-  cidadeInstalacao?: string | null
-  estadoInstalacao?: string | null
-  cepInstalacao?: string | null
+  birthDate?: string | null
+  preferredInvoiceDueDay?: number | null
   observacaoIndicado?: string | null
-  /** Campo legado referrals.referred_address */
-  enderecoIndicado?: string | null
   installationFeeAwareness?: boolean | null
   contractTypeAwareness?: boolean | null
+  /** @deprecated Mantido para compatibilidade de chamadas antigas. */
+  tipoRecompensa?: string | null
+  /** @deprecated Mantido para compatibilidade de chamadas antigas. */
+  cpfIndicado?: string | null
+  /** @deprecated Mantido para compatibilidade de chamadas antigas. */
+  enderecoInstalacao?: string | null
+  /** @deprecated Mantido para compatibilidade de chamadas antigas. */
+  numeroInstalacao?: string | null
+  /** @deprecated Mantido para compatibilidade de chamadas antigas. */
+  bairroInstalacao?: string | null
+  /** @deprecated Mantido para compatibilidade de chamadas antigas. */
+  cidadeInstalacao?: string | null
+  /** @deprecated Mantido para compatibilidade de chamadas antigas. */
+  estadoInstalacao?: string | null
+  /** @deprecated Mantido para compatibilidade de chamadas antigas. */
+  cepInstalacao?: string | null
+  /** @deprecated Mantido para compatibilidade de chamadas antigas. */
+  enderecoIndicado?: string | null
 }
 
 export type BrbyteInterestedObservationBuild = {
@@ -34,40 +49,8 @@ export type BrbyteInterestedObservationBuild = {
   originalLength: number
 }
 
-function rewardTypeLabel(value: RecompensaTipo | string | null | undefined): string {
-  if (value === "desconto_fatura") return "Desconto na fatura"
-  if (value === "pix") return "Pix"
-  return "Não informado"
-}
-
-function buildAddressLine(input: BrbyteInterestedObservationInput): string | null {
-  const legacy = input.enderecoIndicado?.trim()
-  if (legacy) return legacy
-
-  const street = input.enderecoInstalacao?.trim()
-  const number = input.numeroInstalacao?.trim()
-  const neighborhood = input.bairroInstalacao?.trim()
-  const city = input.cidadeInstalacao?.trim()
-  const state = input.estadoInstalacao?.trim()
-  const zip = input.cepInstalacao?.replace(/\D/g, "") || null
-
-  const parts: string[] = []
-  if (street) {
-    parts.push(number ? `${street}, nº ${number}` : street)
-  } else if (number) {
-    parts.push(`nº ${number}`)
-  }
-  if (neighborhood) parts.push(neighborhood)
-
-  const cityState = [city, state].filter(Boolean).join("/")
-  if (cityState) parts.push(cityState)
-  if (zip) parts.push(`CEP ${zip}`)
-
-  return parts.length > 0 ? parts.join(", ") : null
-}
-
 function yesNo(value: boolean | null | undefined): string {
-  return value ? "Sim" : "Não"
+  return value ? "SIM" : "NÃO"
 }
 
 function segment(label: string, value: string): string {
@@ -78,38 +61,59 @@ function joinSegments(segments: string[]): string {
   return segments.filter(Boolean).join(OBSERVATION_SEPARATOR)
 }
 
-function buildEssentialSegments(
-  referral: BrbyteInterestedObservationInput,
-  maxLength: number
+function upperText(value: string | null | undefined, fallback: string): string {
+  return normalizeControllrText(value) ?? fallback
+}
+
+function buildMandatorySegments(
+  referral: BrbyteInterestedObservationInput
 ): string[] {
-  const origem = segment("Origem", referral.erpLeadSource?.trim() || "Indique e Ganhe")
-  const tipoContratacao = segment(
-    "Tipo contratação",
-    getReferralContractTypeLabel(referral.tipoContratacao)
-  )
-  const taxas = segment("Taxas ciente", yesNo(referral.installationFeeAwareness))
-  const livre = segment(
-    "Livre/Vantagens ciente",
-    yesNo(referral.contractTypeAwareness)
+  const origem = segment(
+    "ORIGEM",
+    upperText(referral.erpLeadSource, "INDIQUE E GANHE")
   )
 
-  let indicadorNome = referral.indicadorNome?.trim() || "Não informado"
+  let indicadorNome = upperText(referral.indicadorNome, "NÃO INFORMADO")
+  const plano = segment(
+    "PLANO",
+    upperText(referral.planoNome, "NÃO INFORMADO")
+  )
+  const nascimento = segment(
+    "NASCIMENTO",
+    formatControllrBirthDate(referral.birthDate) ?? "NÃO INFORMADO"
+  )
+  const dueDay =
+    typeof referral.preferredInvoiceDueDay === "number" &&
+    Number.isInteger(referral.preferredInvoiceDueDay)
+      ? referral.preferredInvoiceDueDay
+      : null
+  const vencimento = segment(
+    "VENCIMENTO",
+    dueDay != null ? `DIA ${String(dueDay).padStart(2, "0")}` : "NÃO INFORMADO"
+  )
+
   while (indicadorNome.length > 0) {
-    const indicador = segment("Indicador", indicadorNome)
+    const indicador = segment("INDICADOR", indicadorNome)
     const candidate = joinSegments([
       origem,
       indicador,
-      tipoContratacao,
-      taxas,
-      livre,
+      plano,
+      nascimento,
+      vencimento,
     ])
-    if (candidate.length <= maxLength) {
-      return [origem, indicador, tipoContratacao, taxas, livre]
+    if (candidate.length <= BRBYTE_FIELD_MAX_LENGTH) {
+      return [origem, indicador, plano, nascimento, vencimento]
     }
     indicadorNome = indicadorNome.slice(0, -1).trimEnd()
   }
 
-  return [origem, tipoContratacao, taxas, livre]
+  return [
+    origem,
+    segment("INDICADOR", "NÃO INFORMADO"),
+    plano,
+    nascimento,
+    vencimento,
+  ]
 }
 
 function appendSegmentIfFits(
@@ -131,59 +135,46 @@ function appendSegmentIfFits(
 
 /**
  * Monta observação para criação de Interessado no ERP BRByte (máx. 255 caracteres).
- * Prioriza informações essenciais; campos opcionais e observação do formulário só entram se couberem.
+ *
+ * Prioridade:
+ * 1. ORIGEM  2. INDICADOR  3. PLANO  4. NASCIMENTO  5. VENCIMENTO
+ * 6. CONTRATAÇÃO  7. TAXAS  8. LIVRE/VANTAGENS  9. OBSERVAÇÃO LIVRE
+ *
+ * Nunca remove: ORIGEM, INDICADOR, PLANO, NASCIMENTO, VENCIMENTO.
  */
 export function buildBrbyteInterestedObservation(
   referral: BrbyteInterestedObservationInput
 ): BrbyteInterestedObservationBuild {
   const maxLength = BRBYTE_FIELD_MAX_LENGTH
+  const mandatory = buildMandatorySegments(referral)
 
-  const essentialSegments = buildEssentialSegments(referral, maxLength)
+  const contratacao = upperText(
+    getReferralContractTypeLabel(referral.tipoContratacao),
+    "NÃO INFORMADO"
+  )
+  const taxas = yesNo(referral.installationFeeAwareness)
+  const livre = yesNo(referral.contractTypeAwareness)
+  const formObservation = upperText(referral.observacaoIndicado, "")
 
-  const fullDraftSegments = [
-    ...essentialSegments,
-    segment("Plano", referral.planoNome?.trim() || "Não informado"),
-    segment("Recompensa", rewardTypeLabel(referral.tipoRecompensa)),
-    segment(
-      "CPF informado",
-      referral.cpfIndicado?.replace(/\D/g, "") ? "Sim" : "Não"
-    ),
-    segment("Endereço", buildAddressLine(referral) || "Não informado"),
-  ]
-
-  const formObservation = referral.observacaoIndicado?.trim()
   const fullDraft = joinSegments([
-    ...fullDraftSegments,
-    ...(formObservation ? [segment("Obs", formObservation)] : []),
+    ...mandatory,
+    segment("CONTRATAÇÃO", contratacao),
+    segment("TAXAS", taxas),
+    segment("LIVRE/VANTAGENS", livre),
+    ...(formObservation ? [segment("OBS", formObservation)] : []),
   ])
 
-  const segments = [...essentialSegments]
-
-  appendSegmentIfFits(segments, "Plano", referral.planoNome, maxLength)
-  appendSegmentIfFits(
-    segments,
-    "Recompensa",
-    rewardTypeLabel(referral.tipoRecompensa),
-    maxLength
-  )
-  appendSegmentIfFits(
-    segments,
-    "CPF informado",
-    referral.cpfIndicado?.replace(/\D/g, "") ? "Sim" : "Não",
-    maxLength
-  )
-
-  const address = buildAddressLine(referral)
-  if (address) {
-    appendSegmentIfFits(segments, "Endereço", address, maxLength)
-  }
+  const segments = [...mandatory]
+  appendSegmentIfFits(segments, "CONTRATAÇÃO", contratacao, maxLength)
+  appendSegmentIfFits(segments, "TAXAS", taxas, maxLength)
+  appendSegmentIfFits(segments, "LIVRE/VANTAGENS", livre, maxLength)
 
   let assembled = joinSegments(segments)
 
   if (formObservation) {
     const prefix = assembled
-      ? `${assembled}${OBSERVATION_SEPARATOR}Obs: `
-      : "Obs: "
+      ? `${assembled}${OBSERVATION_SEPARATOR}OBS: `
+      : "OBS: "
     const remaining = maxLength - prefix.length
     if (remaining > 0) {
       const observationPart =
@@ -196,12 +187,20 @@ export function buildBrbyteInterestedObservation(
 
   const truncatedDuringAssembly =
     fullDraft.length > maxLength || assembled.length > maxLength
-
   const final = truncateBrbyteField(assembled, maxLength)
+  const truncated = truncatedDuringAssembly || final.truncated
+
+  if (truncated) {
+    console.warn(LOG_TAG, {
+      originalLength: Math.max(fullDraft.length, final.originalLength),
+      finalLength: final.value.length,
+      maxLength,
+    })
+  }
 
   return {
     value: final.value,
-    truncated: truncatedDuringAssembly || final.truncated,
+    truncated,
     originalLength: Math.max(fullDraft.length, final.originalLength),
   }
 }

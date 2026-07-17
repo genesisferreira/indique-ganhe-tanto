@@ -28,7 +28,10 @@ import {
 type DashboardPayload = {
   flags: {
     createInterestEnabled: boolean
+    autoCreateInterestOnReferralEnabled: boolean
     syncEnabled: boolean
+    autoCheckConversionEnabled: boolean
+    autoCheckFirstInvoiceEnabled: boolean
     autoMarkPaidEnabled: boolean
     apiUrlConfigured: boolean
     apiUrlHost: string | null
@@ -102,7 +105,10 @@ function buildEmptyDashboard(): DashboardPayload {
   return {
     flags: {
       createInterestEnabled: false,
+      autoCreateInterestOnReferralEnabled: false,
       syncEnabled: false,
+      autoCheckConversionEnabled: false,
+      autoCheckFirstInvoiceEnabled: false,
       autoMarkPaidEnabled: false,
       apiUrlConfigured: false,
       apiUrlHost: null,
@@ -457,8 +463,20 @@ export default function AdminBrbyteIntegracaoPage() {
               enabled={flags.createInterestEnabled}
             />
             <FlagRow
+              label="BRBYTE_AUTO_CREATE_INTEREST_ON_REFERRAL"
+              enabled={flags.autoCreateInterestOnReferralEnabled}
+            />
+            <FlagRow
               label="BRBYTE_SYNC_ENABLED"
               enabled={flags.syncEnabled}
+            />
+            <FlagRow
+              label="BRBYTE_AUTO_CHECK_CONVERSION"
+              enabled={flags.autoCheckConversionEnabled}
+            />
+            <FlagRow
+              label="BRBYTE_AUTO_CHECK_FIRST_INVOICE"
+              enabled={flags.autoCheckFirstInvoiceEnabled}
             />
             <FlagRow
               label="BRBYTE_AUTO_MARK_PAID_ENABLED"

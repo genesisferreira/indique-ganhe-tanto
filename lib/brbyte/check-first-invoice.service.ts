@@ -11,6 +11,8 @@ import {
 import { brbyteAdminLogin } from "@/lib/brbyte/admin-http"
 import {
   getBrbyteCreateInterestConfig,
+  getBrbyteOperationalConfig,
+  isBrbyteAutoCheckFirstInvoiceEnabled,
   isBrbyteCreateInterestEnabled,
 } from "@/lib/brbyte/config"
 import { fetchInvoiceInfo } from "@/lib/brbyte/invoice-info"
@@ -95,7 +97,8 @@ function getDb(): BrbyteLooseDb {
 async function createSyncRun(
   referralId: string,
   actorUserId: string | null,
-  configured: boolean
+  configured: boolean,
+  triggeredBy: string
 ): Promise<string | null> {
   try {
     const { data, error } = await getDb()
@@ -107,7 +110,7 @@ async function createSyncRun(
         meta: {
           phase: CHECK_FIRST_INVOICE_PHASE,
           referral_id: referralId,
-          triggered_by: "admin_manual",
+          triggered_by: triggeredBy,
           actor_user_id: actorUserId,
         },
       })
@@ -550,11 +553,30 @@ function syncRunAuditMeta(input: {
 export async function checkBrbyteFirstInvoiceFromReferral(input: {
   referralId: string
   actorUserId?: string | null
+  triggeredBy?: "admin_manual" | "cron_automatic"
 }): Promise<BrbyteCheckFirstInvoiceResult> {
   const started = Date.now()
   const referralId = input.referralId.trim()
+  const triggeredBy = input.triggeredBy ?? "admin_manual"
+  const isCron = triggeredBy === "cron_automatic"
 
-  if (!isBrbyteCreateInterestEnabled()) {
+  if (isCron) {
+    if (!isBrbyteAutoCheckFirstInvoiceEnabled()) {
+      return {
+        ok: false,
+        paid: false,
+        skipped: true,
+        reason: "disabled",
+        referralId,
+        syncRunId: null,
+        contractPk: null,
+        invoicePk: null,
+        brbyteClientPk: null,
+        message: "Verificação automática de primeira fatura desabilitada.",
+        durationMs: Date.now() - started,
+      }
+    }
+  } else if (!isBrbyteCreateInterestEnabled()) {
     return {
       ok: false,
       paid: false,
@@ -570,7 +592,9 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
     }
   }
 
-  const config = getBrbyteCreateInterestConfig()
+  const config = isCron
+    ? getBrbyteOperationalConfig()
+    : getBrbyteCreateInterestConfig()
   if (!config) {
     return {
       ok: false,
@@ -634,7 +658,12 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
     }
   }
 
-  const syncRunId = await createSyncRun(referralId, input.actorUserId ?? null, true)
+  const syncRunId = await createSyncRun(
+    referralId,
+    input.actorUserId ?? null,
+    true,
+    triggeredBy
+  )
   const clientPk = referral.brbyte_client_pk!.trim()
   let contractPk = resolveStoredContractPk(referral)
 

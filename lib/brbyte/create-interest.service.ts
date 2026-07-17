@@ -21,12 +21,21 @@ import { brbyteAdminLogin, brbyteAdminPostForm } from "@/lib/brbyte/admin-http"
 import {
   getBrbyteCreateInterestConfig,
   getBrbyteCreateInterestConfigForIntegration,
+  isBrbyteAutoCreateInterestOnReferralEnabled,
   isBrbyteCreateInterestEnabled,
   type BrbyteCreateInterestConfig,
 } from "@/lib/brbyte/config"
 import { resolveBrbytePlanPkForReferral } from "@/lib/brbyte/plan-mapping"
 import { logBrbyteReferralHistory } from "@/lib/brbyte/referral-history"
 import { splitPersonName } from "@/lib/brbyte/split-name"
+import {
+  normalizeControllrErpTextFields,
+  normalizeControllrText,
+} from "@/lib/brbyte/normalize-controllr-text"
+import {
+  getIndicatorBrbyteStatusMessage,
+  INDICATOR_REFERRAL_SAVED_MESSAGE,
+} from "@/lib/brbyte/indicator-status-messages"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { isReferralContractType } from "@/lib/referral-contract-type"
 import { getPublicPreRegistrationDefaultBrbytePlanPk } from "@/lib/public-pre-registration/config"
@@ -34,9 +43,6 @@ import {
   formatPublicOfferPrice,
   getPublicPreRegistrationOfferByCode,
 } from "@/lib/public-pre-registration/offers"
-import {
-  normalizePublicPreRegistrationErpTextFields,
-} from "@/lib/public-pre-registration/normalize"
 import {
   BRBYTE_API_PATHS,
   type BrbyteCreateInterestResult,
@@ -49,17 +55,35 @@ import {
   isPublicPreRegistrationReferral,
 } from "@/lib/referral-reward-eligibility"
 
-export type BrbyteCreateInterestSourceContext = "referral" | "public_pre_registration"
+export type BrbyteCreateInterestSourceContext =
+  | "indicator_referral"
+  | "public_pre_registration"
+  | "admin_manual"
+  | "cron_retry"
 
 const LOG_TAG = "[brbyte:create-interest]"
 const LOGIN_ENDPOINT = "/login"
 const CREATE_INTEREST_PHASE: BrbyteSyncRunPhase = "create_interest"
 const MAX_UI_RETRY_ATTEMPTS = 3
+const CREATE_IN_PROGRESS_ENDPOINT = "create_interest:in_progress"
+const CREATE_CLAIM_TTL_MS = 120_000
+
+const ALREADY_SYNCED_STATUSES = new Set<BrbyteSyncStatus>([
+  "created",
+  "converted",
+  "waiting_conversion",
+  "waiting_contract",
+  "waiting_invoice",
+  "paid_confirmed",
+  "completed",
+  "synced",
+])
 
 export { MAX_UI_RETRY_ATTEMPTS as BRBYTE_CREATE_INTEREST_MAX_RETRY_ATTEMPTS }
 
 type ReferralCreateInterestRow = {
   id: string
+  indicator_profile_id: string | null
   referred_name: string
   referred_phone: string
   referred_email: string | null
@@ -103,6 +127,8 @@ type ReferralCreateInterestRow = {
   brbyte_sync_status: string | null
   brbyte_sync_error: string | null
   brbyte_sync_attempts: number | null
+  brbyte_last_endpoint: string | null
+  brbyte_last_sync_at: string | null
   plan_id: string
   plans:
     | { name: string; speed_label?: string | null }
@@ -267,6 +293,7 @@ async function loadReferralForCreateInterest(
     .select(
       `
       id,
+      indicator_profile_id,
       referred_name,
       referred_phone,
       referred_email,
@@ -310,6 +337,8 @@ async function loadReferralForCreateInterest(
       brbyte_sync_status,
       brbyte_sync_error,
       brbyte_sync_attempts,
+      brbyte_last_endpoint,
+      brbyte_last_sync_at,
       plan_id,
       plans:plan_id ( name, speed_label ),
       indicator:indicator_profile_id ( full_name )
@@ -339,7 +368,7 @@ function buildCreateInterestForm(
     source: row.source,
     erp_lead_source: row.erp_lead_source,
   })
-  const publicErpText = normalizePublicPreRegistrationErpTextFields({
+  const erpText = normalizeControllrErpTextFields({
     name: row.referred_name,
     rg: row.referred_rg,
     state: row.referred_state,
@@ -349,12 +378,7 @@ function buildCreateInterestForm(
     number: row.referred_number,
     complement: row.referred_complement,
   })
-  const nameForErp = isPublic ? publicErpText.name : row.referred_name
-  const { firstName, lastName } = splitPersonName(nameForErp)
-  const erpText = (
-    publicValue: string,
-    originalValue: string | null | undefined
-  ): string => (isPublic ? publicValue : (originalValue ?? "").trim())
+  const { firstName, lastName } = splitPersonName(erpText.name)
 
   const catalogOffer = getPublicPreRegistrationOfferByCode(row.public_offer_code)
   const offerName =
@@ -397,21 +421,16 @@ function buildCreateInterestForm(
         erpLeadSource: row.erp_lead_source,
         indicadorNome: indicatorNameFromRow(row),
         tipoContratacao: contractType,
-        planoNome,
-        tipoRecompensa: row.reward_type,
-        cpfIndicado: row.referred_document,
-        enderecoInstalacao: row.referred_street,
-        numeroInstalacao: row.referred_number,
-        bairroInstalacao: row.referred_neighborhood,
-        cidadeInstalacao: row.referred_city,
-        estadoInstalacao: row.referred_state,
-        cepInstalacao: row.referred_zipcode,
+        planoNome: normalizeControllrText(planoNome) ?? planoNome,
+        birthDate: row.referred_birth_date,
+        preferredInvoiceDueDay: row.preferred_invoice_due_day,
         observacaoIndicado: row.referred_observation,
-        enderecoIndicado: row.referred_address,
         installationFeeAwareness: row.installation_fee_awareness,
         contractTypeAwareness: row.contract_type_awareness,
       })
-  const interestObsResult = truncateBrbyteField(interestObsBuild.value)
+  const interestObsResult = truncateBrbyteField(
+    normalizeControllrText(interestObsBuild.value) ?? interestObsBuild.value
+  )
   if (interestObsBuild.truncated || interestObsResult.truncated) {
     console.warn(LOG_TAG, {
       step: "interest_obs_truncated",
@@ -434,26 +453,17 @@ function buildCreateInterestForm(
     interest_name: firstName,
     interest_lastname: lastName,
     interest_doc1: onlyDigits(row.referred_document),
-    interest_doc2: erpText(publicErpText.rg, row.referred_rg),
+    interest_doc2: erpText.rg,
     interest_phone_number: onlyDigits(row.referred_phone),
     interest_email_addr: (row.referred_email ?? "").trim(),
     interest_addr_zipcode: onlyDigits(row.referred_zipcode),
-    interest_addr_state: erpText(
-      publicErpText.state,
-      row.referred_state
-    ).toUpperCase(),
-    interest_addr_city: erpText(publicErpText.city, row.referred_city),
-    interest_addr_neighborhood: erpText(
-      publicErpText.neighborhood,
-      row.referred_neighborhood
-    ),
-    interest_addr_address: erpText(publicErpText.street, row.referred_street),
-    interest_addr_number: erpText(publicErpText.number, row.referred_number),
-    interest_addr_obs: erpText(
-      publicErpText.complement,
-      row.referred_complement
-    ),
-    ...(isPublic && row.referred_birth_date
+    interest_addr_state: erpText.state,
+    interest_addr_city: erpText.city,
+    interest_addr_neighborhood: erpText.neighborhood,
+    interest_addr_address: erpText.street,
+    interest_addr_number: erpText.number,
+    interest_addr_obs: erpText.complement,
+    ...(row.referred_birth_date
       ? { client_date_birth: row.referred_birth_date }
       : {}),
     plan_pk: planPk,
@@ -465,6 +475,9 @@ function validateReferralForCreate(row: ReferralCreateInterestRow): string | nul
   const syncStatus = normalizeBrbyteSyncStatus(row.brbyte_sync_status)
   if (isUnconfirmedBrbyteCreateError(row.brbyte_sync_error)) {
     return BRBYTE_UNCONFIRMED_INTEREST_MESSAGE
+  }
+  if (ALREADY_SYNCED_STATUSES.has(syncStatus)) {
+    return "Esta indicação já possui Interessado vinculado no Controllr."
   }
   if (row.brbyte_id_interessado?.trim() && syncStatus !== "error") {
     return "Esta indicação já possui Interessado vinculado no Controllr."
@@ -479,6 +492,82 @@ function validateReferralForCreate(row: ReferralCreateInterestRow): string | nul
     return "Telefone do indicado é obrigatório."
   }
   return null
+}
+
+function resolveTriggeredBy(
+  sourceContext: BrbyteCreateInterestSourceContext
+): string {
+  switch (sourceContext) {
+    case "public_pre_registration":
+      return PUBLIC_PRE_REGISTRATION_SOURCE
+    case "indicator_referral":
+      return "indicator_automatic"
+    case "cron_retry":
+      return "cron_retry"
+    case "admin_manual":
+    default:
+      return "admin_manual"
+  }
+}
+
+async function claimCreateInterestLock(
+  referralId: string,
+  row: ReferralCreateInterestRow
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const lastEndpoint = row.brbyte_last_endpoint?.trim() ?? ""
+  const lastSyncAt = row.brbyte_last_sync_at
+    ? Date.parse(row.brbyte_last_sync_at)
+    : NaN
+  const claimFresh =
+    lastEndpoint === CREATE_IN_PROGRESS_ENDPOINT &&
+    Number.isFinite(lastSyncAt) &&
+    Date.now() - lastSyncAt < CREATE_CLAIM_TTL_MS
+
+  if (claimFresh) {
+    return {
+      ok: false,
+      message: "Já existe um envio em andamento para esta indicação.",
+    }
+  }
+
+  const nowIso = new Date().toISOString()
+  const supabase = createServiceRoleClient() as unknown as {
+    from: (table: string) => {
+      update: (values: Record<string, unknown>) => {
+        eq: (col: string, val: string) => {
+          is: (col: string, val: null) => {
+            select: (cols: string) => Promise<{
+              data: { id: string }[] | null
+              error: { message: string } | null
+            }>
+          }
+        }
+      }
+    }
+  }
+  const { data, error } = await supabase
+    .from("referrals")
+    .update({
+      brbyte_last_endpoint: CREATE_IN_PROGRESS_ENDPOINT,
+      brbyte_last_sync_at: nowIso,
+    })
+    .eq("id", referralId)
+    .is("brbyte_id_interessado", null)
+    .select("id")
+
+  if (error) {
+    console.error(LOG_TAG, { step: "claim_lock", message: error.message })
+    return { ok: false, message: "Não foi possível iniciar o envio agora." }
+  }
+
+  if (!data || data.length === 0) {
+    return {
+      ok: false,
+      message: "Esta indicação já possui Interessado vinculado no Controllr.",
+    }
+  }
+
+  return { ok: true }
 }
 
 async function persistReferralSyncState(
@@ -656,12 +745,31 @@ export async function createBrbyteInterestFromReferral(input: {
 }): Promise<BrbyteCreateInterestResult> {
   const started = Date.now()
   const referralId = input.referralId.trim()
-  const isPublicFlow = input.sourceContext === "public_pre_registration"
-  const triggeredBy = isPublicFlow
-    ? PUBLIC_PRE_REGISTRATION_SOURCE
-    : "admin_manual"
+  const sourceContext: BrbyteCreateInterestSourceContext =
+    input.sourceContext ?? "admin_manual"
+  const isPublicFlow = sourceContext === "public_pre_registration"
+  const isIndicatorFlow = sourceContext === "indicator_referral"
+  const triggeredBy = resolveTriggeredBy(sourceContext)
 
-  if (!isPublicFlow && !isBrbyteCreateInterestEnabled()) {
+  if (isIndicatorFlow && !isBrbyteAutoCreateInterestOnReferralEnabled()) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "disabled",
+      referralId,
+      syncRunId: null,
+      brbyteIdInteressado: null,
+      brbyteInteressadoStatus: null,
+      message: INDICATOR_REFERRAL_SAVED_MESSAGE,
+      durationMs: Date.now() - started,
+    }
+  }
+
+  if (
+    !isPublicFlow &&
+    !isIndicatorFlow &&
+    !isBrbyteCreateInterestEnabled()
+  ) {
     return {
       ok: false,
       skipped: true,
@@ -687,7 +795,9 @@ export async function createBrbyteInterestFromReferral(input: {
       syncRunId: null,
       brbyteIdInteressado: null,
       brbyteInteressadoStatus: null,
-      message: "Integração BRByte incompleta. Verifique variáveis de ambiente.",
+      message: isIndicatorFlow
+        ? INDICATOR_REFERRAL_SAVED_MESSAGE
+        : "Integração BRByte incompleta. Verifique variáveis de ambiente.",
       durationMs: Date.now() - started,
     }
   }
@@ -721,6 +831,26 @@ export async function createBrbyteInterestFromReferral(input: {
     }
   }
 
+  if (isIndicatorFlow && !row.indicator_profile_id) {
+    await finishSyncRun(syncRunId, {
+      status: "error",
+      phase: CREATE_INTEREST_PHASE,
+      processed: 0,
+      errors_count: 1,
+      duration_ms: Date.now() - started,
+      error_summary: { message: "missing_indicator_profile_id" },
+    })
+    return {
+      ok: false,
+      referralId,
+      syncRunId,
+      brbyteIdInteressado: null,
+      brbyteInteressadoStatus: null,
+      message: INDICATOR_REFERRAL_SAVED_MESSAGE,
+      durationMs: Date.now() - started,
+    }
+  }
+
   const currentAttempts =
     typeof row.brbyte_sync_attempts === "number" ? row.brbyte_sync_attempts : 0
 
@@ -740,6 +870,7 @@ export async function createBrbyteInterestFromReferral(input: {
         endpoint: BRBYTE_API_PATHS.createClientInterest,
         success: false,
         error: validationError,
+        triggeredBy,
       }),
     })
     return {
@@ -748,9 +879,42 @@ export async function createBrbyteInterestFromReferral(input: {
       reason: "validation",
       referralId,
       syncRunId,
-      brbyteIdInteressado: null,
-      brbyteInteressadoStatus: null,
-      message: validationError,
+      brbyteIdInteressado: row.brbyte_id_interessado?.trim() || null,
+      brbyteInteressadoStatus: row.brbyte_interessado_status,
+      message: isIndicatorFlow
+        ? getIndicatorBrbyteStatusMessage(row.brbyte_sync_status)
+        : validationError,
+      durationMs: Date.now() - started,
+    }
+  }
+
+  const claim = await claimCreateInterestLock(referralId, row)
+  if (!claim.ok) {
+    await finishSyncRun(syncRunId, {
+      status: "skipped",
+      phase: CREATE_INTEREST_PHASE,
+      skipped_records: 1,
+      duration_ms: Date.now() - started,
+      error_summary: { message: claim.message },
+      meta: syncRunAuditMeta({
+        referralId,
+        endpoint: CREATE_IN_PROGRESS_ENDPOINT,
+        success: false,
+        error: claim.message,
+        triggeredBy,
+      }),
+    })
+    return {
+      ok: false,
+      skipped: true,
+      reason: "validation",
+      referralId,
+      syncRunId,
+      brbyteIdInteressado: row.brbyte_id_interessado?.trim() || null,
+      brbyteInteressadoStatus: row.brbyte_interessado_status,
+      message: isIndicatorFlow
+        ? INDICATOR_REFERRAL_SAVED_MESSAGE
+        : claim.message,
       durationMs: Date.now() - started,
     }
   }
@@ -892,7 +1056,8 @@ export async function createBrbyteInterestFromReferral(input: {
     config,
     login.cookie,
     BRBYTE_API_PATHS.createClientInterest,
-    form
+    form,
+    { maxAttempts: 1 }
   )
 
   const payload =
@@ -925,8 +1090,10 @@ export async function createBrbyteInterestFromReferral(input: {
       newStatus: "error",
       endpoint: BRBYTE_API_PATHS.createClientInterest,
       httpStatus: apiResult.status,
-      message,
-      payload: { response: payload },
+      message: isIndicatorFlow
+        ? "Falha no envio automático ao sistema comercial. A indicação permanece salva para nova tentativa."
+        : message,
+      payload: { response: payload, triggered_by: triggeredBy },
       createdBy: input.actorUserId ?? null,
     })
 
@@ -949,6 +1116,7 @@ export async function createBrbyteInterestFromReferral(input: {
         success: false,
         error: message,
         request: form,
+        triggeredBy,
       }),
     })
 
@@ -958,7 +1126,7 @@ export async function createBrbyteInterestFromReferral(input: {
       syncRunId,
       brbyteIdInteressado: null,
       brbyteInteressadoStatus: null,
-      message,
+      message: isIndicatorFlow ? INDICATOR_REFERRAL_SAVED_MESSAGE : message,
       durationMs: Date.now() - started,
     }
   }
@@ -1108,11 +1276,15 @@ export async function createBrbyteInterestFromReferral(input: {
     newStatus: "created",
     endpoint: BRBYTE_API_PATHS.createClientInterest,
     httpStatus: apiResult.status,
-    message: "Interessado criado no Controllr com sucesso.",
+    message: isIndicatorFlow
+      ? "Interessado criado automaticamente no Controllr após cadastro da indicação."
+      : "Interessado criado no Controllr com sucesso.",
     payload: {
       brbyte_id_interessado: brbyteId,
       plan_pk_source: planPkSource,
       sync_run_id: syncRunId,
+      triggered_by: triggeredBy,
+      source_context: sourceContext,
     },
     createdBy: input.actorUserId ?? null,
   })
@@ -1130,6 +1302,7 @@ export async function createBrbyteInterestFromReferral(input: {
       httpStatus: apiResult.status,
       success: true,
       request: form,
+      triggeredBy,
     }),
   })
 
@@ -1140,6 +1313,8 @@ export async function createBrbyteInterestFromReferral(input: {
     resolutionSource: resolution.source,
     syncRunId,
     planPkSource,
+    triggeredBy,
+    sourceContext,
   })
 
   return {
@@ -1148,7 +1323,9 @@ export async function createBrbyteInterestFromReferral(input: {
     syncRunId,
     brbyteIdInteressado: brbyteId,
     brbyteInteressadoStatus: brbyteStatus,
-    message: "Interessado criado no Controllr com sucesso.",
+    message: isIndicatorFlow
+      ? getIndicatorBrbyteStatusMessage("created")
+      : "Interessado criado no Controllr com sucesso.",
     durationMs: Date.now() - started,
   }
 }

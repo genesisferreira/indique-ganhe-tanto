@@ -93,7 +93,7 @@ export interface Indicacao {
   publicOfferCode?: string
   publicOfferName?: string
   publicOfferPrice?: number
-  /** Data ISO YYYY-MM-DD informada no pré-cadastro público. */
+  /** Data ISO YYYY-MM-DD (indicação normal ou pré-cadastro público). */
   referredBirthDate?: string
   preferredInvoiceDueDay?: number
   publicPreRegistrationAt?: Date

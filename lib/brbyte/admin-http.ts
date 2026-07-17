@@ -75,11 +75,13 @@ export async function brbyteAdminPostForm(
   config: BrbyteCreateInterestConfig,
   cookie: string,
   path: string,
-  fields: Record<string, string>
+  fields: Record<string, string>,
+  options?: { maxAttempts?: number }
 ): Promise<BrbyteAdminPostResult> {
   const base = config.apiUrl.replace(/\/$/, "")
   const url = `${base}${path.startsWith("/") ? path : `/${path}`}`
   const body = new URLSearchParams()
+  const maxAttempts = Math.max(1, options?.maxAttempts ?? 2)
 
   for (const [key, value] of Object.entries(fields)) {
     if (value !== "") body.set(key, value)
@@ -87,7 +89,7 @@ export async function brbyteAdminPostForm(
 
   let lastMessage: string | undefined
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
@@ -124,7 +126,7 @@ export async function brbyteAdminPostForm(
           status: res.status,
           bodyPreview: text.slice(0, 300),
         })
-        if (attempt < 2) {
+        if (attempt < maxAttempts) {
           await sleep(400 * attempt)
           continue
         }
@@ -135,7 +137,7 @@ export async function brbyteAdminPostForm(
     } catch (e) {
       lastMessage = e instanceof Error ? e.message : String(e)
       console.error(LOG_TAG, { path, attempt, message: lastMessage })
-      if (attempt < 2) {
+      if (attempt < maxAttempts) {
         await sleep(400 * attempt)
         continue
       }

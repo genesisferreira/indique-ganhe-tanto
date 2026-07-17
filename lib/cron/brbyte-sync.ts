@@ -1,21 +1,21 @@
 import "server-only"
 import {
-  BRBYTE_AUTO_MARK_PAID_ENABLED,
-  runBrbyteSync,
-  type BrbyteSyncResult,
-} from "@/lib/cron/brbyte.service"
+  runBrbyteLifecycleSync,
+  type BrbyteLifecycleSyncResult,
+} from "@/lib/cron/brbyte-lifecycle-sync"
+import { isBrbyteAutoMarkPaidEnabled } from "@/lib/brbyte/config"
 
 export type BrbyteSyncCronPayload = {
   ok: boolean
   source: "brbyte-sync-cron"
   executedAt: string
-  result: BrbyteSyncResult
+  result: BrbyteLifecycleSyncResult
   error?: string
 }
 
 export function logCronBrbyteSyncStart(): void {
   console.log("[cron:brbyte-sync:start]", {
-    autoMarkPaidEnabled: BRBYTE_AUTO_MARK_PAID_ENABLED,
+    autoMarkPaidEnabled: isBrbyteAutoMarkPaidEnabled(),
   })
 }
 
@@ -32,15 +32,15 @@ export function logCronBrbyteSyncSkip(payload: unknown): void {
 }
 
 /**
- * Job cron: sincronização automática com BRByte API.
+ * Job cron: acompanhamento automático Controllr (conversão + primeira fatura).
  */
 export async function runBrbyteSyncCron(): Promise<BrbyteSyncCronPayload> {
   const executedAt = new Date().toISOString()
 
   try {
-    const result = await runBrbyteSync()
+    const result = await runBrbyteLifecycleSync()
 
-    if (result.skipped && result.reason === "disabled") {
+    if (result.skipped) {
       logCronBrbyteSyncSkip({ executedAt, result })
       return {
         ok: true,

@@ -4,6 +4,10 @@ import {
   devLogCommercialSlaLevel,
 } from "@/lib/commercial-sla"
 import {
+  isValidControllrInvoiceDueDay,
+  validateControllrBirthDate,
+} from "@/lib/brbyte/normalize-controllr-text"
+import {
   normalizeReferralDocument,
   normalizeReferralPhone,
   normalizeReferralZipcode,
@@ -1014,6 +1018,8 @@ export type InsertIndicadorReferralInput = {
   referred_number?: string | null
   referred_complement?: string | null
   referred_observation?: string | null
+  referred_birth_date: string
+  preferred_invoice_due_day: number
   referral_contract_type?: ReferralContractType
   installation_fee_awareness: boolean
   contract_type_awareness: boolean
@@ -1965,7 +1971,9 @@ export async function markNotificationAsRead(
  */
 export async function insertIndicadorReferral(
   input: InsertIndicadorReferralInput
-): Promise<{ ok: true } | { ok: false; message: string }> {
+): Promise<
+  { ok: true; referralId: string | null } | { ok: false; message: string }
+> {
   try {
     devLogInsertReferral("início")
 
@@ -2013,6 +2021,27 @@ export async function insertIndicadorReferral(
       return {
         ok: false,
         message: "CPF do indicado é obrigatório e deve ter 11 dígitos.",
+      }
+    }
+
+    const birthValidation = validateControllrBirthDate(input.referred_birth_date)
+    if (!birthValidation.ok) {
+      if (birthValidation.reason === "missing") {
+        return { ok: false, message: "Informe a data de nascimento." }
+      }
+      if (birthValidation.reason === "future") {
+        return {
+          ok: false,
+          message: "A data de nascimento não pode estar no futuro.",
+        }
+      }
+      return { ok: false, message: "Informe uma data de nascimento válida." }
+    }
+
+    if (!isValidControllrInvoiceDueDay(input.preferred_invoice_due_day)) {
+      return {
+        ok: false,
+        message: "Escolha o dia de vencimento: 05, 10, 15, 20, 25 ou 30.",
       }
     }
 
@@ -2068,6 +2097,8 @@ export async function insertIndicadorReferral(
       referred_number: nullableTrim(input.referred_number ?? undefined),
       referred_complement: nullableTrim(input.referred_complement ?? undefined),
       referred_observation: nullableTrim(input.referred_observation ?? undefined),
+      referred_birth_date: birthValidation.value,
+      preferred_invoice_due_day: input.preferred_invoice_due_day,
       erp_lead_source: "Indique e Ganhe",
       referral_contract_type: contractType,
       installation_fee_awareness: true,
@@ -2126,6 +2157,12 @@ export async function insertIndicadorReferral(
     })
 
     if (insertError) {
+      if (insertError.code === "23514") {
+        return {
+          ok: false,
+          message: "O dia de vencimento selecionado não é válido.",
+        }
+      }
       return {
         ok: false,
         message: insertError.message || "Não foi possível cadastrar a indicação.",
@@ -2150,7 +2187,7 @@ export async function insertIndicadorReferral(
       { insertedReferralId }
     )
 
-    return { ok: true }
+    return { ok: true, referralId: insertedReferralId }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return { ok: false, message: msg }
