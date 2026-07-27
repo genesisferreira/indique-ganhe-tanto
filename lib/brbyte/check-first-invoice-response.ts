@@ -1,5 +1,8 @@
 import { summarizeCreateInterestResponseBody } from "@/lib/brbyte/create-interest-response"
+import { extractInvoiceMonetaryFields } from "@/lib/brbyte/invoice-amount"
 import type { BrbyteInvoiceInfo, BrbyteInvoiceListRow } from "@/types/brbyte"
+
+export { resolveInvoiceRewardAmount } from "@/lib/brbyte/invoice-amount"
 
 const RESPONSE_LOG_TAG = "[brbyte:check-first-invoice:response-body]"
 
@@ -128,6 +131,9 @@ export function extractInvoiceInfo(payload: unknown): BrbyteInvoiceInfo {
       invoicePk: null,
       invoiceMsg: null,
       invoiceDateCredit: null,
+      invoiceAmountPaid: null,
+      invoiceAmountDocument: null,
+      paidAmount: null,
       isPaid: false,
       raw: null,
     }
@@ -140,10 +146,15 @@ export function extractInvoiceInfo(payload: unknown): BrbyteInvoiceInfo {
   const isPaid =
     invoiceMsg?.toLowerCase() === "paid" && Boolean(invoiceDateCredit)
 
+  const monetary = extractInvoiceMonetaryFields(row)
+
   return {
     invoicePk: readPkValue(row.invoice_pk ?? row.invoicePk),
     invoiceMsg,
     invoiceDateCredit,
+    invoiceAmountPaid: monetary.invoiceAmountPaid,
+    invoiceAmountDocument: monetary.invoiceAmountDocument,
+    paidAmount: monetary.paidAmount,
     isPaid,
     raw: row,
   }

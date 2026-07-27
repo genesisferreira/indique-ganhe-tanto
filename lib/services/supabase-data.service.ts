@@ -8,6 +8,14 @@ import {
   validateControllrBirthDate,
 } from "@/lib/brbyte/normalize-controllr-text"
 import {
+  getAllCommercialOffers,
+  getCommercialOfferByCode,
+} from "@/lib/commercial-offers/catalog"
+import {
+  buildIndicatorCommercialOfferOptions,
+  resolveIndicatorCrmPlanId,
+} from "@/lib/commercial-offers/indicator-resolve"
+import {
   normalizeReferralDocument,
   normalizeReferralPhone,
   normalizeReferralZipcode,
@@ -442,9 +450,14 @@ function mapReferralAcknowledgements(
 }
 
 function planNomeFromRow(row: ReferralRow): Plano | undefined {
+  const offerName = row.public_offer_name?.trim() || undefined
   const p = row.plans
-  if (!p) return undefined
-  const name = Array.isArray(p) ? p[0]?.name : p.name
+  const crmName = p
+    ? Array.isArray(p)
+      ? p[0]?.name
+      : p.name
+    : undefined
+  const name = offerName || crmName
   if (!name) return undefined
   return {
     id: row.plan_id,
@@ -500,7 +513,19 @@ function referralRowToIndicacaoMerged(
   indicadorId: string | null | undefined,
   planoById: Map<string, Plano>
 ): Indicacao {
-  const plano = planoById.get(row.plan_id)
+  const crmPlano = planoById.get(row.plan_id)
+  const offerName = row.public_offer_name?.trim() || undefined
+  const plano: Plano =
+    crmPlano != null
+      ? { ...crmPlano, nome: offerName || crmPlano.nome }
+      : {
+          id: row.plan_id,
+          nome: offerName || "Plano",
+          velocidade: "-",
+          preco: 0,
+          descricao: "",
+          ativo: true,
+        }
   return {
     id: row.id,
     indicadorId: indicadorId ?? row.indicator_profile_id ?? undefined,
@@ -509,16 +534,7 @@ function referralRowToIndicacaoMerged(
     emailIndicado: row.referred_email ?? undefined,
     enderecoIndicado: row.referred_address ?? undefined,
     planoId: row.plan_id,
-    plano:
-      plano ??
-      ({
-        id: row.plan_id,
-        nome: "Plano",
-        velocidade: "-",
-        preco: 0,
-        descricao: "",
-        ativo: true,
-      } satisfies Plano),
+    plano,
     tipoRecompensa: mapRewardType(row.reward_type),
     valorRecompensa:
       row.reward_amount != null ? Number(row.reward_amount) : undefined,
@@ -979,6 +995,28 @@ export async function fetchActivePlansForIndicador(): Promise<Plano[] | null> {
   }
 }
 
+export type IndicatorCommercialOfferOption = {
+  code: string
+  name: string
+  price: number
+  displayPrice: string
+  label: string
+}
+
+/**
+ * Catálogo comercial completo para Nova Indicação (mesma fonte do pré-cadastro).
+ * Não usa plans.reward_amount nem o preço da oferta como recompensa.
+ */
+export async function fetchIndicatorCommercialOffers(): Promise<
+  IndicatorCommercialOfferOption[] | null
+> {
+  try {
+    return buildIndicatorCommercialOfferOptions(getAllCommercialOffers())
+  } catch {
+    return null
+  }
+}
+
 /** Catálogo completo de planos (admin). Mesma tabela `plans`, inclui inativos. */
 export async function loadAdminPlansCatalogFromSupabase(): Promise<
   Plano[] | null
@@ -1023,9 +1061,9 @@ export type InsertIndicadorReferralInput = {
   referral_contract_type?: ReferralContractType
   installation_fee_awareness: boolean
   contract_type_awareness: boolean
-  plan_id: string
+  /** Código da oferta comercial (catálogo compartilhado). */
+  public_offer_code: string
   reward_type: "pix" | "desconto_fatura"
-  reward_amount: number
 }
 
 const INDICADOR_INSERT_REFERRAL_LOG_PREFIX = "[indicador-insert-referral:supabase]"
@@ -2065,6 +2103,76 @@ export async function insertIndicadorReferral(
       }
     }
 
+    const db = supabase as unknown as {
+      from: (t: string) => ReturnType<typeof supabase.from>
+    }
+
+    const offerCode = input.public_offer_code?.trim() ?? ""
+    const offer = getCommercialOfferByCode(offerCode)
+    if (!offerCode || !offer) {
+      return {
+        ok: false,
+        message: "Selecione uma oferta comercial válida.",
+      }
+    }
+
+    const { data: planRowsRaw, error: plansError } = await db
+      .from("plans")
+      .select(
+        "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+      )
+      .order("sort_order", { ascending: true })
+
+    if (plansError) {
+      return {
+        ok: false,
+        message: "Não foi possível validar o plano técnico. Tente novamente.",
+      }
+    }
+
+    const planRows = (planRowsRaw ?? []) as PlanCatalogRow[]
+    const plan500Id =
+      process.env.NEXT_PUBLIC_PUBLIC_PRE_REGISTRATION_PLAN_500_ID?.trim() ||
+      process.env.PUBLIC_PRE_REGISTRATION_PLAN_500_ID?.trim() ||
+      null
+    const plan1000Id =
+      process.env.NEXT_PUBLIC_PUBLIC_PRE_REGISTRATION_PLAN_1000_ID?.trim() ||
+      process.env.PUBLIC_PRE_REGISTRATION_PLAN_1000_ID?.trim() ||
+      null
+    const baseCrmPlanId =
+      process.env.PUBLIC_PRE_REGISTRATION_BASE_CRM_PLAN_ID?.trim() ||
+      process.env.NEXT_PUBLIC_PUBLIC_PRE_REGISTRATION_BASE_CRM_PLAN_ID?.trim() ||
+      plan500Id ||
+      plan1000Id ||
+      null
+
+    const crmPlan = resolveIndicatorCrmPlanId({
+      offerCode,
+      planRows: planRows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        speed_label: row.speed_label,
+        is_active: row.is_active,
+      })),
+      plan500Id,
+      plan1000Id,
+      baseCrmPlanId,
+    })
+
+    if (!crmPlan.ok) {
+      if (crmPlan.reason === "crm_plan_unresolved") {
+        return {
+          ok: false,
+          message:
+            "Plano técnico Controllr não configurado. Contate o suporte.",
+        }
+      }
+      return {
+        ok: false,
+        message: "Selecione uma oferta comercial válida.",
+      }
+    }
+
     const acknowledgementAt = new Date().toISOString()
 
     const nullableTrim = (value: string | null | undefined): string | null => {
@@ -2073,11 +2181,8 @@ export async function insertIndicadorReferral(
       return t !== "" ? t : null
     }
 
-    const db = supabase as unknown as {
-      from: (t: string) => ReturnType<typeof supabase.from>
-    }
-
     // Distribuição automática: trigger AFTER INSERT + RPC assign_referral_to_next_commercial
+    // reward_amount fica null até a 1ª fatura paga no Controllr (não usa plans.reward_amount).
     const insertPayload = {
       indicator_profile_id: user.id,
       referred_name: input.referred_name.trim(),
@@ -2105,9 +2210,13 @@ export async function insertIndicadorReferral(
       installation_fee_awareness_at: acknowledgementAt,
       contract_type_awareness: true,
       contract_type_awareness_at: acknowledgementAt,
-      plan_id: input.plan_id,
+      plan_id: crmPlan.planId,
+      public_offer_code: offer.code,
+      public_offer_name: offer.name,
+      public_offer_price: offer.price,
       reward_type: input.reward_type,
-      reward_amount: input.reward_amount,
+      reward_amount: null,
+      reward_eligible: true,
       commercial_profile_id: null,
       status: "pendente" as const,
       assigned_at: null,

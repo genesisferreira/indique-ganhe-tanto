@@ -461,7 +461,7 @@ export default function DetalheLeadPage({
                   </div>
                 </div>
               )}
-              {plano && !isPublicPreReg ? (
+              {plano && !isPublicPreReg && !indicacao.publicOfferName ? (
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
                     <Zap className="w-5 h-5 text-primary" />
@@ -487,7 +487,7 @@ export default function DetalheLeadPage({
                   </div>
                 </div>
               ) : null}
-              {isPublicPreReg && indicacao.publicOfferName ? (
+              {indicacao.publicOfferName ? (
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
                     <Zap className="w-5 h-5 text-primary" />
@@ -501,10 +501,29 @@ export default function DetalheLeadPage({
                     </p>
                     {indicacao.publicOfferPrice != null ? (
                       <p className="text-sm text-muted-foreground mt-0.5">
-                        Valor informado:{" "}
+                        Preço comercial:{" "}
                         {indicacao.publicOfferPrice.toLocaleString("pt-BR", {
                           style: "currency",
                           currency: "BRL",
+                        })}
+                      </p>
+                    ) : null}
+                    {indicacao.primeiraFaturaPaga &&
+                    indicacao.valorRecompensa != null ? (
+                      <p className="text-sm text-muted-foreground mt-0.5">
+                        Valor da 1ª fatura (recompensa):{" "}
+                        {indicacao.valorRecompensa.toLocaleString("pt-BR", {
+                          style: "currency",
+                          currency: "BRL",
+                        })}
+                      </p>
+                    ) : null}
+                    {!isPublicPreReg ? (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {getReferralContractTypeLabel(indicacao.tipoContratacao, {
+                          legacyFallback: indicacao.tipoContratacao
+                            ? "tanto_vantagens"
+                            : "nao_informado",
                         })}
                       </p>
                     ) : null}

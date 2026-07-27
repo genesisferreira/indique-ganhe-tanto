@@ -95,6 +95,20 @@ describe("interest_obs indicação normal", () => {
     assert.match(built.value, /VENCIMENTO: DIA 10/)
     assert.equal(built.truncated, true)
   })
+
+  it("usa o nome da oferta comercial no PLANO", () => {
+    const built = buildBrbyteInterestedObservation({
+      erpLeadSource: "Indique e Ganhe",
+      indicadorNome: "Ana",
+      planoNome: "1000 MEGA + MESH",
+      birthDate: "1988-01-01",
+      preferredInvoiceDueDay: 5,
+      tipoContratacao: "tanto_vantagens",
+      installationFeeAwareness: true,
+      contractTypeAwareness: true,
+    })
+    assert.match(built.value, /PLANO: 1000 MEGA \+ MESH/)
+  })
 })
 
 describe("feature flags auto", () => {
@@ -147,6 +161,22 @@ describe("primeira fatura e baixa", () => {
     const isPaid =
       invoiceMsg.toLowerCase() === "paid" && Boolean(invoiceDateCredit)
     assert.equal(isPaid, false)
+  })
+
+  it("segunda fatura não substitui a primeira selecionada", () => {
+    const rows = [
+      { invoicePk: "2", due: "2026-03-10", deleted: false },
+      { invoicePk: "1", due: "2026-02-10", deleted: false },
+    ]
+    const first = rows
+      .filter((row) => row.invoicePk && !row.deleted)
+      .sort((a, b) => Date.parse(a.due) - Date.parse(b.due))[0]
+    assert.equal(first?.invoicePk, "1")
+    // Execução repetida com as mesmas faturas permanece na primeira
+    const again = rows
+      .filter((row) => row.invoicePk && !row.deleted)
+      .sort((a, b) => Date.parse(a.due) - Date.parse(b.due))[0]
+    assert.equal(again?.invoicePk, first?.invoicePk)
   })
 })
 

@@ -41,12 +41,11 @@ import {
   normalizeReferralPhone,
   normalizeReferralZipcode,
 } from "@/lib/referral-field-normalize"
-import { planos as mockPlanosFallback } from "@/lib/services/mock-data.service"
 import {
-  fetchActivePlansForIndicador,
+  fetchIndicatorCommercialOffers,
   insertIndicadorReferral,
+  type IndicatorCommercialOfferOption,
 } from "@/lib/services/supabase-data.service"
-import type { Plano } from "@/types/plan"
 import type { ReferralContractType } from "@/types/referral"
 import { CheckCircle2, Wallet, Receipt, Info, Loader2 } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -56,10 +55,9 @@ export default function NovaIndicacaoPage() {
   const numeroRef = useRef<HTMLInputElement>(null)
   const [isLoading, setIsLoading] = useState(false)
   const submittingRef = useRef(false)
-  const [planos, setPlanos] = useState<Plano[]>(() =>
-    isDataProviderMock() ? mockPlanosFallback : []
-  )
-  const [selectedPlano, setSelectedPlano] = useState<string>("")
+  const [offers, setOffers] = useState<IndicatorCommercialOfferOption[]>([])
+  const [offersLoading, setOffersLoading] = useState(!isDataProviderMock())
+  const [selectedOfferCode, setSelectedOfferCode] = useState<string>("")
   const [tipoContratacao, setTipoContratacao] =
     useState<ReferralContractType>("tanto_vantagens")
   const [tipoRecompensa, setTipoRecompensa] = useState<"pix" | "desconto">("pix")
@@ -90,15 +88,20 @@ export default function NovaIndicacaoPage() {
   const cepDigits = onlyDigits(cep)
 
   useEffect(() => {
-    if (isDataProviderMock()) return
+    if (isDataProviderMock()) {
+      setOffersLoading(false)
+      return
+    }
     void (async () => {
-      const remote = await fetchActivePlansForIndicador()
+      setOffersLoading(true)
+      const remote = await fetchIndicatorCommercialOffers()
+      setOffersLoading(false)
       if (remote !== null) {
-        setPlanos(remote)
-        setSelectedPlano("")
+        setOffers(remote)
+        setSelectedOfferCode("")
         if (process.env.NODE_ENV === "development") {
           console.log("[supabase-query:debug]", {
-            query: "fetchActivePlansForIndicador",
+            query: "fetchIndicatorCommercialOffers",
             count: remote.length,
           })
         }
@@ -106,9 +109,9 @@ export default function NovaIndicacaoPage() {
       }
       if (process.env.NODE_ENV === "development") {
         console.warn("[flow-check:debug]", {
-          flow: "nova-indicacao-planos",
+          flow: "nova-indicacao-offers",
           ok: false,
-          note: "Supabase retornou erro — lista de planos vazia",
+          note: "Supabase retornou erro — lista de ofertas vazia",
         })
       }
     })()
@@ -178,15 +181,13 @@ export default function NovaIndicacaoPage() {
     }
   }, [cepDigits])
 
-  const planoSelecionado = planos.find((p) => p.id === selectedPlano)
-  const valorRecompensaExibido =
-    planoSelecionado?.valorRecompensa ?? planoSelecionado?.preco ?? 0
+  const offerSelecionada = offers.find((o) => o.code === selectedOfferCode)
 
-  const showResumo = Boolean(planoSelecionado && telefone.trim())
+  const showResumo = Boolean(offerSelecionada && telefone.trim())
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!planoSelecionado) return
+    if (!offerSelecionada) return
     if (submittingRef.current || isLoading) return
 
     if (!isValidPhoneBR(telefone)) {
@@ -266,8 +267,6 @@ export default function NovaIndicacaoPage() {
     setIsLoading(true)
     const rewardTypeDb =
       tipoRecompensa === "pix" ? "pix" : "desconto_fatura"
-    const rewardAmount =
-      planoSelecionado.valorRecompensa ?? planoSelecionado.preco
 
     try {
       const result = await insertIndicadorReferral({
@@ -291,9 +290,8 @@ export default function NovaIndicacaoPage() {
         referral_contract_type: tipoContratacao,
         installation_fee_awareness: true,
         contract_type_awareness: true,
-        plan_id: planoSelecionado.id,
+        public_offer_code: offerSelecionada.code,
         reward_type: rewardTypeDb,
-        reward_amount: rewardAmount,
       })
 
       if (!result.ok) {
@@ -608,21 +606,37 @@ export default function NovaIndicacaoPage() {
           <h2 className="text-lg font-semibold text-foreground">
             Plano de Interesse
           </h2>
+          <p className="text-sm text-muted-foreground -mt-2">
+            Escolha o plano que o indicado demonstrou interesse.
+          </p>
 
           <div className="space-y-2">
             <Label htmlFor="plano">Selecione o plano *</Label>
-            <Select value={selectedPlano} onValueChange={setSelectedPlano} required>
-              <SelectTrigger>
-                <SelectValue placeholder="Escolha um plano" />
+            <Select
+              value={selectedOfferCode}
+              onValueChange={setSelectedOfferCode}
+              required
+              disabled={offersLoading || offers.length === 0}
+            >
+              <SelectTrigger className="w-full min-h-10">
+                <SelectValue
+                  placeholder={
+                    offersLoading
+                      ? "Carregando ofertas…"
+                      : offers.length === 0
+                        ? "Nenhuma oferta disponível"
+                        : "Escolha um plano"
+                  }
+                />
               </SelectTrigger>
-              <SelectContent>
-                {planos.filter((p) => p.ativo).map((plano) => (
-                  <SelectItem key={plano.id} value={plano.id}>
-                    {plano.nome} - {plano.velocidade} - R${" "}
-                    {plano.preco.toLocaleString("pt-BR", {
-                      minimumFractionDigits: 2,
-                    })}
-                    /mês
+              <SelectContent className="max-h-72">
+                {offers.map((offer) => (
+                  <SelectItem
+                    key={offer.code}
+                    value={offer.code}
+                    className="whitespace-normal"
+                  >
+                    {offer.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -660,20 +674,19 @@ export default function NovaIndicacaoPage() {
             </RadioGroup>
           </div>
 
-          {planoSelecionado && (
+          {offerSelecionada && (
             <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
               <div className="flex items-start gap-3">
                 <Info className="w-5 h-5 text-primary mt-0.5" />
                 <div>
                   <p className="font-medium text-foreground">
-                    Sua recompensa será de R${" "}
-                    {valorRecompensaExibido.toLocaleString("pt-BR", {
-                      minimumFractionDigits: 2,
-                    })}
+                    Sua recompensa será o valor da primeira mensalidade
                   </p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Você receberá o valor da primeira mensalidade do plano
-                    escolhido após o indicado pagar a primeira fatura.
+                    Após o indicado pagar a primeira fatura no Controllr, você
+                    recebe exatamente o valor baixado nessa fatura. O preço
+                    comercial da oferta ({offerSelecionada.displayPrice}) não
+                    define a recompensa.
                   </p>
                 </div>
               </div>
@@ -744,7 +757,7 @@ export default function NovaIndicacaoPage() {
               <li>
                 <span className="text-muted-foreground">Plano: </span>
                 <span className="text-foreground font-medium">
-                  {planoSelecionado?.nome}
+                  {offerSelecionada?.name}
                 </span>
               </li>
               <li>
@@ -828,7 +841,7 @@ export default function NovaIndicacaoPage() {
           >
             Cancelar
           </Button>
-          <Button type="submit" disabled={isLoading || !selectedPlano}>
+          <Button type="submit" disabled={isLoading || !selectedOfferCode}>
             {isLoading ? (
               "Cadastrando..."
             ) : (

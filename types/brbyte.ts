@@ -210,6 +210,15 @@ export type BrbyteInvoiceInfo = {
   invoicePk: string | null
   invoiceMsg: string | null
   invoiceDateCredit: string | null
+  /** Valor efetivamente pago (`invoice_amount_paid`). */
+  invoiceAmountPaid: number | null
+  /** Valor do documento (`invoice_amount_document`). */
+  invoiceAmountDocument: number | null
+  /**
+   * Valor usado para recompensa de 1ª mensalidade:
+   * prioriza invoice_amount_paid > 0; senão invoice_amount_document > 0.
+   */
+  paidAmount: number | null
   isPaid: boolean
   raw: Record<string, unknown> | null
 }

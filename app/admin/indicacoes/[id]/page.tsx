@@ -377,21 +377,33 @@ export default function AdminIndicacaoDetalhePage({
             </div>
             <div>
               <p className="text-muted-foreground">
-                {isPublicPreReg && indicacao.publicOfferName
-                  ? "Oferta escolhida"
-                  : "Plano"}
+                {indicacao.publicOfferName ? "Oferta escolhida" : "Plano"}
               </p>
               <p>
-                {isPublicPreReg && indicacao.publicOfferName
+                {indicacao.publicOfferName
                   ? indicacao.publicOfferName
                   : (indicacao.plano?.nome ?? "—")}
               </p>
             </div>
-            {isPublicPreReg && indicacao.publicOfferPrice != null ? (
+            {indicacao.publicOfferPrice != null ? (
               <div>
-                <p className="text-muted-foreground">Valor informado</p>
+                <p className="text-muted-foreground">Preço comercial da oferta</p>
                 <p>
                   {indicacao.publicOfferPrice.toLocaleString("pt-BR", {
+                    style: "currency",
+                    currency: "BRL",
+                  })}
+                </p>
+              </div>
+            ) : null}
+            {indicacao.primeiraFaturaPaga &&
+            indicacao.valorRecompensa != null ? (
+              <div>
+                <p className="text-muted-foreground">
+                  Valor da 1ª fatura (recompensa)
+                </p>
+                <p>
+                  {indicacao.valorRecompensa.toLocaleString("pt-BR", {
                     style: "currency",
                     currency: "BRL",
                   })}

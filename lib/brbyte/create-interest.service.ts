@@ -421,7 +421,8 @@ function buildCreateInterestForm(
         erpLeadSource: row.erp_lead_source,
         indicadorNome: indicatorNameFromRow(row),
         tipoContratacao: contractType,
-        planoNome: normalizeControllrText(planoNome) ?? planoNome,
+        // Preferir oferta comercial; fallback histórico = nome do plano CRM.
+        planoNome: normalizeControllrText(offerName) ?? offerName,
         birthDate: row.referred_birth_date,
         preferredInvoiceDueDay: row.preferred_invoice_due_day,
         observacaoIndicado: row.referred_observation,
