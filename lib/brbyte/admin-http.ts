@@ -1,6 +1,10 @@
 import "server-only"
 
 import type { BrbyteCreateInterestConfig } from "@/lib/brbyte/config"
+import {
+  buildSanitizedControllrHttpDiagnostics,
+  type SanitizedControllrHttpDiagnostics,
+} from "@/lib/brbyte/http-error-diagnostics"
 
 const LOG_TAG = "[brbyte:create-interest:http]"
 
@@ -9,6 +13,8 @@ export type BrbyteAdminPostResult = {
   status: number | null
   json: unknown
   message?: string
+  /** Presente em falhas HTTP — sem PII/credenciais. */
+  diagnostics?: SanitizedControllrHttpDiagnostics
 }
 
 function sleep(ms: number): Promise<void> {
@@ -120,17 +126,39 @@ export async function brbyteAdminPostForm(
 
       if (!res.ok) {
         lastMessage = `HTTP ${res.status}`
-        console.warn(LOG_TAG, {
+        const diagnostics = buildSanitizedControllrHttpDiagnostics({
           path,
-          attempt,
           status: res.status,
-          bodyPreview: text.slice(0, 300),
+          attempt,
+          fields,
+          bodyText: text,
+          json,
+        })
+        // Sanitizado: não logar body cru (pode conter PII).
+        console.warn(LOG_TAG, {
+          path: diagnostics.path,
+          attempt: diagnostics.attempt,
+          status: diagnostics.status,
+          errorClass: diagnostics.errorClass,
+          fieldCount: diagnostics.fieldCount,
+          fieldKeysSent: diagnostics.fieldKeysSent,
+          omittedEmptyFieldCount: diagnostics.omittedEmptyFieldCount,
+          responseContentTypeHint: diagnostics.responseContentTypeHint,
+          responseKeys: diagnostics.responseKeys,
+          responseMessageHint: diagnostics.responseMessageHint,
+          bodyByteLength: diagnostics.bodyByteLength,
         })
         if (attempt < maxAttempts) {
           await sleep(400 * attempt)
           continue
         }
-        return { ok: false, status: res.status, json, message: lastMessage }
+        return {
+          ok: false,
+          status: res.status,
+          json,
+          message: lastMessage,
+          diagnostics,
+        }
       }
 
       return { ok: true, status: res.status, json }
