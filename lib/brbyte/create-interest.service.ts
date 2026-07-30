@@ -18,6 +18,7 @@ import {
 } from "@/lib/brbyte/create-interest-response"
 import { truncateBrbyteField } from "@/lib/brbyte/truncate-field"
 import { brbyteAdminLogin, brbyteAdminPostForm } from "@/lib/brbyte/admin-http"
+import { inspectCreateInterestFormRisks } from "@/lib/brbyte/http-error-diagnostics"
 import {
   getBrbyteCreateInterestConfig,
   getBrbyteCreateInterestConfigForIntegration,
@@ -29,8 +30,10 @@ import { resolveBrbytePlanPkForReferral } from "@/lib/brbyte/plan-mapping"
 import { logBrbyteReferralHistory } from "@/lib/brbyte/referral-history"
 import { splitPersonName } from "@/lib/brbyte/split-name"
 import {
+  buildControllrClientDateBirthField,
   normalizeControllrErpTextFields,
   normalizeControllrText,
+  resolveControllrClientDateBirthForPayload,
 } from "@/lib/brbyte/normalize-controllr-text"
 import {
   getIndicatorBrbyteStatusMessage,
@@ -447,6 +450,17 @@ function buildCreateInterestForm(
 
   const personType = row.referred_person_type?.trim() === "pj" ? "1" : "0"
 
+  const birthResolution = resolveControllrClientDateBirthForPayload(
+    row.referred_birth_date
+  )
+  if (birthResolution.status === "invalid") {
+    console.warn(LOG_TAG, {
+      step: "client_date_birth_invalid",
+      action: "omit_from_payload",
+      // Sem valor da data (dado pessoal).
+    })
+  }
+
   return {
     lead_pk: config.defaultLeadPk,
     interest_status: config.defaultInterestStatus,
@@ -464,9 +478,7 @@ function buildCreateInterestForm(
     interest_addr_address: erpText.street,
     interest_addr_number: erpText.number,
     interest_addr_obs: erpText.complement,
-    ...(row.referred_birth_date
-      ? { client_date_birth: row.referred_birth_date }
-      : {}),
+    ...buildControllrClientDateBirthField(row.referred_birth_date),
     plan_pk: planPk,
     interest_obs: interestObs,
   }
@@ -1053,6 +1065,19 @@ export async function createBrbyteInterestFromReferral(input: {
   }
 
   const form = buildCreateInterestForm(row, config, planPk)
+  const formRisks = inspectCreateInterestFormRisks(form)
+  if (formRisks.length > 0) {
+    console.warn(LOG_TAG, {
+      step: "form_risk_preflight",
+      referralId,
+      risks: formRisks.map((r) => ({
+        code: r.code,
+        severity: r.severity,
+        detail: r.detail,
+      })),
+    })
+  }
+
   const apiResult = await brbyteAdminPostForm(
     config,
     login.cookie,
@@ -1074,6 +1099,7 @@ export async function createBrbyteInterestFromReferral(input: {
   ) {
     const message =
       (typeof payload.message === "string" && payload.message) ||
+      apiResult.diagnostics?.responseMessageHint ||
       apiResult.message ||
       "Falha ao criar Interessado na BRByte."
 
@@ -1094,7 +1120,12 @@ export async function createBrbyteInterestFromReferral(input: {
       message: isIndicatorFlow
         ? "Falha no envio automático ao sistema comercial. A indicação permanece salva para nova tentativa."
         : message,
-      payload: { response: payload, triggered_by: triggeredBy },
+      payload: {
+        response: payload,
+        triggered_by: triggeredBy,
+        form_risks: formRisks,
+        http_diagnostics: apiResult.diagnostics ?? null,
+      },
       createdBy: input.actorUserId ?? null,
     })
 
@@ -1109,6 +1140,8 @@ export async function createBrbyteInterestFromReferral(input: {
         message,
         httpStatus: apiResult.status,
         response: payload,
+        form_risks: formRisks,
+        http_diagnostics: apiResult.diagnostics ?? null,
       },
       meta: syncRunAuditMeta({
         referralId,
