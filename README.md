@@ -239,6 +239,12 @@ O projeto está configurado para deploy na Vercel:
 2. Configure as variáveis de ambiente
 3. Deploy automático em cada push
 
+## Documentação
+
+- [Índice da documentação](./docs/README.md)
+- [Arquitetura Funcional do CRM](./docs/ARQUITETURA-FUNCIONAL-CRM-TANTO-TELECOM.md) — constituição funcional oficial para as próximas Sprints
+- [Auditoria de permissões (RLS)](./docs/AUDITORIA-PERMISSOES-RLS.md)
+
 ## Built with v0
 
 This repository is linked to a [v0](https://v0.app) project.
