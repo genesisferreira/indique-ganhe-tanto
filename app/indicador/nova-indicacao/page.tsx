@@ -94,14 +94,17 @@ export default function NovaIndicacaoPage() {
     }
     void (async () => {
       setOffersLoading(true)
-      const remote = await fetchIndicatorCommercialOffers()
+      const remote = await fetchIndicatorCommercialOffers(tipoContratacao)
       setOffersLoading(false)
       if (remote !== null) {
         setOffers(remote)
-        setSelectedOfferCode("")
+        setSelectedOfferCode((prev) =>
+          remote.some((o) => o.code === prev) ? prev : ""
+        )
         if (process.env.NODE_ENV === "development") {
           console.log("[supabase-query:debug]", {
             query: "fetchIndicatorCommercialOffers",
+            modality: tipoContratacao,
             count: remote.length,
           })
         }
@@ -115,7 +118,7 @@ export default function NovaIndicacaoPage() {
         })
       }
     })()
-  }, [])
+  }, [tipoContratacao])
 
   useEffect(() => {
     if (cepDigits.length !== 8) {

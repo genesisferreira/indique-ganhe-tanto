@@ -1,7 +1,10 @@
 import "server-only"
 
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
-import { PUBLIC_PRE_REGISTRATION_SOURCE } from "@/lib/referral-reward-eligibility"
+import {
+  NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE,
+  PUBLIC_PRE_REGISTRATION_SOURCE,
+} from "@/lib/referral-reward-eligibility"
 
 export type PublicPreRegistrationMetrics = {
   today: number
@@ -10,6 +13,12 @@ export type PublicPreRegistrationMetrics = {
   sentToControllr: number
   integrationErrors: number
   convertedToClient: number
+}
+
+/** Métricas por origem de captação pública (sem migration extra). */
+export type CaptacaoPublicMetricsBySource = {
+  preRegistration: PublicPreRegistrationMetrics
+  neutralNetwork: PublicPreRegistrationMetrics
 }
 
 type MetricsRow = {
@@ -91,21 +100,7 @@ export function buildEmptyPublicPreRegistrationMetrics(): PublicPreRegistrationM
   }
 }
 
-export async function loadPublicPreRegistrationMetrics(): Promise<PublicPreRegistrationMetrics> {
-  const since30 = daysAgoIso(30)
-  const { data, error } = await getMetricsDb()
-    .from("referrals")
-    .select(
-      "created_at, public_pre_registration_at, brbyte_sync_status, brbyte_id_interessado, brbyte_client_pk"
-    )
-    .eq("source", PUBLIC_PRE_REGISTRATION_SOURCE)
-    .gte("created_at", since30)
-
-  if (error || !data) {
-    return buildEmptyPublicPreRegistrationMetrics()
-  }
-
-  const rows = data
+function aggregateMetrics(rows: MetricsRow[]): PublicPreRegistrationMetrics {
   const todayStart = startOfTodayIso()
   const last7 = daysAgoIso(7)
 
@@ -133,4 +128,36 @@ export async function loadPublicPreRegistrationMetrics(): Promise<PublicPreRegis
     integrationErrors,
     convertedToClient,
   }
+}
+
+async function loadMetricsForSource(
+  source: string
+): Promise<PublicPreRegistrationMetrics> {
+  const since30 = daysAgoIso(30)
+  const { data, error } = await getMetricsDb()
+    .from("referrals")
+    .select(
+      "created_at, public_pre_registration_at, brbyte_sync_status, brbyte_id_interessado, brbyte_client_pk"
+    )
+    .eq("source", source)
+    .gte("created_at", since30)
+
+  if (error || !data) {
+    return buildEmptyPublicPreRegistrationMetrics()
+  }
+  return aggregateMetrics(data)
+}
+
+/** Compat: métricas só do pré-cadastro web (`public_pre_registration`). */
+export async function loadPublicPreRegistrationMetrics(): Promise<PublicPreRegistrationMetrics> {
+  return loadMetricsForSource(PUBLIC_PRE_REGISTRATION_SOURCE)
+}
+
+/** Pré-cadastro web + Rede Neutra, separados por `source` (sem migration). */
+export async function loadCaptacaoPublicMetricsBySource(): Promise<CaptacaoPublicMetricsBySource> {
+  const [preRegistration, neutralNetwork] = await Promise.all([
+    loadMetricsForSource(PUBLIC_PRE_REGISTRATION_SOURCE),
+    loadMetricsForSource(NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE),
+  ])
+  return { preRegistration, neutralNetwork }
 }

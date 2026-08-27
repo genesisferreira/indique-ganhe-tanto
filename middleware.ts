@@ -16,6 +16,7 @@ const publicRoutes = [
   "/cadastro",
   "/recuperar-senha",
   "/pre-cadastro",
+  "/pre-cadastro-rede-neutra",
   "/auth/logout",
 ]
 

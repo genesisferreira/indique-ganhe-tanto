@@ -73,6 +73,8 @@ export interface Indicacao {
   /** RG (referrals.referred_rg) */
   rgIndicado?: string
   tipoPessoaIndicado?: IndicadoPersonType
+  /** Nome fantasia (PJ) — referrals.referred_company_trade_name */
+  nomeFantasiaIndicado?: string
   cepInstalacao?: string
   estadoInstalacao?: string
   cidadeInstalacao?: string
