@@ -51,14 +51,14 @@ export async function POST(request: NextRequest) {
   }
 
   const parsed = parsePublicPreRegistrationPayload(body, {
-    channel: "pre_registration",
+    channel: "neutral_network",
   })
   if (!parsed.ok) {
     return jsonNoStore({ ok: false, message: parsed.message }, 400)
   }
 
   const result = await submitPublicPreRegistration(parsed.data, {
-    sourcePage: "/pre-cadastro",
+    sourcePage: "/pre-cadastro-rede-neutra",
   })
 
   if (!result.ok) {

@@ -54,6 +54,7 @@ import {
 } from "@/types/brbyte"
 import { normalizeBrbyteSyncStatus, type BrbyteSyncStatus } from "@/types/referral"
 import {
+  NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE,
   PUBLIC_PRE_REGISTRATION_SOURCE,
   isPublicPreRegistrationReferral,
 } from "@/lib/referral-reward-eligibility"
@@ -61,6 +62,7 @@ import {
 export type BrbyteCreateInterestSourceContext =
   | "indicator_referral"
   | "public_pre_registration"
+  | "neutral_network_pre_registration"
   | "admin_manual"
   | "cron_retry"
 
@@ -449,6 +451,8 @@ function buildCreateInterestForm(
   const interestObs = interestObsResult.value
 
   const personType = row.referred_person_type?.trim() === "pj" ? "1" : "0"
+  // Nome fantasia (referred_company_trade_name) fica só no CRM — o contrato
+  // Controllr atual não expõe campo dedicado; interest_name/lastname usam referred_name.
 
   const birthResolution = resolveControllrClientDateBirthForPayload(
     row.referred_birth_date
@@ -499,7 +503,7 @@ function validateReferralForCreate(row: ReferralCreateInterestRow): string | nul
     return "Nome do indicado é obrigatório."
   }
   if (!onlyDigits(row.referred_document)) {
-    return "CPF do indicado é obrigatório para criar Interessado."
+    return "CPF/CNPJ do indicado é obrigatório para criar Interessado."
   }
   if (!onlyDigits(row.referred_phone)) {
     return "Telefone do indicado é obrigatório."
@@ -513,6 +517,8 @@ function resolveTriggeredBy(
   switch (sourceContext) {
     case "public_pre_registration":
       return PUBLIC_PRE_REGISTRATION_SOURCE
+    case "neutral_network_pre_registration":
+      return NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE
     case "indicator_referral":
       return "indicator_automatic"
     case "cron_retry":
@@ -760,7 +766,9 @@ export async function createBrbyteInterestFromReferral(input: {
   const referralId = input.referralId.trim()
   const sourceContext: BrbyteCreateInterestSourceContext =
     input.sourceContext ?? "admin_manual"
-  const isPublicFlow = sourceContext === "public_pre_registration"
+  const isPublicFlow =
+    sourceContext === "public_pre_registration" ||
+    sourceContext === "neutral_network_pre_registration"
   const isIndicatorFlow = sourceContext === "indicator_referral"
   const triggeredBy = resolveTriggeredBy(sourceContext)
 

@@ -8,8 +8,8 @@ import {
   validateControllrBirthDate,
 } from "@/lib/brbyte/normalize-controllr-text"
 import {
-  getAllCommercialOffers,
   getCommercialOfferByCode,
+  resolveOfferForModality,
 } from "@/lib/commercial-offers/catalog"
 import {
   buildIndicatorCommercialOfferOptions,
@@ -93,6 +93,7 @@ type ReferralRow = {
   referred_document?: string | null
   referred_rg?: string | null
   referred_person_type?: string | null
+  referred_company_trade_name?: string | null
   referred_zipcode?: string | null
   referred_state?: string | null
   referred_city?: string | null
@@ -368,6 +369,7 @@ function mapReferralInterestedFields(row: ReferralRow): Pick<
   | "cpfIndicado"
   | "rgIndicado"
   | "tipoPessoaIndicado"
+  | "nomeFantasiaIndicado"
   | "cepInstalacao"
   | "estadoInstalacao"
   | "cidadeInstalacao"
@@ -393,6 +395,7 @@ function mapReferralInterestedFields(row: ReferralRow): Pick<
       personType === "pj" || personType === "pf"
         ? (personType as IndicadoPersonType)
         : undefined,
+    nomeFantasiaIndicado: row.referred_company_trade_name?.trim() || undefined,
     cepInstalacao: row.referred_zipcode?.trim() || undefined,
     estadoInstalacao: row.referred_state?.trim() || undefined,
     cidadeInstalacao: row.referred_city?.trim() || undefined,
@@ -1004,14 +1007,16 @@ export type IndicatorCommercialOfferOption = {
 }
 
 /**
- * Catálogo comercial completo para Nova Indicação (mesma fonte do pré-cadastro).
+ * Catálogo comercial para Nova Indicação (mesma fonte do pré-cadastro).
  * Não usa plans.reward_amount nem o preço da oferta como recompensa.
+ * Sem modalidade: preços Tanto Vantagens (compat); corporativos ficam de fora
+ * até o usuário escolher Tanto Livre.
  */
-export async function fetchIndicatorCommercialOffers(): Promise<
-  IndicatorCommercialOfferOption[] | null
-> {
+export async function fetchIndicatorCommercialOffers(
+  modality: ReferralContractType | null | undefined = "tanto_vantagens"
+): Promise<IndicatorCommercialOfferOption[] | null> {
   try {
-    return buildIndicatorCommercialOfferOptions(getAllCommercialOffers())
+    return buildIndicatorCommercialOfferOptions(modality)
   } catch {
     return null
   }
@@ -2108,13 +2113,14 @@ export async function insertIndicadorReferral(
     }
 
     const offerCode = input.public_offer_code?.trim() ?? ""
-    const offer = getCommercialOfferByCode(offerCode)
-    if (!offerCode || !offer) {
+    const resolvedOffer = resolveOfferForModality(offerCode, contractType)
+    if (!offerCode || !resolvedOffer) {
       return {
         ok: false,
-        message: "Selecione uma oferta comercial válida.",
+        message: "Selecione uma oferta comercial válida para a modalidade.",
       }
     }
+    const offer = resolvedOffer.base
 
     const { data: planRowsRaw, error: plansError } = await db
       .from("plans")
@@ -2211,9 +2217,9 @@ export async function insertIndicadorReferral(
       contract_type_awareness: true,
       contract_type_awareness_at: acknowledgementAt,
       plan_id: crmPlan.planId,
-      public_offer_code: offer.code,
-      public_offer_name: offer.name,
-      public_offer_price: offer.price,
+      public_offer_code: resolvedOffer.code,
+      public_offer_name: resolvedOffer.name,
+      public_offer_price: resolvedOffer.price,
       reward_type: input.reward_type,
       reward_amount: null,
       reward_eligible: true,

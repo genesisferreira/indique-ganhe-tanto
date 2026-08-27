@@ -74,3 +74,43 @@ export function isValidCPF(value: string): boolean {
   if (remainder === 10) remainder = 0
   return remainder === Number(cpf[10])
 }
+
+/** Máscara progressiva: 00.000.000/0000-00 */
+export function formatCNPJ(value: string): string {
+  const digits = onlyDigits(value).slice(0, 14)
+  if (digits.length <= 2) return digits
+  if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`
+  if (digits.length <= 8) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`
+  }
+  if (digits.length <= 12) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`
+  }
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`
+}
+
+/** Validação básica de CNPJ (dígitos verificadores + rejeita sequências iguais). */
+export function isValidCNPJ(value: string): boolean {
+  const cnpj = onlyDigits(value)
+  if (cnpj.length !== 14) return false
+  if (/^(\d)\1{13}$/.test(cnpj)) return false
+
+  const weights1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+  const weights2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+
+  let sum = 0
+  for (let i = 0; i < 12; i++) {
+    sum += Number(cnpj[i]) * weights1[i]!
+  }
+  let remainder = sum % 11
+  const digit1 = remainder < 2 ? 0 : 11 - remainder
+  if (digit1 !== Number(cnpj[12])) return false
+
+  sum = 0
+  for (let i = 0; i < 13; i++) {
+    sum += Number(cnpj[i]) * weights2[i]!
+  }
+  remainder = sum % 11
+  const digit2 = remainder < 2 ? 0 : 11 - remainder
+  return digit2 === Number(cnpj[13])
+}

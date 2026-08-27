@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -18,26 +18,38 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   formatCEP,
+  formatCNPJ,
   formatCPF,
   formatPhoneBR,
   isValidCEP,
+  isValidCNPJ,
   isValidCPF,
   isValidPhoneBR,
   onlyDigits,
 } from "@/lib/client/formatters"
 import { fetchAddressByCEP } from "@/lib/client/viacep"
 import {
-  formatPublicOfferSelectLabel,
-  PUBLIC_PRE_REGISTRATION_OFFERS,
-} from "@/lib/public-pre-registration/offers"
+  formatCommercialOfferSelectLabel,
+  listNeutralNetworkOffers,
+  listOffersForModality,
+} from "@/lib/commercial-offers/catalog"
+import { REFERRAL_CONTRACT_TYPE_OPTIONS } from "@/lib/referral-contract-type"
 import type {
-  PreferredInstallationPeriod,
+  IndicadoPersonType,
   PreferredContactPeriod,
+  PreferredInstallationPeriod,
+  ReferralContractType,
 } from "@/types/referral"
 import { CheckCircle2, Loader2 } from "lucide-react"
 import { TantoBrand } from "@/components/branding/tanto-brand"
 
 type FormState = "form" | "submitting" | "success"
+
+export type PreCadastroFormVariant = "standard" | "neutral_network"
+
+type PreCadastroFormProps = {
+  variant?: PreCadastroFormVariant
+}
 
 const INSTALL_PERIOD_OPTIONS: {
   value: PreferredInstallationPeriod
@@ -48,7 +60,6 @@ const INSTALL_PERIOD_OPTIONS: {
   { value: "no_preference", label: "Sem preferência" },
 ]
 
-/** Novos cadastros — sem opção Noite (evening). */
 const CONTACT_PERIOD_OPTIONS: {
   value: Exclude<PreferredContactPeriod, "evening">
   label: string
@@ -60,17 +71,30 @@ const CONTACT_PERIOD_OPTIONS: {
 
 const INVOICE_DUE_DAY_OPTIONS = [5, 10, 15, 20, 25, 30] as const
 
-export function PreCadastroForm() {
+export function PreCadastroForm({
+  variant = "standard",
+}: PreCadastroFormProps) {
+  const isNeutral = variant === "neutral_network"
+  const apiPath = isNeutral
+    ? "/api/public/neutral-network-pre-registration"
+    : "/api/public/pre-registration"
+  const title = isNeutral ? "Pré-cadastro Rede Neutra" : "Pré-cadastro"
+  const subtitle = isNeutral
+    ? "Preencha seus dados para o atendimento da Rede Neutra."
+    : "Estamos quase lá! Preencha seus dados para prosseguirmos com o seu cadastro e agendar a sua instalação."
+
   const searchParams = useSearchParams()
   const numeroRef = useRef<HTMLInputElement>(null)
 
   const [formState, setFormState] = useState<FormState>("form")
   const [successMessage, setSuccessMessage] = useState("")
 
+  const [personType, setPersonType] = useState<IndicadoPersonType>("pf")
   const [nome, setNome] = useState("")
+  const [tradeName, setTradeName] = useState("")
   const [telefone, setTelefone] = useState("")
   const [email, setEmail] = useState("")
-  const [cpf, setCpf] = useState("")
+  const [document, setDocument] = useState("")
   const [rg, setRg] = useState("")
   const [birthDate, setBirthDate] = useState("")
   const [observacao, setObservacao] = useState("")
@@ -81,6 +105,9 @@ export function PreCadastroForm() {
   const [endereco, setEndereco] = useState("")
   const [numero, setNumero] = useState("")
   const [complemento, setComplemento] = useState("")
+  const [contractType, setContractType] = useState<ReferralContractType | "">(
+    ""
+  )
   const [selectedOfferCode, setSelectedOfferCode] = useState("")
   const [periodo, setPeriodo] = useState<PreferredInstallationPeriod | "">("")
   const [periodoContato, setPeriodoContato] = useState<
@@ -103,11 +130,25 @@ export function PreCadastroForm() {
   const [utm, setUtm] = useState<Record<string, string | null>>({})
   const [validationError, setValidationError] = useState<string | null>(null)
 
+  const offerOptions = useMemo(() => {
+    if (isNeutral) return listNeutralNetworkOffers()
+    if (!contractType) return []
+    return listOffersForModality(contractType, { channel: "pre_registration" })
+  }, [isNeutral, contractType])
+
+  useEffect(() => {
+    if (!selectedOfferCode) return
+    const stillValid = offerOptions.some((o) => o.code === selectedOfferCode)
+    if (!stillValid) setSelectedOfferCode("")
+  }, [offerOptions, selectedOfferCode])
+
   const resetForm = () => {
+    setPersonType("pf")
     setNome("")
+    setTradeName("")
     setTelefone("")
     setEmail("")
-    setCpf("")
+    setDocument("")
     setRg("")
     setBirthDate("")
     setObservacao("")
@@ -118,6 +159,7 @@ export function PreCadastroForm() {
     setEndereco("")
     setNumero("")
     setComplemento("")
+    setContractType("")
     setSelectedOfferCode("")
     setPeriodo("")
     setPeriodoContato("")
@@ -185,17 +227,25 @@ export function PreCadastroForm() {
   }, [cepDigits, viacepLocked, bairro, endereco])
 
   const validateClient = (): string | null => {
-    if (!nome.trim() || nome.trim().length < 3) return "Informe o nome completo."
-    if (!isValidCPF(cpf)) return "CPF inválido."
-    if (!birthDate) return "Informe a data de nascimento."
-    const today = new Date()
-    const todayIso = [
-      today.getFullYear().toString().padStart(4, "0"),
-      (today.getMonth() + 1).toString().padStart(2, "0"),
-      today.getDate().toString().padStart(2, "0"),
-    ].join("-")
-    if (birthDate > todayIso) {
-      return "A data de nascimento não pode estar no futuro."
+    if (personType === "pj") {
+      if (!nome.trim() || nome.trim().length < 3) return "Informe a razão social."
+      if (!isValidCNPJ(document)) return "CNPJ inválido."
+      if (!tradeName.trim() || tradeName.trim().length < 2) {
+        return "Informe o nome fantasia."
+      }
+    } else {
+      if (!nome.trim() || nome.trim().length < 3) return "Informe o nome completo."
+      if (!isValidCPF(document)) return "CPF inválido."
+      if (!birthDate) return "Informe a data de nascimento."
+      const today = new Date()
+      const todayIso = [
+        today.getFullYear().toString().padStart(4, "0"),
+        (today.getMonth() + 1).toString().padStart(2, "0"),
+        today.getDate().toString().padStart(2, "0"),
+      ].join("-")
+      if (birthDate > todayIso) {
+        return "A data de nascimento não pode estar no futuro."
+      }
     }
     if (!isValidPhoneBR(telefone)) return "Telefone inválido."
     if (!isValidCEP(cep)) return "CEP inválido."
@@ -204,6 +254,9 @@ export function PreCadastroForm() {
     if (!bairro.trim()) return "Informe o bairro."
     if (!endereco.trim()) return "Informe o endereço."
     if (!numero.trim()) return "Informe o número."
+    if (!isNeutral && !contractType) {
+      return "Selecione a modalidade (Tanto Livre ou Tanto Vantagens)."
+    }
     if (!selectedOfferCode) {
       return "Selecione um plano ou serviço de interesse."
     }
@@ -232,16 +285,18 @@ export function PreCadastroForm() {
 
     setFormState("submitting")
     try {
-      const res = await fetch("/api/public/pre-registration", {
+      const res = await fetch(apiPath, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          personType,
           fullName: nome.trim(),
-          cpf,
+          tradeName: personType === "pj" ? tradeName.trim() : null,
+          document,
           phone: telefone,
           email: email.trim() || null,
-          rg: rg.trim() || null,
-          birthDate,
+          rg: personType === "pf" ? rg.trim() || null : null,
+          birthDate: personType === "pf" ? birthDate : null,
           cep,
           state: estado.trim().toUpperCase(),
           city: cidade.trim(),
@@ -249,6 +304,7 @@ export function PreCadastroForm() {
           street: endereco.trim(),
           number: numero.trim(),
           complement: complemento.trim() || null,
+          contractType: isNeutral ? undefined : contractType,
           offerCode: selectedOfferCode,
           preferredInstallationPeriod: periodo,
           preferredContactPeriod: periodoContato || null,
@@ -314,18 +370,17 @@ export function PreCadastroForm() {
           <TantoBrand variant="symbol" size="md" className="w-10 h-10" priority />
           <div>
             <h1 className="text-xl font-bold">Tanto Telecom</h1>
-            <p className="text-sm text-muted-foreground">Pré-cadastro</p>
+            <p className="text-sm text-muted-foreground">{title}</p>
           </div>
         </div>
       </div>
 
       <div className="max-w-2xl mx-auto px-4 py-8">
         <div className="mb-8">
-          <h2 className="text-2xl font-bold">Faça seu pré-cadastro</h2>
-          <p className="text-muted-foreground mt-2">
-            Estamos quase lá! Preencha seus dados para prosseguirmos com o seu
-            cadastro e agendar a sua instalação.
-          </p>
+          <h2 className="text-2xl font-bold">
+            {isNeutral ? "Pré-cadastro Rede Neutra" : "Faça seu pré-cadastro"}
+          </h2>
+          <p className="text-muted-foreground mt-2">{subtitle}</p>
         </div>
 
         <form
@@ -346,50 +401,112 @@ export function PreCadastroForm() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Dados pessoais</CardTitle>
+              <CardTitle className="text-base">
+                {personType === "pj" ? "Dados da empresa" : "Dados pessoais"}
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="nome">Nome completo *</Label>
-                <Input
-                  id="nome"
-                  value={nome}
-                  onChange={(e) => setNome(e.target.value)}
-                  className="uppercase"
-                  required
-                />
+                <Label>Tipo de documento *</Label>
+                <Select
+                  value={personType}
+                  onValueChange={(v) => {
+                    const next = v as IndicadoPersonType
+                    setPersonType(next)
+                    setDocument("")
+                    setTradeName("")
+                    setRg("")
+                    setBirthDate("")
+                  }}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pf">CPF</SelectItem>
+                    <SelectItem value="pj">CNPJ</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="cpf">CPF *</Label>
-                  <Input
-                    id="cpf"
-                    value={cpf}
-                    onChange={(e) => setCpf(formatCPF(e.target.value))}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="rg">RG</Label>
-                  <Input
-                    id="rg"
-                    value={rg}
-                    onChange={(e) => setRg(e.target.value)}
-                    className="uppercase"
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="birthDate">Data de nascimento *</Label>
-                <Input
-                  id="birthDate"
-                  type="date"
-                  value={birthDate}
-                  max={new Date().toISOString().slice(0, 10)}
-                  onChange={(e) => setBirthDate(e.target.value)}
-                  required
-                />
-              </div>
+
+              {personType === "pj" ? (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="cnpj">CNPJ *</Label>
+                    <Input
+                      id="cnpj"
+                      value={document}
+                      onChange={(e) => setDocument(formatCNPJ(e.target.value))}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="razao">Razão social *</Label>
+                    <Input
+                      id="razao"
+                      value={nome}
+                      onChange={(e) => setNome(e.target.value)}
+                      className="uppercase"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="fantasia">Nome fantasia *</Label>
+                    <Input
+                      id="fantasia"
+                      value={tradeName}
+                      onChange={(e) => setTradeName(e.target.value)}
+                      className="uppercase"
+                      required
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="nome">Nome completo *</Label>
+                    <Input
+                      id="nome"
+                      value={nome}
+                      onChange={(e) => setNome(e.target.value)}
+                      className="uppercase"
+                      required
+                    />
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="cpf">CPF *</Label>
+                      <Input
+                        id="cpf"
+                        value={document}
+                        onChange={(e) => setDocument(formatCPF(e.target.value))}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="rg">RG</Label>
+                      <Input
+                        id="rg"
+                        value={rg}
+                        onChange={(e) => setRg(e.target.value)}
+                        className="uppercase"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="birthDate">Data de nascimento *</Label>
+                    <Input
+                      id="birthDate"
+                      type="date"
+                      value={birthDate}
+                      max={new Date().toISOString().slice(0, 10)}
+                      onChange={(e) => setBirthDate(e.target.value)}
+                      required
+                    />
+                  </div>
+                </>
+              )}
+
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="telefone">Telefone / WhatsApp *</Label>
@@ -526,32 +643,60 @@ export function PreCadastroForm() {
               <CardTitle className="text-base">Plano e preferências</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {!isNeutral ? (
+                <div className="space-y-2">
+                  <Label>Qual modalidade deseja? *</Label>
+                  <Select
+                    value={contractType}
+                    onValueChange={(v) => {
+                      setContractType(v as ReferralContractType)
+                      setSelectedOfferCode("")
+                    }}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Selecione" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REFERRAL_CONTRACT_TYPE_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+
               <div className="space-y-2">
                 <Label>Plano ou serviço de interesse *</Label>
                 <Select
                   value={selectedOfferCode}
                   onValueChange={setSelectedOfferCode}
+                  disabled={!isNeutral && !contractType}
                 >
                   <SelectTrigger className="w-full h-auto min-h-9 py-2">
-                    <SelectValue placeholder="Selecione uma opção" />
+                    <SelectValue
+                      placeholder={
+                        !isNeutral && !contractType
+                          ? "Selecione a modalidade primeiro"
+                          : "Selecione uma opção"
+                      }
+                    />
                   </SelectTrigger>
                   <SelectContent className="max-h-[min(20rem,var(--radix-select-content-available-height))]">
-                    {PUBLIC_PRE_REGISTRATION_OFFERS.map((offer) => (
+                    {offerOptions.map((offer) => (
                       <SelectItem
                         key={offer.code}
                         value={offer.code}
                         className="whitespace-normal py-2"
                       >
-                        {formatPublicOfferSelectLabel(offer)}
+                        {formatCommercialOfferSelectLabel(offer)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
-                  Os valores e condições serão confirmados pela nossa equipe
-                  durante o atendimento.
-                </p>
               </div>
+
               <div className="space-y-2">
                 <Label>Melhor período para instalação *</Label>
                 <Select
@@ -561,7 +706,7 @@ export function PreCadastroForm() {
                   }
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Selecione o período" />
+                    <SelectValue placeholder="Selecione" />
                   </SelectTrigger>
                   <SelectContent>
                     {INSTALL_PERIOD_OPTIONS.map((opt) => (
@@ -571,35 +716,10 @@ export function PreCadastroForm() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
-                  Essa preferência não confirma o agendamento. Nossa equipe
-                  entrará em contato para combinar a instalação.
-                </p>
               </div>
+
               <div className="space-y-2">
-                <Label>Dia de vencimento da fatura *</Label>
-                <Select
-                  value={preferredInvoiceDueDay}
-                  onValueChange={setPreferredInvoiceDueDay}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Escolha um dia de vencimento" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {INVOICE_DUE_DAY_OPTIONS.map((day) => (
-                      <SelectItem key={day} value={String(day)}>
-                        {String(day).padStart(2, "0")}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Essa escolha será considerada pela nossa equipe no momento da
-                  contratação.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label>Melhor horário para contato</Label>
+                <Label>Horário preferido para contato</Label>
                 <Select
                   value={periodoContato}
                   onValueChange={(v) =>
@@ -617,15 +737,31 @@ export function PreCadastroForm() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
-                  Este horário é apenas uma preferência para contato da nossa
-                  equipe.
-                </p>
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="observacao">Observação do cliente</Label>
+                <Label>Dia preferido de vencimento *</Label>
+                <Select
+                  value={preferredInvoiceDueDay}
+                  onValueChange={setPreferredInvoiceDueDay}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Selecione" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INVOICE_DUE_DAY_OPTIONS.map((day) => (
+                      <SelectItem key={day} value={String(day)}>
+                        Dia {String(day).padStart(2, "0")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="obs">Observações</Label>
                 <Textarea
-                  id="observacao"
+                  id="obs"
                   value={observacao}
                   onChange={(e) => setObservacao(e.target.value)}
                   className="uppercase"
@@ -635,31 +771,25 @@ export function PreCadastroForm() {
             </CardContent>
           </Card>
 
-          <div className="flex items-start gap-3 rounded-lg border border-border p-4">
+          <div className="flex items-start gap-3">
             <Checkbox
               id="lgpd"
               checked={lgpd}
               onCheckedChange={(v) => setLgpd(v === true)}
             />
-            <Label htmlFor="lgpd" className="text-sm leading-relaxed font-normal">
-              Li e concordo com o tratamento dos meus dados conforme a política de
-              privacidade (LGPD). *
+            <Label htmlFor="lgpd" className="text-sm font-normal leading-snug">
+              Autorizo o uso dos meus dados para contato comercial da Tanto
+              Telecom, conforme a política de privacidade. *
             </Label>
           </div>
 
           {validationError ? (
-            <div
-              role="alert"
-              className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-            >
-              {validationError}
-            </div>
+            <p className="text-sm text-destructive">{validationError}</p>
           ) : null}
 
           <Button
             type="submit"
             className="w-full"
-            size="lg"
             disabled={formState === "submitting"}
           >
             {formState === "submitting" ? (

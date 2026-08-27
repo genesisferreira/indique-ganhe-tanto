@@ -15,9 +15,12 @@ import {
 } from "@/lib/public-pre-registration/observation"
 import {
   normalizePublicPreRegistrationFields,
+  type PublicPreRegistrationChannel,
   type PublicPreRegistrationPayload,
 } from "@/lib/public-pre-registration/validate"
 import {
+  NEUTRAL_NETWORK_ERP_LEAD_SOURCE,
+  NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE,
   PUBLIC_ERP_LEAD_SOURCE,
   PUBLIC_PRE_REGISTRATION_SOURCE,
 } from "@/lib/referral-reward-eligibility"
@@ -89,8 +92,33 @@ function maskDocumentForLog(document: string): string {
   return `***${digits.slice(-4)}`
 }
 
+function resolveChannelMeta(channel: PublicPreRegistrationChannel): {
+  source: string
+  erpLeadSource: string
+  defaultSourcePage: string
+  brbyteSourceContext:
+    | "public_pre_registration"
+    | "neutral_network_pre_registration"
+} {
+  if (channel === "neutral_network") {
+    return {
+      source: NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE,
+      erpLeadSource: NEUTRAL_NETWORK_ERP_LEAD_SOURCE,
+      defaultSourcePage: "/pre-cadastro-rede-neutra",
+      brbyteSourceContext: "neutral_network_pre_registration",
+    }
+  }
+  return {
+    source: PUBLIC_PRE_REGISTRATION_SOURCE,
+    erpLeadSource: PUBLIC_ERP_LEAD_SOURCE,
+    defaultSourcePage: PUBLIC_PRE_REGISTRATION_DEFAULT_SOURCE_PAGE,
+    brbyteSourceContext: "public_pre_registration",
+  }
+}
+
 async function findRecentDuplicate(
-  document: string
+  document: string,
+  source: string
 ): Promise<{ id: string; brbyte_sync_status: string | null } | null> {
   const minutes = getPublicPreRegistrationDedupMinutes()
   const since = new Date(Date.now() - minutes * 60 * 1000).toISOString()
@@ -98,7 +126,7 @@ async function findRecentDuplicate(
   const { data } = await supabase
     .from("referrals")
     .select("id, brbyte_sync_status")
-    .eq("source", PUBLIC_PRE_REGISTRATION_SOURCE)
+    .eq("source", source)
     .eq("referred_document", document)
     .gte("created_at", since)
     .order("created_at", { ascending: false })
@@ -108,10 +136,6 @@ async function findRecentDuplicate(
   return (data as { id: string; brbyte_sync_status: string | null } | null) ?? null
 }
 
-/**
- * Resolve UUID técnico para referrals.plan_id (FK obrigatória).
- * A oferta comercial fica em public_offer_* — não usa o catálogo do formulário.
- */
 async function resolveBaseCrmPlanId(): Promise<string | null> {
   const fromEnv = getPublicPreRegistrationBaseCrmPlanId()
   if (fromEnv) return fromEnv
@@ -138,6 +162,7 @@ async function resolveBaseCrmPlanId(): Promise<string | null> {
 
 async function logPublicPreRegistrationAudit(
   referralId: string,
+  source: string,
   metadata: Record<string, unknown>
 ): Promise<void> {
   try {
@@ -152,7 +177,7 @@ async function logPublicPreRegistrationAudit(
         old_data: null,
         new_data: metadata,
         metadata: {
-          source: PUBLIC_PRE_REGISTRATION_SOURCE,
+          source,
           ...metadata,
         },
       })
@@ -172,9 +197,13 @@ export async function submitPublicPreRegistration(
     return { ok: false, message: "Pré-cadastro indisponível no momento." }
   }
 
+  const channelMeta = resolveChannelMeta(payload.channel)
   const normalized = normalizePublicPreRegistrationFields(payload)
 
-  const duplicate = await findRecentDuplicate(normalized.referred_document)
+  const duplicate = await findRecentDuplicate(
+    normalized.referred_document,
+    channelMeta.source
+  )
   if (
     duplicate &&
     (duplicate.brbyte_sync_status === "created" ||
@@ -215,10 +244,16 @@ export async function submitPublicPreRegistration(
   const nowIso = new Date().toISOString()
   const supabase = getPublicPreRegistrationDb()
   const sourcePage = sanitizeSourcePage(
-    options?.sourcePage ?? PUBLIC_PRE_REGISTRATION_DEFAULT_SOURCE_PAGE
+    options?.sourcePage ?? channelMeta.defaultSourcePage,
+    channelMeta.defaultSourcePage
   )
 
   const brbytePlanPk = getPublicPreRegistrationDefaultBrbytePlanPk()
+
+  // Preço canônico do servidor — nunca do cliente
+  const canonicalPrice = payload.offer.price
+  const canonicalName = payload.offer.name
+  const canonicalCode = payload.offer.code
 
   const insertRow: Record<string, unknown> = {
     indicator_profile_id: null,
@@ -235,15 +270,15 @@ export async function submitPublicPreRegistration(
     plan_id: basePlanId,
     referred_birth_date: payload.birthDate,
     preferred_invoice_due_day: payload.preferredInvoiceDueDay,
-    public_offer_code: payload.offer.code,
-    public_offer_name: payload.offer.name,
-    public_offer_price: payload.offer.price,
+    public_offer_code: canonicalCode,
+    public_offer_name: canonicalName,
+    public_offer_price: canonicalPrice,
     reward_type: null,
     reward_amount: null,
     status: "pendente",
-    source: PUBLIC_PRE_REGISTRATION_SOURCE,
+    source: channelMeta.source,
     reward_eligible: false,
-    erp_lead_source: PUBLIC_ERP_LEAD_SOURCE,
+    erp_lead_source: channelMeta.erpLeadSource,
     preferred_installation_period: payload.preferredInstallationPeriod,
     preferred_contact_period: payload.preferredContactPeriod,
     phone_has_whatsapp: payload.phoneHasWhatsapp,
@@ -262,7 +297,7 @@ export async function submitPublicPreRegistration(
     installation_fee_awareness_at: nowIso,
     contract_type_awareness: true,
     contract_type_awareness_at: nowIso,
-    referral_contract_type: "tanto_vantagens",
+    referral_contract_type: payload.contractType,
   }
 
   const { data: inserted, error: insertError } = await supabase
@@ -285,10 +320,12 @@ export async function submitPublicPreRegistration(
 
   const referralId = inserted.id
 
-  await logPublicPreRegistrationAudit(referralId, {
-    public_offer_code: payload.offer.code,
-    public_offer_name: payload.offer.name,
-    public_offer_price: payload.offer.price,
+  await logPublicPreRegistrationAudit(referralId, channelMeta.source, {
+    public_offer_code: canonicalCode,
+    public_offer_name: canonicalName,
+    public_offer_price: canonicalPrice,
+    referral_contract_type: payload.contractType,
+    referred_person_type: payload.personType,
     referred_birth_date: payload.birthDate,
     preferred_invoice_due_day: payload.preferredInvoiceDueDay,
     preferred_installation_period: payload.preferredInstallationPeriod,
@@ -298,13 +335,14 @@ export async function submitPublicPreRegistration(
     document_masked: maskDocumentForLog(normalized.referred_document),
     utm_source: payload.utm_source,
     utm_campaign: payload.utm_campaign,
+    reward_eligible: false,
   })
 
   const obsPreview = buildPublicPreRegistrationObservation({
     preferredInstallationPeriod: payload.preferredInstallationPeriod,
-    offerName: payload.offer.name,
+    offerName: canonicalName,
     offerPriceLabel: payload.offer.displayPrice,
-    birthDate: payload.birthDate,
+    birthDate: payload.birthDate ?? "",
     preferredInvoiceDueDay: payload.preferredInvoiceDueDay,
     phoneHasWhatsapp: payload.phoneHasWhatsapp,
     preferredContactPeriod: payload.preferredContactPeriod,
@@ -315,7 +353,9 @@ export async function submitPublicPreRegistration(
   console.log(LOG_TAG, {
     step: "submit",
     referralId,
-    offer: payload.offer.code,
+    channel: payload.channel,
+    offer: canonicalCode,
+    contractType: payload.contractType,
     interest_obs_length: obsPreview.value.length,
     interest_obs_truncated: obsPreview.truncated,
     has_brbyte_plan_pk: Boolean(brbytePlanPk),
@@ -347,7 +387,7 @@ export async function submitPublicPreRegistration(
   const brbyteResult = await createBrbyteInterestFromReferral({
     referralId,
     actorUserId: null,
-    sourceContext: "public_pre_registration",
+    sourceContext: channelMeta.brbyteSourceContext,
   })
 
   if (!brbyteResult.ok) {
@@ -365,10 +405,10 @@ export async function submitPublicPreRegistration(
   }
 }
 
-function sanitizeSourcePage(value: string): string {
+function sanitizeSourcePage(value: string, fallback: string): string {
   const trimmed = value.trim()
   if (!trimmed.startsWith("/")) {
-    return PUBLIC_PRE_REGISTRATION_DEFAULT_SOURCE_PAGE
+    return fallback
   }
   return trimmed.slice(0, 120)
 }
