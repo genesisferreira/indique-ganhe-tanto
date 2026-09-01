@@ -15,6 +15,14 @@ import {
 } from "@/components/ui/select"
 import { Eye, EyeOff, ArrowLeft, CheckCircle2 } from "lucide-react"
 import { TantoBrand } from "@/components/branding/tanto-brand"
+import {
+  buildIndicatorSignupUserMetadata,
+  buildSignupEmailRedirectTo,
+  classifyIndicatorSignupResult,
+  SIGNUP_EXISTING_ACCOUNT_MESSAGE,
+  SIGNUP_SESSION_MISMATCH_MESSAGE,
+} from "@/lib/auth/indicator-signup"
+import { performClientLogout } from "@/lib/auth/logout"
 import { getSupabaseAuthNetworkHint, getSupabaseClient } from "@/lib/supabase/client"
 
 const pixTypes = [
@@ -39,6 +47,7 @@ export default function CadastroPage() {
   const [tipoPix, setTipoPix] = useState("")
   const [chavePix, setChavePix] = useState("")
   const [error, setError] = useState("")
+  const [awaitingEmailConfirmation, setAwaitingEmailConfirmation] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -64,18 +73,25 @@ export default function CadastroPage() {
 
     setIsLoading(true)
     setError("")
+    setAwaitingEmailConfirmation(false)
 
     try {
+      await performClientLogout()
+
       const supabase = getSupabaseClient()
+      const signupMetadata = buildIndicatorSignupUserMetadata({
+        fullName: nome,
+        phone: telefone,
+        pixKeyType: tipoPix,
+        pixKeyValue: chavePix,
+      })
 
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          data: {
-            full_name: nome,
-            phone: telefone,
-          },
+          data: signupMetadata,
+          emailRedirectTo: buildSignupEmailRedirectTo(window.location.origin),
         },
       })
 
@@ -90,70 +106,34 @@ export default function CadastroPage() {
         return
       }
 
-      // RLS de profiles exige role authenticated e id = auth.uid(); sem sessão JWT o insert é bloqueado.
-      if (signUpData.session) {
-        await supabase.auth.setSession({
-          access_token: signUpData.session.access_token,
-          refresh_token: signUpData.session.refresh_token,
-        })
-      }
+      const outcome = classifyIndicatorSignupResult(newUser, signUpData.session)
 
-      const {
-        data: { session: activeSession },
-      } = await supabase.auth.getSession()
-
-      if (!activeSession?.user) {
-        setError(
-          "Confirme o link enviado ao seu e-mail para ativar a conta. Depois faça login para concluir o cadastro de PIX (e perfil, se ainda não existir)."
-        )
+      if (outcome === "existing_account_hint") {
+        setError(SIGNUP_EXISTING_ACCOUNT_MESSAGE)
         return
       }
 
-      const uid = activeSession.user.id
-      if (uid !== newUser.id) {
-        setError("Sessão inconsistente após o cadastro. Tente fazer login.")
+      if (outcome === "session_mismatch") {
+        await performClientLogout()
+        setError(SIGNUP_SESSION_MISMATCH_MESSAGE)
         return
       }
 
-      const profileEmail = (newUser.email ?? email).trim()
-
-      const db = supabase as any
-
-      const { error: profileError } = await db.from("profiles").upsert(
-        {
-          id: uid,
-          full_name: nome.trim(),
-          email: profileEmail,
-          phone: telefone.trim(),
-          role: "indicador",
-          is_active: true,
-        },
-        { onConflict: "id" }
-      )
-
-      if (profileError) {
-        setError(profileError.message || "Conta criada, mas houve erro ao salvar perfil.")
+      if (outcome === "awaiting_email_confirmation") {
+        setAwaitingEmailConfirmation(true)
         return
       }
 
-      if (tipoPix && chavePix) {
-        const { error: pixError } = await db.from("pix_keys").upsert(
-          {
-            profile_id: uid,
-            key_type: tipoPix,
-            key_value: chavePix.trim(),
-            is_primary: true,
-          },
-          { onConflict: "key_value" }
-        )
-
-        if (pixError) {
-          setError(pixError.message || "Conta criada, mas houve erro ao salvar chave PIX.")
-          return
+      if (outcome === "authenticated_ready") {
+        if (signUpData.session) {
+          await supabase.auth.setSession({
+            access_token: signUpData.session.access_token,
+            refresh_token: signUpData.session.refresh_token,
+          })
         }
-      }
 
-      router.push("/indicador")
+        router.push("/indicador")
+      }
     } catch (err) {
       if (process.env.NODE_ENV === "development" && err instanceof Error) {
         console.error("[cadastro] auth:", err.name, err.message)
@@ -163,6 +143,28 @@ export default function CadastroPage() {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  if (awaitingEmailConfirmation) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-8">
+        <div className="w-full max-w-md text-center space-y-6">
+          <div className="flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mx-auto">
+            <CheckCircle2 className="w-8 h-8 text-primary" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-bold text-foreground">Cadastro realizado!</h1>
+            <p className="text-muted-foreground">
+              Enviamos um e-mail de confirmação para você. Clique no link recebido
+              para ativar sua conta.
+            </p>
+          </div>
+          <Button asChild className="w-full">
+            <Link href="/login">Ir para o login</Link>
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   return (
