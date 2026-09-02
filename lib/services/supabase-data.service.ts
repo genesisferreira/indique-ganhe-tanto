@@ -125,6 +125,8 @@ type ReferralRow = {
   reward_type: string | null
   reward_amount: number | string | null
   source?: string | null
+  /** Ator original da criação (≠ indicator; ≠ commercial atual). */
+  created_by_profile_id?: string | null
   reward_eligible?: boolean | null
   preferred_installation_period?: string | null
   preferred_contact_period?: string | null

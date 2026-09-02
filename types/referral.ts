@@ -85,8 +85,13 @@ export interface Indicacao {
   /** Observação do formulário de indicação (referrals.referred_observation) */
   observacaoIndicado?: string
   erpLeadSource?: string
-  /** referrals.source — ex.: public_pre_registration */
+  /** referrals.source — ex.: public_pre_registration | commercial_assisted_referral */
   source?: string
+  /**
+   * Ator original que criou a referral (cadastro assistido).
+   * Distinto do indicador beneficiário e do comercial responsável atual.
+   */
+  createdByProfileId?: string
   rewardEligible?: boolean
   preferredInstallationPeriod?: PreferredInstallationPeriod
   preferredContactPeriod?: PreferredContactPeriod

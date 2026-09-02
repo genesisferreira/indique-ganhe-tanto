@@ -4,6 +4,12 @@ export const NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE =
 export const PUBLIC_ERP_LEAD_SOURCE = "Pré-cadastro Web"
 export const NEUTRAL_NETWORK_ERP_LEAD_SOURCE = "Pré-cadastro Rede Neutra"
 
+/** Cadastro assistido pelo Comercial (Indique e Ganhe — reward para o indicador). */
+export const COMMERCIAL_ASSISTED_REFERRAL_SOURCE =
+  "commercial_assisted_referral" as const
+export const COMMERCIAL_ASSISTED_ERP_LEAD_SOURCE =
+  "Cadastro Assistido Comercial" as const
+
 /** Origens de captação pública sem recompensa (não Indique e Ganhe). */
 export const NON_REWARD_PUBLIC_SOURCES = [
   PUBLIC_PRE_REGISTRATION_SOURCE,
