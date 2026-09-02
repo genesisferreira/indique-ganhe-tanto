@@ -6,6 +6,9 @@ import {
   classifyIndicatorSignupResult,
 } from "./indicator-signup"
 import {
+  INDICATOR_PIX_ALEATORIA_TEST_UUID,
+} from "./pix-key-validation"
+import {
   classifySignupPixMetadata,
   resolveSignupPixTriggerDecision,
 } from "./signup-pix-metadata"
@@ -14,7 +17,7 @@ const VALID_CPF = "529.982.247-25"
 const VALID_CNPJ = "11.222.333/0001-81"
 const VALID_EMAIL = "indicador@example.com"
 const VALID_PHONE = "(11) 98765-4321"
-const VALID_ALEATORIA = "a1b2c3d4-e5f6-4789-a012-3456789abcde"
+const VALID_ALEATORIA = INDICATOR_PIX_ALEATORIA_TEST_UUID
 const NEW_USER = "user-new-1"
 const OTHER_USER = "user-other-1"
 

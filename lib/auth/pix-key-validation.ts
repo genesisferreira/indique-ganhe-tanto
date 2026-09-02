@@ -11,11 +11,18 @@ import { INDICATOR_PIX_KEY_TYPES, isIndicatorPixKeyType } from "./indicator-sign
 export const INDICATOR_PIX_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 /**
- * Chave aleatória Pix (padrão Bacen): UUID v4 com hífens.
- * O cadastro/chave-pix atuais não validam este tipo no frontend.
+ * Chave aleatória Pix (padrão Bacen): UUID com hífens
+ * (formato xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
  */
 export const INDICATOR_PIX_ALEATORIA_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** UUID válido para mocks e testes de chave aleatória. */
+export const INDICATOR_PIX_ALEATORIA_TEST_UUID =
+  "a1b2c3d4-e5f6-4789-a012-3456789abcde"
+
+export const SIGNUP_INVALID_RANDOM_PIX_KEY_MESSAGE =
+  "Informe uma chave Pix aleatória válida."
 
 export function normalizeIndicatorPixKeyValue(
   keyType: TipoChavePix,
@@ -93,4 +100,34 @@ export function validateIndicatorPixKeyForSignup(
 
 export function listIndicatorPixKeyTypes(): readonly TipoChavePix[] {
   return INDICATOR_PIX_KEY_TYPES
+}
+
+/** Mensagem amigável para o formulário de cadastro; null quando a chave é válida. */
+export function getIndicatorSignupPixKeyErrorMessage(
+  keyTypeRaw: string,
+  keyValueRaw: string
+): string | null {
+  const validation = validateIndicatorPixKeyForSignup(keyTypeRaw, keyValueRaw)
+  if (validation.ok) {
+    return null
+  }
+
+  if (validation.reason === "invalid_pix_key_type") {
+    return "Tipo de chave Pix inválido."
+  }
+
+  switch (keyTypeRaw.trim()) {
+    case "cpf":
+      return "Informe um CPF válido."
+    case "cnpj":
+      return "Informe um CNPJ válido."
+    case "email":
+      return "Informe um e-mail válido."
+    case "telefone":
+      return "Informe um telefone válido."
+    case "aleatoria":
+      return SIGNUP_INVALID_RANDOM_PIX_KEY_MESSAGE
+    default:
+      return "Informe uma chave Pix válida."
+  }
 }

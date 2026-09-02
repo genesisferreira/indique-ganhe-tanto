@@ -62,7 +62,7 @@ export const indicadores: Indicador[] = [
     telefone: '(11) 99999-4444',
     role: 'indicador',
     cpf: '789.123.456-00',
-    chavePix: 'abc123def456',
+    chavePix: 'a1b2c3d4-e5f6-4789-a012-3456789abcde',
     tipoChavePix: 'aleatoria',
     totalIndicacoes: 8,
     indicacoesAprovadas: 5,

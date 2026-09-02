@@ -187,7 +187,7 @@ begin
     return v_digits;
   end if;
 
-  -- aleatoria: UUID v4 com hífens (padrão Bacen). Frontend não valida hoje.
+  -- aleatoria: UUID com hífens (padrão Bacen; alinhado a lib/auth/pix-key-validation.ts).
   v_value := lower(v_value);
   if v_value !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
     raise exception 'invalid_pix_key_value'

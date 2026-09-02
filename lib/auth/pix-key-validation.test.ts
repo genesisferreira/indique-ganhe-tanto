@@ -1,8 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
+  getIndicatorSignupPixKeyErrorMessage,
+  INDICATOR_PIX_ALEATORIA_TEST_UUID,
   isValidIndicatorPixKeyValue,
   normalizeIndicatorPixKeyValue,
+  SIGNUP_INVALID_RANDOM_PIX_KEY_MESSAGE,
   validateIndicatorPixKeyForSignup,
 } from "./pix-key-validation"
 
@@ -10,7 +13,7 @@ const VALID_CPF = "529.982.247-25"
 const VALID_CNPJ = "11.222.333/0001-81"
 const VALID_EMAIL = "indicador@example.com"
 const VALID_PHONE = "(11) 98765-4321"
-const VALID_ALEATORIA = "a1b2c3d4-e5f6-4789-a012-3456789abcde"
+const VALID_ALEATORIA = INDICATOR_PIX_ALEATORIA_TEST_UUID
 
 describe("pix key validation (signup)", () => {
   it("CPF válido normaliza para 11 dígitos", () => {
@@ -59,5 +62,13 @@ describe("pix key validation (signup)", () => {
     if (!result.ok) {
       assert.equal(result.reason, "invalid_pix_key_type")
     }
+  })
+
+  it("cadastro retorna mensagem amigável para aleatória inválida", () => {
+    assert.equal(
+      getIndicatorSignupPixKeyErrorMessage("aleatoria", "abc123def456"),
+      SIGNUP_INVALID_RANDOM_PIX_KEY_MESSAGE
+    )
+    assert.equal(getIndicatorSignupPixKeyErrorMessage("aleatoria", VALID_ALEATORIA), null)
   })
 })

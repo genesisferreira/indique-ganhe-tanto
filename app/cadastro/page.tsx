@@ -22,6 +22,7 @@ import {
   SIGNUP_EXISTING_ACCOUNT_MESSAGE,
   SIGNUP_SESSION_MISMATCH_MESSAGE,
 } from "@/lib/auth/indicator-signup"
+import { getIndicatorSignupPixKeyErrorMessage } from "@/lib/auth/pix-key-validation"
 import { performClientLogout } from "@/lib/auth/logout"
 import { getSupabaseAuthNetworkHint, getSupabaseClient } from "@/lib/supabase/client"
 
@@ -68,6 +69,12 @@ export default function CadastroPage() {
 
     if (!tipoPix || !chavePix) {
       setError("Informe o tipo e a chave PIX para continuar.")
+      return
+    }
+
+    const pixValidationError = getIndicatorSignupPixKeyErrorMessage(tipoPix, chavePix)
+    if (pixValidationError) {
+      setError(pixValidationError)
       return
     }
 
