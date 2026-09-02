@@ -11,6 +11,7 @@ import type { AuthProfileBasics } from "@/types/auth-profile"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { formatUserRoleLabel } from "@/lib/auth/format-user-role-label"
 import {
+  evaluateRouteAccessForRole,
   getDashboardHomeForRole,
   isRoleAllowedOnDashboardVariant,
 } from "@/lib/auth/auth-audit"
@@ -122,6 +123,15 @@ export function AuthenticatedDashboardShell({
           router.replace(getDashboardHomeForRole(lockedProfile.role))
           return
         }
+        const routeAccess = evaluateRouteAccessForRole(
+          pathname,
+          lockedProfile.role
+        )
+        if (!routeAccess.allowed) {
+          setRedirecting(true)
+          router.replace(getDashboardHomeForRole(lockedProfile.role))
+          return
+        }
         if (!cancelled) setReady(true)
         return
       }
@@ -145,6 +155,13 @@ export function AuthenticatedDashboardShell({
             dest: getDashboardHomeForRole(auth.profile.role),
           })
         }
+        setRedirecting(true)
+        router.replace(getDashboardHomeForRole(auth.profile.role))
+        return
+      }
+
+      const routeAccess = evaluateRouteAccessForRole(pathname, auth.profile.role)
+      if (!routeAccess.allowed) {
         setRedirecting(true)
         router.replace(getDashboardHomeForRole(auth.profile.role))
         return

@@ -74,6 +74,23 @@ export function evaluateRouteAccessForRole(
     }
   }
   if (pathname.startsWith("/comercial")) {
+    // Cadastro assistido: UI exclusiva de comercial / admin_master.
+    // admin_financeiro continua com acesso ao restante de /comercial (leads).
+    if (
+      pathname === "/comercial/nova-indicacao" ||
+      pathname.startsWith("/comercial/nova-indicacao/")
+    ) {
+      if (role === "comercial" || role === "admin_master") {
+        return {
+          allowed: true,
+          reason: "/comercial/nova-indicacao + comercial|admin_master",
+        }
+      }
+      return {
+        allowed: false,
+        reason: `/comercial/nova-indicacao exige comercial ou admin_master; obtido: ${role}`,
+      }
+    }
     if (role === "comercial") {
       return { allowed: true, reason: "/comercial + role comercial" }
     }

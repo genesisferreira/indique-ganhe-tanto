@@ -8,6 +8,7 @@ import {
   createAssistedReferral,
   type AssistedReferralClientPayload,
 } from "@/lib/commercial-assisted/create-assisted-referral"
+import { isUniqueViolationError } from "@/lib/commercial-assisted/idempotency"
 import { createAdminClient, createClient } from "@/lib/supabase/server"
 
 export const runtime = "nodejs"
@@ -114,6 +115,33 @@ export async function POST(request: NextRequest) {
           null
         return { plan500Id, plan1000Id, baseCrmPlanId }
       },
+      findReferralByIdempotencyKey: async (key) => {
+        const db = admin as unknown as {
+          from: (t: string) => {
+            select: (cols: string) => {
+              eq: (c: string, v: string) => {
+                maybeSingle: () => Promise<{ data: unknown }>
+              }
+            }
+          }
+        }
+        const { data } = await db
+          .from("referrals")
+          .select(
+            "id, indicator_profile_id, created_by_profile_id, commercial_profile_id, referred_name, source, reward_eligible"
+          )
+          .eq("assisted_idempotency_key", key)
+          .maybeSingle()
+        return (data as {
+          id: string
+          indicator_profile_id: string
+          created_by_profile_id: string | null
+          commercial_profile_id: string | null
+          referred_name: string
+          source: string | null
+          reward_eligible: boolean | null
+        } | null) ?? null
+      },
       insertReferral: async (row) => {
         const db = admin as unknown as {
           from: (t: string) => {
@@ -121,7 +149,7 @@ export async function POST(request: NextRequest) {
               select: (cols: string) => {
                 maybeSingle: () => Promise<{
                   data: { id: string } | null
-                  error: { message: string } | null
+                  error: { message: string; code?: string } | null
                 }>
               }
             }
@@ -136,8 +164,13 @@ export async function POST(request: NextRequest) {
           console.error("[assisted-referral]", {
             step: "insert",
             message: error?.message ?? "no_id",
+            code: error?.code ?? null,
           })
-          return { error: error?.message ?? "insert_failed" }
+          return {
+            error: error?.message ?? "insert_failed",
+            code: error?.code ?? null,
+            uniqueViolation: isUniqueViolationError(error),
+          }
         }
         return { id: data.id }
       },
@@ -213,7 +246,10 @@ export async function POST(request: NextRequest) {
     responsibleName: result.responsibleName,
     commercialProfileId: result.commercialProfileId,
     leadUrl: `/comercial/leads/${result.referralId}`,
+    replayed: result.replayed,
     controllr: result.controllr,
-    message: "Indicação cadastrada com sucesso.",
+    message: result.replayed
+      ? "Indicação já cadastrada (idempotente)."
+      : "Indicação cadastrada com sucesso.",
   })
 }

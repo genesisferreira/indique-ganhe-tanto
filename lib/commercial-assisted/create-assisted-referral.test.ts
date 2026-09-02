@@ -19,6 +19,7 @@ const OFFER_CODE = "tanto_vantagens_500" // may need real catalog code
 
 function baseBody(overrides: Record<string, unknown> = {}) {
   return {
+    assisted_idempotency_key: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
     indicator_profile_id: "indicator-1",
     referred_person_type: "pf",
     referred_name: "Pedro Alves",
@@ -100,6 +101,7 @@ describe("buildAssistedReferralInsertRow ownership", () => {
     rewardType: "pix" as const,
     installationFeeAwareness: true as const,
     contractTypeAwareness: true as const,
+    idempotencyKey: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
   }
 
   it("comercial: created_by e commercial = ator; source/reward server-side", () => {
@@ -213,6 +215,8 @@ describe("createAssistedReferral service", () => {
           inserted.push(row)
           return { id: "ref-1" }
         }),
+      findReferralByIdempotencyKey:
+        overrides.findReferralByIdempotencyKey ?? (async () => null),
       insertReferralHistory:
         overrides.insertReferralHistory ?? (async () => undefined),
       insertAudit:

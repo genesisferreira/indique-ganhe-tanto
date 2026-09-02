@@ -118,6 +118,15 @@ export default function ComercialNovaIndicacaoPage() {
   const [formError, setFormError] = useState("")
   const [success, setSuccess] = useState<SuccessState | null>(null)
   const submittingRef = useRef(false)
+  /** UUID da tentativa lógica atual — reutilizado em retry; reset após sucesso/nova. */
+  const idempotencyKeyRef = useRef<string | null>(null)
+
+  function ensureIdempotencyKey(): string {
+    if (!idempotencyKeyRef.current) {
+      idempotencyKeyRef.current = crypto.randomUUID()
+    }
+    return idempotencyKeyRef.current
+  }
   const numeroRef = useRef<HTMLInputElement>(null)
 
   const offers = useMemo(
@@ -234,11 +243,13 @@ export default function ComercialNovaIndicacaoPage() {
     submittingRef.current = true
     setSubmitting(true)
     setFormError("")
+    const idempotencyKey = ensureIdempotencyKey()
     try {
       const res = await fetch("/api/comercial/assisted-referrals", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          assisted_idempotency_key: idempotencyKey,
           indicator_profile_id: selected.id,
           referred_person_type: personType,
           referred_name: nome,
@@ -278,6 +289,8 @@ export default function ComercialNovaIndicacaoPage() {
         setFormError(json.message || "Não foi possível criar a indicação.")
         return
       }
+      // Sucesso: descarta a key da tentativa lógica.
+      idempotencyKeyRef.current = null
       setSuccess({
         referralId: json.referralId,
         indicatorName: json.indicatorName || selected.full_name,
@@ -293,6 +306,7 @@ export default function ComercialNovaIndicacaoPage() {
       setStep("success")
       toast.success("Indicação cadastrada com sucesso.")
     } catch {
+      // Timeout/rede: mantém a mesma key para retry.
       setFormError("Erro temporário. Tente novamente.")
     } finally {
       setSubmitting(false)
@@ -326,6 +340,8 @@ export default function ComercialNovaIndicacaoPage() {
     setOfferCode("")
     setInstallationFeeAwareness(false)
     setContractTypeAwareness(false)
+    // Nova indicação = nova tentativa lógica.
+    idempotencyKeyRef.current = null
   }
 
   if (step === "success" && success) {

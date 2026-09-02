@@ -20,6 +20,10 @@ import {
 import { isReferralContractType } from "@/lib/referral-contract-type"
 import type { IndicadoPersonType, ReferralContractType } from "@/types/referral"
 import {
+  isUniqueViolationError,
+  normalizeAssistedIdempotencyKey,
+} from "./idempotency"
+import {
   COMMERCIAL_ASSISTED_CREATE_AUDIT_EVENT,
   COMMERCIAL_ASSISTED_ERP_LEAD_SOURCE,
   COMMERCIAL_ASSISTED_REFERRAL_SOURCE,
@@ -51,6 +55,8 @@ export type AssistedReferralClientPayload = {
   reward_type?: unknown
   installation_fee_awareness?: unknown
   contract_type_awareness?: unknown
+  /** UUID da tentativa lógica — não controla ownership/reward/source. */
+  assisted_idempotency_key?: unknown
   // Campos que o browser NÃO pode impor — ignorados se enviados:
   created_by_profile_id?: unknown
   commercial_profile_id?: unknown
@@ -85,6 +91,7 @@ export type AssistedReferralValidatedInput = {
   rewardType: "pix" | "desconto_fatura"
   installationFeeAwareness: true
   contractTypeAwareness: true
+  idempotencyKey: string
 }
 
 export type AssistedReferralInsertRow = {
@@ -126,6 +133,7 @@ export type AssistedReferralInsertRow = {
   status: "pendente" | "em_atendimento"
   assigned_at: string | null
   last_interaction_at: string | null
+  assisted_idempotency_key: string
 }
 
 function asString(value: unknown): string {
@@ -145,6 +153,16 @@ export function validateAssistedReferralClientPayload(
   const indicatorProfileId = asString(body.indicator_profile_id).trim()
   if (!indicatorProfileId) {
     return { ok: false, message: "Selecione um indicador válido." }
+  }
+
+  const idempotencyKey = normalizeAssistedIdempotencyKey(
+    body.assisted_idempotency_key
+  )
+  if (!idempotencyKey) {
+    return {
+      ok: false,
+      message: "Chave de idempotência inválida. Recarregue e tente novamente.",
+    }
   }
 
   const personRaw = asString(body.referred_person_type).trim().toLowerCase()
@@ -294,6 +312,7 @@ export function validateAssistedReferralClientPayload(
       rewardType,
       installationFeeAwareness: true,
       contractTypeAwareness: true,
+      idempotencyKey,
     },
   }
 }
@@ -351,6 +370,7 @@ export function buildAssistedReferralInsertRow(input: {
     status: isCommercial ? "em_atendimento" : "pendente",
     assigned_at: isCommercial ? input.nowIso : null,
     last_interaction_at: isCommercial ? input.nowIso : null,
+    assisted_idempotency_key: input.validated.idempotencyKey,
   }
 }
 
@@ -411,7 +431,19 @@ export type CreateAssistedReferralDeps = {
   }
   insertReferral: (
     row: AssistedReferralInsertRow
-  ) => Promise<{ id: string } | { error: string }>
+  ) => Promise<
+    | { id: string }
+    | { error: string; code?: string | null; uniqueViolation?: boolean }
+  >
+  findReferralByIdempotencyKey: (key: string) => Promise<{
+    id: string
+    indicator_profile_id: string
+    created_by_profile_id: string | null
+    commercial_profile_id: string | null
+    referred_name: string
+    source: string | null
+    reward_eligible: boolean | null
+  } | null>
   insertReferralHistory: (input: {
     referralId: string
     actorProfileId: string
@@ -438,6 +470,7 @@ export type CreateAssistedReferralResult =
       referredName: string
       responsibleName: string
       commercialProfileId: string | null
+      replayed: boolean
       controllr: { ok: boolean; skipped?: boolean; message?: string }
     }
   | { ok: false; status: number; message: string }
@@ -472,6 +505,36 @@ export async function createAssistedReferral(
   const validated = validateAssistedReferralClientPayload(body)
   if (!validated.ok) {
     return { ok: false, status: 400, message: validated.message }
+  }
+
+  const existingByKey = await deps.findReferralByIdempotencyKey(
+    validated.data.idempotencyKey
+  )
+  if (existingByKey) {
+    if (existingByKey.created_by_profile_id !== auth.profileId) {
+      return {
+        ok: false,
+        status: 409,
+        message: "Chave de idempotência já utilizada por outra sessão.",
+      }
+    }
+    const indicatorName =
+      (
+        await deps.loadIndicatorProfile(existingByKey.indicator_profile_id)
+      )?.full_name?.trim() || "Indicador"
+    return {
+      ok: true,
+      referralId: existingByKey.id,
+      indicatorName,
+      referredName: existingByKey.referred_name,
+      responsibleName:
+        actorRole === "comercial"
+          ? actor?.full_name?.trim() || "Comercial"
+          : "Distribuição automática",
+      commercialProfileId: existingByKey.commercial_profile_id,
+      replayed: true,
+      controllr: { ok: true, skipped: true, message: "replay" },
+    }
   }
 
   const indicator = await deps.loadIndicatorProfile(
@@ -548,6 +611,26 @@ export async function createAssistedReferral(
 
   const inserted = await deps.insertReferral(row)
   if ("error" in inserted) {
+    if (inserted.uniqueViolation || isUniqueViolationError(inserted)) {
+      const raced = await deps.findReferralByIdempotencyKey(
+        validated.data.idempotencyKey
+      )
+      if (raced && raced.created_by_profile_id === auth.profileId) {
+        return {
+          ok: true,
+          referralId: raced.id,
+          indicatorName: indicator.full_name?.trim() || "Indicador",
+          referredName: raced.referred_name,
+          responsibleName:
+            actorRole === "comercial"
+              ? actor?.full_name?.trim() || "Comercial"
+              : "Distribuição automática",
+          commercialProfileId: raced.commercial_profile_id,
+          replayed: true,
+          controllr: { ok: true, skipped: true, message: "replay" },
+        }
+      }
+    }
     return {
       ok: false,
       status: 500,
@@ -617,6 +700,7 @@ export async function createAssistedReferral(
         ? actor?.full_name?.trim() || "Comercial"
         : "Distribuição automática",
     commercialProfileId: row.commercial_profile_id,
+    replayed: false,
     controllr,
   }
 }

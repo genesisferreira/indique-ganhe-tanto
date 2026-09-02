@@ -205,6 +205,20 @@ function filterAdminNavForConsulta(nav: NavGroup[]): NavGroup[] {
   }))
 }
 
+/** Nova indicação assistida: só comercial e admin_master (não admin_financeiro). */
+function filterComercialAssistedNav(
+  nav: NavGroup[],
+  role: UserRole | null
+): NavGroup[] {
+  if (role === "comercial" || role === "admin_master") return nav
+  return nav.map((group) => ({
+    ...group,
+    items: group.items.filter(
+      (item) => item.href !== "/comercial/nova-indicacao"
+    ),
+  }))
+}
+
 function capBadge(n: number): number {
   return Math.min(n, 99)
 }
@@ -363,7 +377,7 @@ export function Sidebar({
       variant === "indicador"
         ? indicadorNav
         : variant === "comercial"
-          ? comercialNav
+          ? filterComercialAssistedNav(comercialNav, policyRole)
           : adminNav
     if (variant === "admin" && policyRole === "admin_consulta") {
       return filterAdminNavForConsulta(base)
