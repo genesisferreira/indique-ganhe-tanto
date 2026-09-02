@@ -26,3 +26,18 @@ export function maskCpfForDisplay(cpf: string | null | undefined): string | null
   if (digits.length !== 11) return null
   return `***.***.***-${digits.slice(-2)}`
 }
+
+export function maskCnpjForDisplay(cnpj: string | null | undefined): string | null {
+  if (cnpj == null) return null
+  const digits = cnpj.replace(/\D/g, "")
+  if (digits.length !== 14) return null
+  return `**.***.***/****-${digits.slice(-2)}`
+}
+
+export function maskDocumentForDisplay(
+  document: string | null | undefined,
+  personType: "pf" | "pj" | string | null | undefined
+): string | null {
+  if (personType === "pj") return maskCnpjForDisplay(document)
+  return maskCpfForDisplay(document)
+}

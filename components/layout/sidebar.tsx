@@ -112,6 +112,7 @@ const comercialNav: NavGroup[] = [
     items: [
       { label: "Dashboard", href: "/comercial", icon: Home },
       { label: "Notificações", href: "/notificacoes", icon: Bell },
+      { label: "Nova indicação", href: "/comercial/nova-indicacao", icon: UserPlus },
       { label: "Meus Leads", href: "/comercial/leads", icon: Users },
       { label: "Pipeline", href: "/comercial/pipeline", icon: LayoutGrid },
       { label: "Retornos Agendados", href: "/comercial/retornos", icon: Clock },

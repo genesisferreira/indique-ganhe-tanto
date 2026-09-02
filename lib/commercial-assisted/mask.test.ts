@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
+  maskCnpjForDisplay,
   maskCpfForDisplay,
   maskEmailForDisplay,
   maskPhoneForDisplay,
@@ -20,6 +21,10 @@ describe("commercial-assisted mask", () => {
   it("mascara CPF mostrando só os 2 últimos dígitos", () => {
     assert.equal(maskCpfForDisplay("529.982.247-25"), "***.***.***-25")
     assert.equal(maskCpfForDisplay("52998224725"), "***.***.***-25")
+  })
+
+  it("mascara CNPJ mostrando só os 2 últimos dígitos", () => {
+    assert.equal(maskCnpjForDisplay("11.222.333/0001-81"), "**.***.***/****-81")
   })
 
   it("CPF null/inválido não inventa placeholder", () => {

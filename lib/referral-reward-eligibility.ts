@@ -7,8 +7,9 @@ export const NEUTRAL_NETWORK_ERP_LEAD_SOURCE = "Pré-cadastro Rede Neutra"
 /** Cadastro assistido pelo Comercial (Indique e Ganhe — reward para o indicador). */
 export const COMMERCIAL_ASSISTED_REFERRAL_SOURCE =
   "commercial_assisted_referral" as const
-export const COMMERCIAL_ASSISTED_ERP_LEAD_SOURCE =
-  "Cadastro Assistido Comercial" as const
+
+/** Mesmo erp_lead_source do fluxo indicador (não pré-cadastro público). */
+export const COMMERCIAL_ASSISTED_ERP_LEAD_SOURCE = "Indique e Ganhe" as const
 
 /** Origens de captação pública sem recompensa (não Indique e Ganhe). */
 export const NON_REWARD_PUBLIC_SOURCES = [

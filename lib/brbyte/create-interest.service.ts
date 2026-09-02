@@ -61,6 +61,7 @@ import {
 
 export type BrbyteCreateInterestSourceContext =
   | "indicator_referral"
+  | "commercial_assisted"
   | "public_pre_registration"
   | "neutral_network_pre_registration"
   | "admin_manual"
@@ -521,6 +522,8 @@ function resolveTriggeredBy(
       return NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE
     case "indicator_referral":
       return "indicator_automatic"
+    case "commercial_assisted":
+      return "commercial_assisted"
     case "cron_retry":
       return "cron_retry"
     case "admin_manual":
@@ -769,7 +772,9 @@ export async function createBrbyteInterestFromReferral(input: {
   const isPublicFlow =
     sourceContext === "public_pre_registration" ||
     sourceContext === "neutral_network_pre_registration"
-  const isIndicatorFlow = sourceContext === "indicator_referral"
+  const isIndicatorFlow =
+    sourceContext === "indicator_referral" ||
+    sourceContext === "commercial_assisted"
   const triggeredBy = resolveTriggeredBy(sourceContext)
 
   if (isIndicatorFlow && !isBrbyteAutoCreateInterestOnReferralEnabled()) {

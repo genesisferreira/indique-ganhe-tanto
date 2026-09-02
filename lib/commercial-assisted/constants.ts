@@ -6,16 +6,16 @@
  * - created_by_profile_id = ator original que criou o registro (imutável)
  * - commercial_profile_id = responsável comercial atual (pode mudar no SLA)
  * - source                = commercial_assisted_referral
+ * - erp_lead_source       = Indique e Ganhe
  * - reward_eligible       = true
  */
 
-export const COMMERCIAL_ASSISTED_REFERRAL_SOURCE =
-  "commercial_assisted_referral" as const
+export {
+  COMMERCIAL_ASSISTED_REFERRAL_SOURCE,
+  COMMERCIAL_ASSISTED_ERP_LEAD_SOURCE,
+} from "@/lib/referral-reward-eligibility"
 
-export const COMMERCIAL_ASSISTED_ERP_LEAD_SOURCE =
-  "Cadastro Assistido Comercial" as const
-
-/** Roles autorizados a buscar indicadores para cadastro assistido. */
+/** Roles autorizados a buscar indicadores / criar assistido. */
 export const COMMERCIAL_INDICATOR_SEARCH_ALLOWED_ROLES = [
   "comercial",
   "admin_master",
@@ -32,3 +32,12 @@ export const COMMERCIAL_INDICATOR_SEARCH_AUDIT_ENTITY =
 
 export const COMMERCIAL_INDICATOR_SEARCH_AUDIT_EVENT =
   "commercial_indicator_search" as const
+
+export const COMMERCIAL_ASSISTED_CREATE_AUDIT_ENTITY =
+  "commercial_assisted_referral" as const
+
+export const COMMERCIAL_ASSISTED_CREATE_AUDIT_EVENT =
+  "commercial_assisted_referral_created" as const
+
+export const COMMERCIAL_ASSISTED_CADASTRO_URL =
+  "https://crm.tantotelecom.com.br/cadastro" as const
