@@ -55,19 +55,20 @@ import {
   Copy,
   Loader2,
   Search,
+  UserPlus,
   UserRound,
 } from "lucide-react"
+import {
+  AssistedCreateIndicatorPanel,
+  type CreatedIndicatorSelection,
+} from "@/components/commercial/assisted-create-indicator-panel"
 
 type Step = 1 | 2 | 3 | 4 | "success"
 
-type SearchResult = {
-  id: string
-  full_name: string
-  phone_masked: string | null
-  email_masked: string | null
-  document_masked: string | null
-  is_active: boolean
-}
+type SearchResult = CreatedIndicatorSelection
+
+/** Sub-estado da etapa 1: busca normal ou formulário de novo indicador */
+type Step1Mode = "search" | "create-indicator"
 
 type SuccessState = {
   referralId: string
@@ -80,6 +81,7 @@ type SuccessState = {
 
 export default function ComercialNovaIndicacaoPage() {
   const [step, setStep] = useState<Step>(1)
+  const [step1Mode, setStep1Mode] = useState<Step1Mode>("search")
   const [query, setQuery] = useState("")
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState("")
@@ -325,6 +327,7 @@ export default function ComercialNovaIndicacaoPage() {
 
   function resetForNew() {
     setStep(1)
+    setStep1Mode("search")
     setSelected(null)
     setResults([])
     setQuery("")
@@ -342,6 +345,13 @@ export default function ComercialNovaIndicacaoPage() {
     setContractTypeAwareness(false)
     // Nova indicação = nova tentativa lógica.
     idempotencyKeyRef.current = null
+  }
+
+  function handleIndicatorCreated(indicator: CreatedIndicatorSelection) {
+    setSelected(indicator)
+    setStep1Mode("search")
+    setFormError("")
+    setStep(2)
   }
 
   if (step === "success" && success) {
@@ -413,7 +423,14 @@ export default function ComercialNovaIndicacaoPage() {
         </span>
       </div>
 
-      {step === 1 && (
+      {step === 1 && step1Mode === "create-indicator" && (
+        <AssistedCreateIndicatorPanel
+          onBackToSearch={() => setStep1Mode("search")}
+          onContinueWithIndicator={handleIndicatorCreated}
+        />
+      )}
+
+      {step === 1 && step1Mode === "search" && (
         <div className="space-y-4 max-w-2xl">
           {selected ? (
             <div className="rounded-xl border border-border bg-card p-4 space-y-3">
@@ -535,6 +552,22 @@ export default function ComercialNovaIndicacaoPage() {
                     </Button>
                   </div>
                 ))}
+              </div>
+
+              {/* Botão sempre visível — permite cadastrar indicador novo mesmo sem buscar */}
+              <div className="pt-2 border-t border-border">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setStep1Mode("create-indicator")}
+                  className="gap-2"
+                >
+                  <UserPlus className="h-4 w-4" />
+                  Cadastrar novo indicador
+                </Button>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Use quando o cliente ainda não possui conta no Indique e Ganhe.
+                </p>
               </div>
             </>
           )}
