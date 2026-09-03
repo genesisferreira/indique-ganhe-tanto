@@ -2,13 +2,22 @@ import { type NextRequest, NextResponse } from "next/server"
 import {
   evaluateRouteAccessForRole,
   getDashboardHomeForRole,
+  isAllowedDuringMustChangePassword,
+  isFirstAccessPath,
   logAuthAudit,
 } from "@/lib/auth/auth-audit"
+import { FIRST_ACCESS_PATH } from "@/lib/commercial-assisted/constants"
 import { applyNoStoreHeaders } from "@/lib/auth/cache-control"
 import { updateSession } from "@/lib/supabase/middleware"
 import type { UserRole } from "@/types/user"
 
-const protectedPrefixes = ["/indicador", "/comercial", "/admin", "/notificacoes"]
+const protectedPrefixes = [
+  "/indicador",
+  "/comercial",
+  "/admin",
+  "/notificacoes",
+  "/primeiro-acesso",
+]
 
 const publicRoutes = [
   "/",
@@ -79,14 +88,27 @@ export async function middleware(request: NextRequest) {
 
   const { data: profileRow, error: profileError } = await supabase
     .from("profiles")
-    .select("role")
+    .select("role, must_change_password")
     .eq("id", user.id)
     .maybeSingle()
 
   const role = (profileRow?.role ?? null) as UserRole | null
+  const mustChangePassword =
+    (profileRow as { must_change_password?: boolean | null } | null)
+      ?.must_change_password === true
 
   if (profileError || !role) {
     return redirectToLogin(request, pathname)
+  }
+
+  if (mustChangePassword && !isAllowedDuringMustChangePassword(pathname)) {
+    const redirectUrl = new URL(FIRST_ACCESS_PATH, request.url)
+    return applyNoStoreHeaders(NextResponse.redirect(redirectUrl))
+  }
+
+  if (!mustChangePassword && isFirstAccessPath(pathname)) {
+    const redirectUrl = new URL(getDashboardHomeForRole(role), request.url)
+    return applyNoStoreHeaders(NextResponse.redirect(redirectUrl))
   }
 
   const access = evaluateRouteAccessForRole(pathname, role)

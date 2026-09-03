@@ -11,7 +11,7 @@ import { Eye, EyeOff, ArrowLeft } from "lucide-react"
 import { TantoBrand } from "@/components/branding/tanto-brand"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/components/auth/auth-provider"
-import { getDashboardHomeForRole } from "@/lib/auth/auth-audit"
+import { resolvePostAuthPath } from "@/lib/auth/auth-audit"
 import {
   getDemoCredentials,
   getDemoDashboardPath,
@@ -39,15 +39,15 @@ function LoginForm() {
   const loggedOutParam = searchParams.get("loggedOut")
   const demoLinksEnabled = isDemoLinksEnabled()
 
-  const resolvePostLoginPath = (role: UserRole | null): string => {
-    if (
-      redirectParam &&
-      redirectParam.startsWith("/") &&
-      !redirectParam.startsWith("//")
-    ) {
-      return redirectParam
-    }
-    return role ? getDashboardHomeForRole(role) : "/indicador"
+  const resolvePostLoginPath = (
+    role: UserRole | null,
+    mustChangePassword = false
+  ): string => {
+    return resolvePostAuthPath({
+      role,
+      mustChangePassword,
+      redirectParam,
+    })
   }
 
   useEffect(() => {
@@ -62,7 +62,9 @@ function LoginForm() {
       const role = (auth.profile?.role ?? null) as UserRole | null
       if (role) {
         if (!cancelled) {
-          router.replace(resolvePostLoginPath(role))
+          router.replace(
+            resolvePostLoginPath(role, auth.profile?.mustChangePassword === true)
+          )
         }
         return
       }
@@ -77,7 +79,9 @@ function LoginForm() {
       const basics = await getAuthProfileBasicsFromSupabase()
       if (cancelled || !basics?.role) return
 
-      router.replace(resolvePostLoginPath(basics.role))
+      router.replace(
+        resolvePostLoginPath(basics.role, basics.mustChangePassword === true)
+      )
     })()
 
     return () => {
@@ -113,7 +117,9 @@ function LoginForm() {
       await auth.refreshProfile()
       const basics = await getAuthProfileBasicsFromSupabase()
       const role = (basics?.role ?? null) as UserRole | null
-      router.replace(resolvePostLoginPath(role))
+      router.replace(
+        resolvePostLoginPath(role, basics?.mustChangePassword === true)
+      )
       router.refresh()
     } catch (err) {
       if (process.env.NODE_ENV === "development" && err instanceof Error) {

@@ -13,8 +13,10 @@ import { formatUserRoleLabel } from "@/lib/auth/format-user-role-label"
 import {
   evaluateRouteAccessForRole,
   getDashboardHomeForRole,
+  isAllowedDuringMustChangePassword,
   isRoleAllowedOnDashboardVariant,
 } from "@/lib/auth/auth-audit"
+import { FIRST_ACCESS_PATH } from "@/lib/commercial-assisted/constants"
 import type { UserRole } from "@/types/user"
 
 type DashboardVariant = "indicador" | "comercial" | "admin"
@@ -109,6 +111,13 @@ export function AuthenticatedDashboardShell({
         setUserRoleLabel(formatUserRoleLabel(lockedProfile.role))
         setPolicyRole(lockedProfile.role)
         setSessionProfile(lockedProfile)
+        if (lockedProfile.mustChangePassword) {
+          if (!isAllowedDuringMustChangePassword(pathname)) {
+            setRedirecting(true)
+            router.replace(FIRST_ACCESS_PATH)
+            return
+          }
+        }
         if (!isRoleAllowedOnDashboardVariant(variant, lockedProfile.role)) {
           if (process.env.NODE_ENV === "development") {
             console.warn("[permission-check:debug]", {
@@ -143,6 +152,14 @@ export function AuthenticatedDashboardShell({
         const dest = `/login?redirect=${encodeURIComponent(pathname)}`
         router.replace(dest)
         return
+      }
+
+      if (auth.profile.mustChangePassword) {
+        if (!isAllowedDuringMustChangePassword(pathname)) {
+          setRedirecting(true)
+          router.replace(FIRST_ACCESS_PATH)
+          return
+        }
       }
 
       if (!isRoleAllowedOnDashboardVariant(variant, auth.profile.role)) {

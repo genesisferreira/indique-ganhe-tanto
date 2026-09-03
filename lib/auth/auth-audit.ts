@@ -1,4 +1,5 @@
 import type { UserRole } from "@/types/user"
+import { FIRST_ACCESS_PATH } from "@/lib/commercial-assisted/constants"
 
 export type AuthAuditPayload = {
   role: string | null
@@ -21,6 +22,43 @@ export function getDashboardHomeForRole(role: UserRole): string {
     default:
       return "/"
   }
+}
+
+export function isFirstAccessPath(pathname: string): boolean {
+  return (
+    pathname === FIRST_ACCESS_PATH ||
+    pathname.startsWith(`${FIRST_ACCESS_PATH}/`)
+  )
+}
+
+/**
+ * Rotas permitidas enquanto must_change_password = true.
+ * Demais áreas autenticadas redirecionam para /primeiro-acesso.
+ */
+export function isAllowedDuringMustChangePassword(pathname: string): boolean {
+  if (isFirstAccessPath(pathname)) return true
+  if (pathname.startsWith("/auth/logout")) return true
+  if (pathname.startsWith("/api/auth/complete-first-password-change")) return true
+  return false
+}
+
+export function resolvePostAuthPath(input: {
+  role: UserRole | null
+  mustChangePassword: boolean
+  redirectParam?: string | null
+}): string {
+  if (input.mustChangePassword) {
+    return FIRST_ACCESS_PATH
+  }
+  if (
+    input.redirectParam &&
+    input.redirectParam.startsWith("/") &&
+    !input.redirectParam.startsWith("//") &&
+    !isFirstAccessPath(input.redirectParam)
+  ) {
+    return input.redirectParam
+  }
+  return input.role ? getDashboardHomeForRole(input.role) : "/indicador"
 }
 
 /** O layout (variant) da área corresponde ao role do perfil autenticado. */
@@ -63,6 +101,9 @@ export function evaluateRouteAccessForRole(
       allowed: false,
       reason: "role ausente (sem sessão ou perfil não carregado)",
     }
+  }
+  if (isFirstAccessPath(pathname)) {
+    return { allowed: true, reason: "/primeiro-acesso (qualquer role autenticado)" }
   }
   if (pathname.startsWith("/indicador")) {
     if (role === "indicador") {

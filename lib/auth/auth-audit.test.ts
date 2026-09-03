@@ -3,6 +3,15 @@ import { describe, it } from "node:test"
 import { evaluateRouteAccessForRole } from "./auth-audit"
 import type { UserRole } from "@/types/user"
 
+describe("evaluateRouteAccessForRole — /primeiro-acesso", () => {
+  it("permite role autenticado", () => {
+    assert.equal(
+      evaluateRouteAccessForRole("/primeiro-acesso", "indicador").allowed,
+      true
+    )
+  })
+})
+
 describe("evaluateRouteAccessForRole — /comercial/nova-indicacao", () => {
   const path = "/comercial/nova-indicacao"
 

@@ -10,4 +10,6 @@ export type AuthProfileBasics = {
   avatarUrl: string | null
   /** ISO string `profiles.created_at` */
   createdAt: string | null
+  /** Se true, redirecionar para /primeiro-acesso antes do dashboard. */
+  mustChangePassword?: boolean
 }
