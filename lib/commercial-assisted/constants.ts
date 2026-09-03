@@ -41,3 +41,11 @@ export const COMMERCIAL_ASSISTED_CREATE_AUDIT_EVENT =
 
 export const COMMERCIAL_ASSISTED_CADASTRO_URL =
   "https://crm.tantotelecom.com.br/cadastro" as const
+
+export const COMMERCIAL_ASSISTED_INDICATOR_AUDIT_ENTITY =
+  "commercial_assisted_indicator" as const
+
+export const COMMERCIAL_ASSISTED_INDICATOR_AUDIT_EVENT =
+  "commercial_assisted_indicator_created" as const
+
+export const FIRST_ACCESS_PATH = "/primeiro-acesso" as const
