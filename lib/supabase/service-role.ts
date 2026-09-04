@@ -4,7 +4,12 @@ import type { Database } from "@/types/database"
 import { applyDevSupabaseTlsWorkaround } from "@/lib/supabase/dev-tls"
 
 /**
- * Cliente Supabase com service role — apenas server/API (nunca importar em Client Components).
+ * Privileged server-only Supabase client (service-role key).
+ *
+ * - No user cookies / session inheritance
+ * - Does not authenticate or authorize the actor by itself
+ * - Caller MUST authenticate + authorize (session getUser / role) before use
+ * - Never import from Client Components
  */
 export function createServiceRoleClient() {
   applyDevSupabaseTlsWorkaround()

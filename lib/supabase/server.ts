@@ -29,6 +29,11 @@ function createServerClientWithCookies(
   })
 }
 
+/**
+ * Session / RLS-aware Supabase client (anon key + cookies).
+ * Use for auth.getUser() and intentional user-scoped DB access.
+ * Never use for privileged bypass of RLS.
+ */
 export async function createClient() {
   const cookieStore = await cookies()
 
@@ -52,32 +57,6 @@ export function createClientFromRequest(request: NextRequest) {
     () => request.cookies.getAll(),
     () => {
       // Auth read-only nestas rotas; refresh fica a cargo do middleware em produção.
-    }
-  )
-}
-
-export async function createAdminClient() {
-  applyDevSupabaseTlsWorkaround()
-  const cookieStore = await cookies()
-
-  return createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // Server Component context
-          }
-        },
-      },
     }
   )
 }
