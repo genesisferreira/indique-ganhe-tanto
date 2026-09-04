@@ -9,6 +9,7 @@ import {
   getIndicatorBrbyteStatusMessage,
   INDICATOR_REFERRAL_SAVED_MESSAGE,
 } from "@/lib/brbyte/indicator-status-messages"
+import { assertPasswordChangeCompleted } from "@/lib/auth/password-change-gate"
 import { createClient } from "@/lib/supabase/server"
 import { isPublicPreRegistrationReferral } from "@/lib/referral-reward-eligibility"
 import type { UserRole } from "@/types/user"
@@ -45,13 +46,16 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("role")
+    .select("role, must_change_password")
     .eq("id", user.id)
     .maybeSingle()
 
-  const role = ((profile as { role?: string } | null)?.role ?? null) as
-    | UserRole
-    | null
+  const profileRow = profile as {
+    role?: string
+    must_change_password?: boolean | null
+  } | null
+
+  const role = (profileRow?.role ?? null) as UserRole | null
 
   const isAdmin =
     role === "admin_master" || role === "admin_financeiro"
@@ -62,6 +66,22 @@ export async function POST(request: NextRequest, context: RouteContext) {
       { ok: false, message: INDICATOR_REFERRAL_SAVED_MESSAGE },
       { status: 403 }
     )
+  }
+
+  // Gate P1-2: indicador com senha temporária não opera APIs de negócio.
+  // Admin continua autorizado (sem regressão).
+  if (isIndicador && !isAdmin) {
+    const gate = assertPasswordChangeCompleted(profileRow)
+    if (gate) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: gate.code,
+          message: gate.message,
+        },
+        { status: gate.status }
+      )
+    }
   }
 
   const { data: referral, error: referralError } = await supabase

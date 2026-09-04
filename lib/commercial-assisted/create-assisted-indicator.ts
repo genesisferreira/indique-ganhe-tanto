@@ -55,6 +55,7 @@ export type AssistedIndicatorCreationRow = {
   idempotency_key: string
   actor_profile_id: string | null
   indicator_profile_id: string | null
+  auth_user_id: string | null
   status: "pending" | "created" | "failed"
 }
 
@@ -68,6 +69,10 @@ export type AssistedIndicatorProfileRow = {
   is_active: boolean | null
   must_change_password: boolean | null
 }
+
+export type CreationUpdateResult =
+  | { ok: true }
+  | { ok: false; message: string }
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : String(value)
@@ -190,11 +195,13 @@ export type CreateAssistedIndicatorDeps = {
     | { id: string }
     | { error: string; uniqueViolation?: boolean }
   >
+  /** Updates críticos devem retornar ok/erro — nunca silenciosos. */
   updateCreation: (input: {
     id: string
-    status: "pending" | "created" | "failed"
+    status?: "pending" | "created" | "failed"
     indicatorProfileId?: string | null
-  }) => Promise<void>
+    authUserId?: string | null
+  }) => Promise<CreationUpdateResult>
   findProfileByEmail: (
     email: string
   ) => Promise<AssistedIndicatorProfileRow | null>
@@ -211,6 +218,7 @@ export type CreateAssistedIndicatorDeps = {
     | { ok: true; userId: string }
     | { ok: false; code: "email_exists" | "create_failed"; message?: string }
   >
+  /** Só pode receber o userId criado nesta operação (ou ownership auth_user_id). */
   deleteAuthUser: (userId: string) => Promise<{ ok: boolean }>
   updateProfileAfterCreate: (input: {
     profileId: string
@@ -272,7 +280,9 @@ async function resolveReplay(
   deps: CreateAssistedIndicatorDeps,
   creation: AssistedIndicatorCreationRow
 ): Promise<CreateAssistedIndicatorResult> {
-  if (!creation.indicator_profile_id) {
+  const profileId =
+    creation.indicator_profile_id ?? creation.auth_user_id
+  if (!profileId) {
     return {
       ok: false,
       status: 409,
@@ -280,7 +290,7 @@ async function resolveReplay(
         "Operação em andamento ou incompleta. Aguarde e tente novamente com a mesma chave.",
     }
   }
-  const profile = await deps.findProfileById(creation.indicator_profile_id)
+  const profile = await deps.findProfileById(profileId)
   if (!profile) {
     return {
       ok: false,
@@ -298,6 +308,158 @@ async function resolveReplay(
     mustChangePassword: profile.must_change_password === true,
     passwordAlreadyIssued: true,
   }
+}
+
+/**
+ * Recovery: pending + auth_user_id → reconcilia SEM createUser e SEM nova senha.
+ */
+export async function recoverPendingOwnedCreation(
+  deps: CreateAssistedIndicatorDeps,
+  creation: AssistedIndicatorCreationRow,
+  data: AssistedIndicatorValidated,
+  actorProfileId: string
+): Promise<CreateAssistedIndicatorResult> {
+  const ownedUserId = creation.auth_user_id
+  if (!ownedUserId) {
+    return {
+      ok: false,
+      status: 500,
+      message: "Estado de ownership inválido.",
+    }
+  }
+
+  const wait =
+    deps.waitForProfile ??
+    (async (id: string) => deps.findProfileById(id))
+  let profile = await wait(ownedUserId)
+
+  if (!profile) {
+    await deps.deleteAuthUser(ownedUserId)
+    await deps.updateCreation({ id: creation.id, status: "failed" })
+    return {
+      ok: false,
+      status: 500,
+      message:
+        "Conta Auth desta operação sem perfil. Operação compensada. Inicie uma nova criação.",
+    }
+  }
+
+  if (profile.role !== "indicador" || profile.is_active === false) {
+    await deps.deleteAuthUser(ownedUserId)
+    await deps.updateCreation({ id: creation.id, status: "failed" })
+    return {
+      ok: false,
+      status: 500,
+      message: "Perfil desta operação inválido. Operação compensada.",
+    }
+  }
+
+  const updated = await deps.updateProfileAfterCreate({
+    profileId: ownedUserId,
+    cpf: data.cpf,
+  })
+  if (!updated.ok) {
+    // Não apaga conta alheia: ownership é auth_user_id desta op.
+    // CPF conflict: compensar somente o user desta operação.
+    await deps.deleteAuthUser(ownedUserId)
+    await deps.updateCreation({ id: creation.id, status: "failed" })
+    return {
+      ok: false,
+      status: 500,
+      message: updated.message || "Não foi possível finalizar o cadastro do CPF.",
+    }
+  }
+
+  profile = (await deps.findProfileById(ownedUserId)) ?? profile
+
+  const finalized = await deps.updateCreation({
+    id: creation.id,
+    status: "created",
+    indicatorProfileId: ownedUserId,
+    authUserId: ownedUserId,
+  })
+  if (!finalized.ok) {
+    return {
+      ok: false,
+      status: 500,
+      message:
+        "Não foi possível confirmar a criação. Tente novamente com a mesma chave.",
+    }
+  }
+
+  try {
+    const auditMeta = buildAssistedIndicatorAuditMetadata({
+      actorProfileId,
+      indicatorProfileId: ownedUserId,
+      idempotencyKey: data.idempotencyKey,
+    })
+    if (
+      assertNoSecretsInAuditMetadata(auditMeta, [
+        data.cpf,
+        data.pixKeyValue,
+        data.phone,
+        data.email,
+      ])
+    ) {
+      await deps.insertAudit({
+        actorProfileId,
+        entityId: ownedUserId,
+        metadata: auditMeta,
+      })
+    }
+  } catch {
+    // best-effort
+  }
+
+  return {
+    ok: true,
+    replayed: true,
+    indicator: mapIndicatorPublic({
+      ...profile,
+      cpf: data.cpf,
+      must_change_password: true,
+    }),
+    login: profile.email || data.email,
+    temporaryPassword: null,
+    mustChangePassword: true,
+    passwordAlreadyIssued: true,
+  }
+}
+
+async function dispatchExistingCreation(
+  deps: CreateAssistedIndicatorDeps,
+  existingOp: AssistedIndicatorCreationRow,
+  data: AssistedIndicatorValidated,
+  actorProfileId: string
+): Promise<CreateAssistedIndicatorResult | { continueWithId: string }> {
+  if (existingOp.status === "created") {
+    return resolveReplay(deps, existingOp)
+  }
+
+  if (existingOp.status === "failed") {
+    return {
+      ok: false,
+      status: 409,
+      message:
+        "Esta tentativa de criação falhou. Inicie uma nova criação (nova chave).",
+    }
+  }
+
+  // pending
+  if (existingOp.auth_user_id) {
+    return recoverPendingOwnedCreation(
+      deps,
+      existingOp,
+      data,
+      actorProfileId
+    )
+  }
+
+  if (existingOp.indicator_profile_id) {
+    return resolveReplay(deps, existingOp)
+  }
+
+  return { continueWithId: existingOp.id }
 }
 
 export async function createAssistedIndicator(
@@ -329,13 +491,19 @@ export async function createAssistedIndicator(
   const data = validated.data
 
   const existingOp = await deps.findCreationByKey(data.idempotencyKey)
-  if (existingOp?.status === "created" && existingOp.indicator_profile_id) {
-    return resolveReplay(deps, existingOp)
-  }
-  if (existingOp?.status === "pending" && existingOp.indicator_profile_id) {
-    return resolveReplay(deps, existingOp)
+  if (existingOp) {
+    const dispatched = await dispatchExistingCreation(
+      deps,
+      existingOp,
+      data,
+      auth.profileId
+    )
+    if (!("continueWithId" in dispatched)) {
+      return dispatched
+    }
   }
 
+  // Ambíguo: pending sem ownership + e-mail já existe → NÃO adotar / NÃO deletar.
   const emailOwner = await deps.findProfileByEmail(data.email)
   if (emailOwner) {
     return {
@@ -378,15 +546,29 @@ export async function createAssistedIndicator(
         isUniqueViolationError({ message: inserted.error })
       ) {
         const raced = await deps.findCreationByKey(data.idempotencyKey)
-        if (raced) return resolveReplay(deps, raced)
+        if (raced) {
+          const dispatched = await dispatchExistingCreation(
+            deps,
+            raced,
+            data,
+            auth.profileId
+          )
+          if (!("continueWithId" in dispatched)) {
+            return dispatched
+          }
+          creationId = dispatched.continueWithId
+        }
       }
-      return {
-        ok: false,
-        status: 500,
-        message: "Não foi possível iniciar a criação. Tente novamente.",
+      if (!creationId) {
+        return {
+          ok: false,
+          status: 500,
+          message: "Não foi possível iniciar a criação. Tente novamente.",
+        }
       }
+    } else {
+      creationId = inserted.id
     }
-    creationId = inserted.id
   }
 
   const temporaryPassword =
@@ -417,13 +599,30 @@ export async function createAssistedIndicator(
   }
 
   const createdUserId = created.userId
+
+  // CRÍTICO: persistir ownership ANTES das etapas pós-create.
+  const ownership = await deps.updateCreation({
+    id: creationId,
+    status: "pending",
+    authUserId: createdUserId,
+  })
+  if (!ownership.ok) {
+    await deps.deleteAuthUser(createdUserId)
+    await deps.updateCreation({ id: creationId, status: "failed" })
+    return {
+      ok: false,
+      status: 500,
+      message:
+        "Não foi possível registrar a criação. Operação compensada. Tente novamente.",
+    }
+  }
+
   const wait =
     deps.waitForProfile ??
     (async (id: string) => deps.findProfileById(id))
   let profile = await wait(createdUserId)
 
   if (!profile) {
-    // Trigger deveria ter criado o profile; compensar somente o user desta operação.
     await deps.deleteAuthUser(createdUserId)
     await deps.updateCreation({ id: creationId, status: "failed" })
     return {
@@ -460,11 +659,22 @@ export async function createAssistedIndicator(
 
   profile = (await deps.findProfileById(createdUserId)) ?? profile
 
-  await deps.updateCreation({
+  const finalized = await deps.updateCreation({
     id: creationId,
     status: "created",
     indicatorProfileId: createdUserId,
+    authUserId: createdUserId,
   })
+  if (!finalized.ok) {
+    // Conta existe e ownership está gravado — NÃO falso sucesso.
+    // Retry com a mesma key reconcilia via auth_user_id (sem senha).
+    return {
+      ok: false,
+      status: 500,
+      message:
+        "Conta criada, mas a confirmação falhou. Tente novamente com a mesma chave.",
+    }
+  }
 
   const auditMeta = buildAssistedIndicatorAuditMetadata({
     actorProfileId: auth.profileId,
@@ -472,7 +682,7 @@ export async function createAssistedIndicator(
     idempotencyKey: data.idempotencyKey,
   })
   if (
-    !assertNoSecretsInAuditMetadata(auditMeta, [
+    assertNoSecretsInAuditMetadata(auditMeta, [
       temporaryPassword,
       data.cpf,
       data.pixKeyValue,
@@ -480,8 +690,6 @@ export async function createAssistedIndicator(
       data.email,
     ])
   ) {
-    // Não deve acontecer — evita auditoria com segredo.
-  } else {
     try {
       await deps.insertAudit({
         actorProfileId: auth.profileId,
@@ -489,7 +697,7 @@ export async function createAssistedIndicator(
         metadata: auditMeta,
       })
     } catch {
-      // best-effort (mesmo padrão da referral assistida)
+      // best-effort
     }
   }
 

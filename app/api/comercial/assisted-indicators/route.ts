@@ -6,7 +6,9 @@ import {
 import {
   createAssistedIndicator,
   type AssistedIndicatorClientPayload,
+  type AssistedIndicatorCreationRow,
   type AssistedIndicatorProfileRow,
+  type CreationUpdateResult,
 } from "@/lib/commercial-assisted/create-assisted-indicator"
 import { isUniqueViolationError } from "@/lib/commercial-assisted/idempotency"
 import { createAdminClient, createClient } from "@/lib/supabase/server"
@@ -15,7 +17,6 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-// Tabelas/colunas novas ainda fora do Database tipado — acesso via service/admin untyped.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyDb = { from: (t: string) => any }
 
@@ -33,6 +34,20 @@ function mapProfile(row: Record<string, unknown> | null): AssistedIndicatorProfi
   }
 }
 
+function mapCreation(
+  data: Record<string, unknown> | null
+): AssistedIndicatorCreationRow | null {
+  if (!data?.id) return null
+  return {
+    id: String(data.id),
+    idempotency_key: String(data.idempotency_key),
+    actor_profile_id: (data.actor_profile_id as string | null) ?? null,
+    indicator_profile_id: (data.indicator_profile_id as string | null) ?? null,
+    auth_user_id: (data.auth_user_id as string | null) ?? null,
+    status: data.status as "pending" | "created" | "failed",
+  }
+}
+
 export async function POST(request: NextRequest) {
   let body: AssistedIndicatorClientPayload
   try {
@@ -44,9 +59,24 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  // Sessão primeiro; clientes privilegiados só sob demanda após autorização no service.
   const supabase = await createClient()
-  const admin = (await createAdminClient()) as unknown as AnyDb
-  const service = createServiceRoleClient()
+  let admin: AnyDb | null = null
+  let service: ReturnType<typeof createServiceRoleClient> | null = null
+
+  async function getAdmin(): Promise<AnyDb> {
+    if (!admin) {
+      admin = (await createAdminClient()) as unknown as AnyDb
+    }
+    return admin
+  }
+
+  function getService() {
+    if (!service) {
+      service = createServiceRoleClient()
+    }
+    return service
+  }
 
   const result = await createAssistedIndicator(
     {
@@ -71,24 +101,19 @@ export async function POST(request: NextRequest) {
         } | null) ?? null
       },
       findCreationByKey: async (key) => {
-        const { data } = await admin
+        const db = await getAdmin()
+        const { data } = await db
           .from("assisted_indicator_creations")
           .select(
-            "id, idempotency_key, actor_profile_id, indicator_profile_id, status"
+            "id, idempotency_key, actor_profile_id, indicator_profile_id, auth_user_id, status"
           )
           .eq("idempotency_key", key)
           .maybeSingle()
-        if (!data) return null
-        return data as {
-          id: string
-          idempotency_key: string
-          actor_profile_id: string | null
-          indicator_profile_id: string | null
-          status: "pending" | "created" | "failed"
-        }
+        return mapCreation(data as Record<string, unknown> | null)
       },
       insertCreationPending: async ({ idempotencyKey, actorProfileId }) => {
-        const { data, error } = await admin
+        const db = await getAdmin()
+        const { data, error } = await db
           .from("assisted_indicator_creations")
           .insert({
             idempotency_key: idempotencyKey,
@@ -105,21 +130,40 @@ export async function POST(request: NextRequest) {
         }
         return { id: data.id as string }
       },
-      updateCreation: async ({ id, status, indicatorProfileId }) => {
+      updateCreation: async ({
+        id,
+        status,
+        indicatorProfileId,
+        authUserId,
+      }): Promise<CreationUpdateResult> => {
+        const db = await getAdmin()
         const patch: Record<string, unknown> = {
-          status,
           updated_at: new Date().toISOString(),
         }
+        if (status !== undefined) patch.status = status
         if (indicatorProfileId !== undefined) {
           patch.indicator_profile_id = indicatorProfileId
         }
-        await admin
+        if (authUserId !== undefined) {
+          patch.auth_user_id = authUserId
+        }
+        const { data, error } = await db
           .from("assisted_indicator_creations")
           .update(patch)
           .eq("id", id)
+          .select("id")
+          .maybeSingle()
+        if (error || !data?.id) {
+          return {
+            ok: false,
+            message: (error?.message as string | undefined) ?? "update_failed",
+          }
+        }
+        return { ok: true }
       },
       findProfileByEmail: async (email) => {
-        const { data } = await admin
+        const db = await getAdmin()
+        const { data } = await db
           .from("profiles")
           .select(
             "id, full_name, email, phone, cpf, role, is_active, must_change_password"
@@ -129,7 +173,8 @@ export async function POST(request: NextRequest) {
         return mapProfile(data as Record<string, unknown> | null)
       },
       findProfileByCpf: async (cpf) => {
-        const { data } = await admin
+        const db = await getAdmin()
+        const { data } = await db
           .from("profiles")
           .select(
             "id, full_name, email, phone, cpf, role, is_active, must_change_password"
@@ -139,7 +184,8 @@ export async function POST(request: NextRequest) {
         return mapProfile(data as Record<string, unknown> | null)
       },
       findPixOwnerProfileId: async (normalizedPix) => {
-        const { data } = await admin
+        const db = await getAdmin()
+        const { data } = await db
           .from("pix_keys")
           .select("profile_id")
           .eq("key_value", normalizedPix)
@@ -148,7 +194,8 @@ export async function POST(request: NextRequest) {
         return row?.profile_id ?? null
       },
       findProfileById: async (id) => {
-        const { data } = await admin
+        const db = await getAdmin()
+        const { data } = await db
           .from("profiles")
           .select(
             "id, full_name, email, phone, cpf, role, is_active, must_change_password"
@@ -158,8 +205,9 @@ export async function POST(request: NextRequest) {
         return mapProfile(data as Record<string, unknown> | null)
       },
       waitForProfile: async (userId) => {
+        const db = await getAdmin()
         for (let i = 0; i < 5; i += 1) {
-          const { data } = await admin
+          const { data } = await db
             .from("profiles")
             .select(
               "id, full_name, email, phone, cpf, role, is_active, must_change_password"
@@ -173,7 +221,7 @@ export async function POST(request: NextRequest) {
         return null
       },
       createAuthUser: async ({ email, password, metadata }) => {
-        const { data, error } = await service.auth.admin.createUser({
+        const { data, error } = await getService().auth.admin.createUser({
           email,
           password,
           email_confirm: true,
@@ -197,11 +245,12 @@ export async function POST(request: NextRequest) {
         return { ok: true as const, userId: data.user.id }
       },
       deleteAuthUser: async (userId) => {
-        const { error } = await service.auth.admin.deleteUser(userId)
+        const { error } = await getService().auth.admin.deleteUser(userId)
         return { ok: !error }
       },
       updateProfileAfterCreate: async ({ profileId, cpf }) => {
-        const { data, error } = await admin
+        const db = await getAdmin()
+        const { data, error } = await db
           .from("profiles")
           .update({
             cpf,

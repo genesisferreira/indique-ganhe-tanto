@@ -97,6 +97,7 @@ export interface Database {
           idempotency_key: string
           actor_profile_id: string | null
           indicator_profile_id: string | null
+          auth_user_id: string | null
           status: "pending" | "created" | "failed"
           created_at: string
           updated_at: string
@@ -106,6 +107,7 @@ export interface Database {
           idempotency_key: string
           actor_profile_id?: string | null
           indicator_profile_id?: string | null
+          auth_user_id?: string | null
           status?: "pending" | "created" | "failed"
           created_at?: string
           updated_at?: string
@@ -115,6 +117,7 @@ export interface Database {
           idempotency_key?: string
           actor_profile_id?: string | null
           indicator_profile_id?: string | null
+          auth_user_id?: string | null
           status?: "pending" | "created" | "failed"
           created_at?: string
           updated_at?: string
