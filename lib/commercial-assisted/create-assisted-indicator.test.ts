@@ -295,16 +295,11 @@ describe("createAssistedIndicator service", () => {
     assert.equal(creation.status, "created")
   })
 
-  it("admin_master permitido; demais roles negados; anônimo negado", async () => {
-    const admin = makeDeps({
-      getUser: async () => ({ id: "admin-1" }),
-      getActorProfile: async () => ({
-        id: "admin-1",
-        role: "admin_master",
-        is_active: true,
-      }),
-    })
-    assert.equal((await createAssistedIndicator(admin, baseBody())).ok, true)
+  it("segurança: anônimo/indicador/consulta/financeiro negados; comercial e admin_master ok", async () => {
+    const anon = makeDeps({ getUser: async () => null })
+    const anonResult = await createAssistedIndicator(anon, baseBody())
+    assert.equal(anonResult.ok, false)
+    if (!anonResult.ok) assert.equal(anonResult.status, 401)
 
     for (const role of [
       "indicador",
@@ -313,7 +308,7 @@ describe("createAssistedIndicator service", () => {
     ] as const) {
       const deps = makeDeps({
         getActorProfile: async () => ({
-          id: "comercial-1",
+          id: "actor-denied",
           role,
           is_active: true,
         }),
@@ -323,10 +318,89 @@ describe("createAssistedIndicator service", () => {
       if (!result.ok) assert.equal(result.status, 403)
     }
 
-    const anon = makeDeps({ getUser: async () => null })
-    const r = await createAssistedIndicator(anon, baseBody())
-    assert.equal(r.ok, false)
-    if (!r.ok) assert.equal(r.status, 401)
+    const comercial = makeDeps()
+    assert.equal(
+      (await createAssistedIndicator(comercial, baseBody())).ok,
+      true
+    )
+
+    const admin = makeDeps({
+      getUser: async () => ({ id: "admin-1" }),
+      getActorProfile: async () => ({
+        id: "admin-1",
+        role: "admin_master",
+        is_active: true,
+      }),
+    })
+    assert.equal((await createAssistedIndicator(admin, baseBody())).ok, true)
+  })
+
+  it("autorização ocorre ANTES de lookup/insert privilegiados (service role não bypassa role)", async () => {
+    let privilegedCalls = 0
+    const bump = () => {
+      privilegedCalls += 1
+    }
+    const deps = makeDeps({
+      getActorProfile: async () => ({
+        id: "indicador-1",
+        role: "indicador",
+        is_active: true,
+      }),
+      findCreationByKey: async () => {
+        bump()
+        return null
+      },
+      insertCreationPending: async () => {
+        bump()
+        return { error: "should_not_run", uniqueViolation: false }
+      },
+      createAuthUser: async () => {
+        bump()
+        return { ok: false as const, code: "create_failed" as const }
+      },
+    })
+    const result = await createAssistedIndicator(deps, baseBody())
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.equal(result.status, 403)
+    assert.equal(privilegedCalls, 0)
+  })
+
+  it("createUser só após reservation/pending OK", async () => {
+    let pendingDone = false
+    const deps = makeDeps()
+    const baseInsert = deps.insertCreationPending
+    deps.insertCreationPending = async (input) => {
+      const inserted = await baseInsert(input)
+      pendingDone = true
+      return inserted
+    }
+    const baseCreate = deps.createAuthUser
+    deps.createAuthUser = async (input) => {
+      assert.equal(pendingDone, true)
+      return baseCreate(input)
+    }
+    const result = await createAssistedIndicator(deps, baseBody())
+    assert.equal(result.ok, true)
+    assert.equal(pendingDone, true)
+    assert.equal(deps.createUserCalls, 1)
+  })
+
+  it("falha no insert pending NÃO chama createUser; senha não persiste", async () => {
+    const deps = makeDeps({
+      insertCreationPending: async () => ({
+        error: "rls_denied",
+        uniqueViolation: false,
+      }),
+    })
+    const result = await createAssistedIndicator(deps, baseBody())
+    assert.equal(result.ok, false)
+    if (!result.ok) {
+      assert.equal(result.status, 500)
+      assert.match(result.message, /Não foi possível iniciar a criação/)
+    }
+    assert.equal(deps.createUserCalls, 0)
+    assert.equal(deps.passwordsSeen.length, 0)
+    assert.equal(deps.creations.size, 0)
   })
 
   it("duplicidade email/cpf/pix", async () => {
