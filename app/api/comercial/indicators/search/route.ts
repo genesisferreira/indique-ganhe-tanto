@@ -10,7 +10,8 @@ import {
   type NormalizedSearchFilters,
 } from "@/lib/commercial-assisted/indicator-search.service"
 import type { IndicatorSearchDbRow } from "@/lib/commercial-assisted/search-result"
-import { createAdminClient, createClient } from "@/lib/supabase/server"
+import { createClient } from "@/lib/supabase/server"
+import { createServiceRoleClient } from "@/lib/supabase/service-role"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -20,13 +21,25 @@ export const dynamic = "force-dynamic"
  *
  * Busca server-side de indicadores para cadastro assistido.
  * Não lista todos os profiles; exige query mínima + role comercial/admin_master.
- * Usa service role apenas após autenticação/autorização (RLS não permite dump).
+ *
+ * Auth: createClient() + getUser / getActorProfile (sessão real).
+ * Privilegiado: createServiceRoleClient() sem cookies, lazy após autorização
+ * (só em searchIndicatorRows — RLS do Comercial não vê indicador sem referral).
  */
 export async function GET(request: NextRequest) {
   const q = request.nextUrl.searchParams.get("q")
 
+  // A) Sessão do Comercial — NUNCA service role para auth/role.
   const supabase = await createClient()
-  const admin = await createAdminClient()
+
+  // B) Privilegiado — service role SEM cookies; lazy após auth no service.
+  let privileged: ReturnType<typeof createServiceRoleClient> | null = null
+  function getPrivileged() {
+    if (!privileged) {
+      privileged = createServiceRoleClient()
+    }
+    return privileged
+  }
 
   const result = await runCommercialIndicatorSearch(
     {
@@ -60,7 +73,8 @@ export async function GET(request: NextRequest) {
         const orFilter = buildIndicatorSearchOrFilter(filters)
         if (!orFilter) return []
 
-        const { data, error } = await admin
+        const db = getPrivileged()
+        const { data, error } = await db
           .from("profiles")
           .select("id, full_name, phone, email, cpf, is_active, role")
           .eq("role", "indicador")

@@ -216,6 +216,130 @@ describe("commercial indicator search service", () => {
     if (!result.ok) assert.equal(result.status, 403)
   })
 
+  it("1) anônimo → 401 e zero operações privilegiadas", async () => {
+    let privilegedCalls = 0
+    const deps = makeDeps({
+      getUser: async () => null,
+      searchIndicatorRows: async () => {
+        privilegedCalls += 1
+        return []
+      },
+    })
+    const result = await runCommercialIndicatorSearch(deps, "Maria")
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.equal(result.status, 401)
+    assert.equal(privilegedCalls, 0)
+  })
+
+  it("2-5/9) roles negadas → zero operações privilegiadas", async () => {
+    for (const role of [
+      "indicador",
+      "admin_consulta",
+      "admin_financeiro",
+    ] as const) {
+      let privilegedCalls = 0
+      const deps = makeDeps({
+        getActorProfile: async () => ({
+          id: "comercial-1",
+          role,
+          is_active: true,
+        }),
+        searchIndicatorRows: async () => {
+          privilegedCalls += 1
+          return []
+        },
+      })
+      const result = await runCommercialIndicatorSearch(deps, "Maria")
+      assert.equal(result.ok, false)
+      if (!result.ok) assert.equal(result.status, 403)
+      assert.equal(privilegedCalls, 0, role)
+    }
+
+    let inactiveCalls = 0
+    const inactive = makeDeps({
+      getActorProfile: async () => ({
+        id: "comercial-1",
+        role: "comercial",
+        is_active: false,
+      }),
+      searchIndicatorRows: async () => {
+        inactiveCalls += 1
+        return []
+      },
+    })
+    const inactiveResult = await runCommercialIndicatorSearch(inactive, "Maria")
+    assert.equal(inactiveResult.ok, false)
+    assert.equal(inactiveCalls, 0)
+  })
+
+  it("6-7) Comercial e Admin Master ativos permitem busca privilegiada", async () => {
+    for (const role of ["comercial", "admin_master"] as const) {
+      let privilegedCalls = 0
+      const deps = makeDeps({
+        getActorProfile: async () => ({
+          id: "comercial-1",
+          role,
+          is_active: true,
+        }),
+        searchIndicatorRows: async () => {
+          privilegedCalls += 1
+          return [
+            {
+              id: "ind-sem-referral",
+              full_name: "Maria Nova",
+              phone: "11999998888",
+              email: "maria.nova@ex.com",
+              cpf: "52998224725",
+              is_active: true,
+              role: "indicador",
+            },
+          ]
+        },
+      })
+      const result = await runCommercialIndicatorSearch(deps, "Maria")
+      assert.equal(result.ok, true, role)
+      assert.equal(privilegedCalls, 1, role)
+      if (!result.ok) return
+      assert.equal(result.results[0]?.id, "ind-sem-referral")
+    }
+  })
+
+  it("12-17) nome/CPF/email/telefone e indicador sem referral encontrados", async () => {
+    const row = {
+      id: "ind-1",
+      full_name: "Ana Silva",
+      phone: "31988887777",
+      email: "ana.silva@ex.com",
+      cpf: "52998224725",
+      is_active: true,
+      role: "indicador",
+    }
+    const cases: Array<{ q: string; expectType: string }> = [
+      { q: "Ana", expectType: "name" },
+      { q: "52998224725", expectType: "cpf" },
+      { q: "ana.silva@ex.com", expectType: "email" },
+      { q: "3198888777", expectType: "phone" },
+    ]
+    for (const c of cases) {
+      const deps = makeDeps({ rows: [row] })
+      const result = await runCommercialIndicatorSearch(deps, c.q)
+      assert.equal(result.ok, true, c.q)
+      if (!result.ok) return
+      assert.equal(result.query_type, c.expectType, c.q)
+      assert.equal(result.results.length, 1, c.q)
+      assert.equal(result.results[0]?.id, "ind-1", c.q)
+    }
+  })
+
+  it("24) escaping %/_ preservado nos filtros de nome", () => {
+    const normalized = normalizeIndicatorSearchQuery("100%_off")
+    assert.equal(normalized.ok, true)
+    if (!normalized.ok) return
+    const f = buildSearchFilters(normalized)
+    assert.ok(f.namePattern?.includes("100\\%\\_off"))
+    assert.ok(buildIndicatorSearchOrFilter(f)?.includes("100\\%\\_off"))
+  })
+
   it("revalidação futura de indicador para criação assistida", () => {
     assert.equal(
       isValidIndicatorForAssistedReferral({
