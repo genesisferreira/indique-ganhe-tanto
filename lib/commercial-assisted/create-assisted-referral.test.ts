@@ -167,14 +167,32 @@ describe("createAssistedReferral service", () => {
     inserted: unknown[]
     audits: unknown[]
     controllrCalls: unknown[]
+    privilegedCalls: number
+    loadIds: string[]
   } {
     const inserted: unknown[] = []
     const audits: unknown[] = []
     const controllrCalls: unknown[] = []
-    return {
+    const loadIds: string[] = []
+    let privilegedCalls = 0
+
+    const bumpPrivileged = () => {
+      privilegedCalls += 1
+      deps.privilegedCalls = privilegedCalls
+    }
+
+    const deps: CreateAssistedReferralDeps & {
+      inserted: unknown[]
+      audits: unknown[]
+      controllrCalls: unknown[]
+      privilegedCalls: number
+      loadIds: string[]
+    } = {
       inserted,
       audits,
       controllrCalls,
+      privilegedCalls: 0,
+      loadIds,
       getUser: overrides.getUser ?? (async () => ({ id: "comercial-1" })),
       getActorProfile:
         overrides.getActorProfile ??
@@ -186,22 +204,29 @@ describe("createAssistedReferral service", () => {
         })),
       loadIndicatorProfile:
         overrides.loadIndicatorProfile ??
-        (async () => ({
-          id: "indicator-1",
-          role: "indicador",
-          is_active: true,
-          full_name: "João Indicador",
-        })),
+        (async (id) => {
+          bumpPrivileged()
+          loadIds.push(id)
+          return {
+            id: "indicator-1",
+            role: "indicador",
+            is_active: true,
+            full_name: "João Indicador",
+          }
+        }),
       listPlanRows:
         overrides.listPlanRows ??
-        (async () => [
-          {
-            id: "plan-500",
-            name: "500 Mega",
-            speed_label: "500 Mega",
-            is_active: true,
-          },
-        ]),
+        (async () => {
+          bumpPrivileged()
+          return [
+            {
+              id: "plan-500",
+              name: "500 Mega",
+              speed_label: "500 Mega",
+              is_active: true,
+            },
+          ]
+        }),
       resolvePlanEnv:
         overrides.resolvePlanEnv ??
         (() => ({
@@ -212,13 +237,21 @@ describe("createAssistedReferral service", () => {
       insertReferral:
         overrides.insertReferral ??
         (async (row) => {
+          bumpPrivileged()
           inserted.push(row)
           return { id: "ref-1" }
         }),
       findReferralByIdempotencyKey:
-        overrides.findReferralByIdempotencyKey ?? (async () => null),
+        overrides.findReferralByIdempotencyKey ??
+        (async () => {
+          bumpPrivileged()
+          return null
+        }),
       insertReferralHistory:
-        overrides.insertReferralHistory ?? (async () => undefined),
+        overrides.insertReferralHistory ??
+        (async () => {
+          bumpPrivileged()
+        }),
       insertAudit:
         overrides.insertAudit ??
         (async ({ metadata }) => {
@@ -232,6 +265,7 @@ describe("createAssistedReferral service", () => {
         }),
       nowIso: "2026-01-01T00:00:00.000Z",
     }
+    return deps
   }
 
   async function withValidOffer(
@@ -266,6 +300,61 @@ describe("createAssistedReferral service", () => {
     assert.equal(row.commercial_profile_id, "comercial-1")
   })
 
+  it("admin_master permitido; consulta/financeiro/indicador/anônimo negados", async () => {
+    const admin = makeDeps({
+      getUser: async () => ({ id: "admin-1" }),
+      getActorProfile: async () => ({
+        id: "admin-1",
+        role: "admin_master",
+        is_active: true,
+        full_name: "Admin",
+      }),
+    })
+    assert.equal((await withValidOffer(admin)).ok, true)
+    const row = admin.inserted[0] as { commercial_profile_id: string | null }
+    assert.equal(row.commercial_profile_id, null)
+
+    for (const role of [
+      "indicador",
+      "admin_consulta",
+      "admin_financeiro",
+    ] as const) {
+      const deps = makeDeps({
+        getActorProfile: async () => ({
+          id: "actor-denied",
+          role,
+          is_active: true,
+          full_name: "X",
+        }),
+      })
+      const r = await withValidOffer(deps)
+      assert.equal(r.ok, false)
+      if (!r.ok) assert.equal(r.status, 403)
+      assert.equal(deps.privilegedCalls, 0)
+    }
+
+    const anon = makeDeps({ getUser: async () => null })
+    const anonR = await withValidOffer(anon)
+    assert.equal(anonR.ok, false)
+    if (!anonR.ok) assert.equal(anonR.status, 401)
+    assert.equal(anon.privilegedCalls, 0)
+  })
+
+  it("autorização antes de ops privilegiadas (service role não bypassa role)", async () => {
+    const deps = makeDeps({
+      getActorProfile: async () => ({
+        id: "indicador-1",
+        role: "indicador",
+        is_active: true,
+        full_name: "X",
+      }),
+    })
+    const r = await withValidOffer(deps)
+    assert.equal(r.ok, false)
+    assert.equal(deps.privilegedCalls, 0)
+    assert.equal(deps.controllrCalls.length, 0)
+  })
+
   it("commercial inativo não cria", async () => {
     const deps = makeDeps({
       getActorProfile: async () => ({
@@ -278,6 +367,7 @@ describe("createAssistedReferral service", () => {
     const result = await withValidOffer(deps)
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.status, 403)
+    assert.equal(deps.privilegedCalls, 0)
   })
 
   it("indicator não cria", async () => {
@@ -301,11 +391,18 @@ describe("createAssistedReferral service", () => {
     if (!result.ok) assert.equal(result.status, 401)
   })
 
-  it("indicator inexistente/inativo/não-indicador rejeitado", async () => {
+  it("indicator inexistente/inativo/não-indicador rejeitado; Controllr não chamado", async () => {
     const missing = makeDeps({
       loadIndicatorProfile: async () => null,
     })
-    assert.equal((await withValidOffer(missing)).ok, false)
+    const missingR = await withValidOffer(missing)
+    assert.equal(missingR.ok, false)
+    if (!missingR.ok) {
+      assert.equal(missingR.status, 400)
+      assert.equal(missingR.message, "Indicador não encontrado.")
+    }
+    assert.equal(missing.inserted.length, 0)
+    assert.equal(missing.controllrCalls.length, 0)
 
     const inactive = makeDeps({
       loadIndicatorProfile: async () => ({
@@ -315,7 +412,9 @@ describe("createAssistedReferral service", () => {
         full_name: "João",
       }),
     })
-    assert.equal((await withValidOffer(inactive)).ok, false)
+    const inactiveR = await withValidOffer(inactive)
+    assert.equal(inactiveR.ok, false)
+    if (!inactiveR.ok) assert.match(inactiveR.message, /inativo/i)
 
     const notInd = makeDeps({
       loadIndicatorProfile: async () => ({
@@ -325,7 +424,49 @@ describe("createAssistedReferral service", () => {
         full_name: "X",
       }),
     })
-    assert.equal((await withValidOffer(notInd)).ok, false)
+    const notIndR = await withValidOffer(notInd)
+    assert.equal(notIndR.ok, false)
+    if (!notIndR.ok) assert.match(notIndR.message, /não é um indicador/i)
+  })
+
+  it("indicator_profile_id do body é o ID revalidado no lookup/insert", async () => {
+    const deps = makeDeps()
+    const result = await withValidOffer(deps, {
+      indicator_profile_id: "indicator-1",
+    })
+    assert.equal(result.ok, true)
+    assert.deepEqual(deps.loadIds, ["indicator-1"])
+    const row = deps.inserted[0] as {
+      indicator_profile_id: string
+      created_by_profile_id: string
+      commercial_profile_id: string
+      source: string
+      reward_eligible: boolean
+    }
+    assert.equal(row.indicator_profile_id, "indicator-1")
+    assert.equal(row.created_by_profile_id, "comercial-1")
+    assert.equal(row.commercial_profile_id, "comercial-1")
+    assert.equal(row.source, COMMERCIAL_ASSISTED_REFERRAL_SOURCE)
+    assert.equal(row.reward_eligible, true)
+  })
+
+  it("erro antes do insert não consome key e não chama Controllr", async () => {
+    const deps = makeDeps({
+      loadIndicatorProfile: async () => null,
+    })
+    await withValidOffer(deps)
+    assert.equal(deps.inserted.length, 0)
+    assert.equal(deps.controllrCalls.length, 0)
+  })
+
+  it("nenhuma wallet/reward/first-invoice no insert", async () => {
+    const deps = makeDeps()
+    await withValidOffer(deps)
+    const row = deps.inserted[0] as Record<string, unknown>
+    assert.equal("wallet_transaction_id" in row, false)
+    assert.equal("reward_id" in row, false)
+    assert.equal("first_invoice" in row, false)
+    assert.equal(row.reward_eligible, true)
   })
 
   it("ignora privileged fields do browser", async () => {

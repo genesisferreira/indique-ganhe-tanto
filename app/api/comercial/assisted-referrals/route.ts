@@ -4,16 +4,30 @@ import { createBrbyteInterestFromReferral } from "@/lib/brbyte/create-interest.s
 import {
   COMMERCIAL_ASSISTED_CREATE_AUDIT_ENTITY,
 } from "@/lib/commercial-assisted/constants"
+import { logAssistedReferralDbError } from "@/lib/commercial-assisted/assisted-referral-db-log"
 import {
   createAssistedReferral,
   type AssistedReferralClientPayload,
 } from "@/lib/commercial-assisted/create-assisted-referral"
 import { isUniqueViolationError } from "@/lib/commercial-assisted/idempotency"
-import { createAdminClient, createClient } from "@/lib/supabase/server"
+import { createClient } from "@/lib/supabase/server"
+import { createServiceRoleClient } from "@/lib/supabase/service-role"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyDb = { from: (t: string) => any }
+
+function idempotencyKeyPrefix(key: string): string {
+  return key.length >= 8 ? key.slice(0, 8) : key
+}
+
+/**
+ * Auth: createClient() + getUser / getActorProfile (sessão real).
+ * Privilegiado: createServiceRoleClient() sem cookies, lazy após autorização
+ * no service createAssistedReferral.
+ */
 export async function POST(request: NextRequest) {
   let body: AssistedReferralClientPayload
   try {
@@ -25,8 +39,21 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  // A) Sessão do Comercial — NUNCA service role para auth/role.
   const supabase = await createClient()
-  const admin = await createAdminClient()
+
+  // B) Privilegiado — service role SEM cookies; lazy após auth no service.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let privileged: any = null
+  function getPrivileged() {
+    if (!privileged) {
+      privileged = createServiceRoleClient()
+    }
+    return privileged
+  }
+  function getPrivilegedDb(): AnyDb {
+    return getPrivileged() as unknown as AnyDb
+  }
 
   const result = await createAssistedReferral(
     {
@@ -52,20 +79,22 @@ export async function POST(request: NextRequest) {
         } | null) ?? null
       },
       loadIndicatorProfile: async (id) => {
-        const db = admin as unknown as {
-          from: (t: string) => {
-            select: (cols: string) => {
-              eq: (c: string, v: string) => {
-                maybeSingle: () => Promise<{ data: unknown }>
-              }
-            }
-          }
-        }
-        const { data } = await db
+        const db = getPrivilegedDb()
+        const { data, error } = await db
           .from("profiles")
           .select("id, role, is_active, full_name")
           .eq("id", id)
           .maybeSingle()
+        if (error) {
+          logAssistedReferralDbError({
+            stage: "indicator_lookup",
+            operation: "select",
+            error: {
+              message: error.message,
+              code: (error as { code?: string }).code,
+            },
+          })
+        }
         return (data as {
           id: string
           role: string
@@ -74,23 +103,24 @@ export async function POST(request: NextRequest) {
         } | null) ?? null
       },
       listPlanRows: async () => {
-        const db = admin as unknown as {
-          from: (t: string) => {
-            select: (cols: string) => {
-              order: (
-                col: string,
-                opts: { ascending: boolean }
-              ) => Promise<{ data: unknown[] | null; error: { message: string } | null }>
-            }
-          }
-        }
+        const db = getPrivilegedDb()
         const { data, error } = await db
           .from("plans")
           .select(
             "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
           )
           .order("sort_order", { ascending: true })
-        if (error) return []
+        if (error) {
+          logAssistedReferralDbError({
+            stage: "plans_list",
+            operation: "select",
+            error: {
+              message: error.message,
+              code: (error as { code?: string }).code,
+            },
+          })
+          return []
+        }
         return (data ?? []) as {
           id: string
           name: string
@@ -116,22 +146,25 @@ export async function POST(request: NextRequest) {
         return { plan500Id, plan1000Id, baseCrmPlanId }
       },
       findReferralByIdempotencyKey: async (key) => {
-        const db = admin as unknown as {
-          from: (t: string) => {
-            select: (cols: string) => {
-              eq: (c: string, v: string) => {
-                maybeSingle: () => Promise<{ data: unknown }>
-              }
-            }
-          }
-        }
-        const { data } = await db
+        const db = getPrivilegedDb()
+        const { data, error } = await db
           .from("referrals")
           .select(
             "id, indicator_profile_id, created_by_profile_id, commercial_profile_id, referred_name, source, reward_eligible"
           )
           .eq("assisted_idempotency_key", key)
           .maybeSingle()
+        if (error) {
+          logAssistedReferralDbError({
+            stage: "idempotency_lookup",
+            operation: "select",
+            error: {
+              message: error.message,
+              code: (error as { code?: string }).code,
+            },
+            idempotencyKeyPrefix: idempotencyKeyPrefix(key),
+          })
+        }
         return (data as {
           id: string
           indicator_profile_id: string
@@ -143,28 +176,25 @@ export async function POST(request: NextRequest) {
         } | null) ?? null
       },
       insertReferral: async (row) => {
-        const db = admin as unknown as {
-          from: (t: string) => {
-            insert: (values: Record<string, unknown>) => {
-              select: (cols: string) => {
-                maybeSingle: () => Promise<{
-                  data: { id: string } | null
-                  error: { message: string; code?: string } | null
-                }>
-              }
-            }
-          }
-        }
+        const db = getPrivilegedDb()
         const { data, error } = await db
           .from("referrals")
           .insert(row as unknown as Record<string, unknown>)
           .select("id")
           .maybeSingle()
         if (error || !data?.id) {
-          console.error("[assisted-referral]", {
-            step: "insert",
-            message: error?.message ?? "no_id",
-            code: error?.code ?? null,
+          logAssistedReferralDbError({
+            stage: "referral_insert",
+            operation: "insert",
+            error: error
+              ? {
+                  message: error.message,
+                  code: (error as { code?: string }).code,
+                }
+              : { message: "insert_failed_no_id" },
+            idempotencyKeyPrefix: row.assisted_idempotency_key
+              ? idempotencyKeyPrefix(String(row.assisted_idempotency_key))
+              : undefined,
           })
           return {
             error: error?.message ?? "insert_failed",
@@ -172,7 +202,7 @@ export async function POST(request: NextRequest) {
             uniqueViolation: isUniqueViolationError(error),
           }
         }
-        return { id: data.id }
+        return { id: data.id as string }
       },
       insertReferralHistory: async ({
         referralId,
@@ -180,13 +210,7 @@ export async function POST(request: NextRequest) {
         newStatus,
         metadata,
       }) => {
-        const db = admin as unknown as {
-          from: (t: string) => {
-            insert: (values: Record<string, unknown>) => Promise<{
-              error: { message: string } | null
-            }>
-          }
-        }
+        const db = getPrivilegedDb()
         await db.from("referral_history").insert({
           referral_id: referralId,
           actor_profile_id: actorProfileId,
@@ -197,13 +221,8 @@ export async function POST(request: NextRequest) {
         })
       },
       insertAudit: async ({ actorProfileId, entityId, metadata }) => {
-        const db = supabase as unknown as {
-          from: (t: string) => {
-            insert: (values: Record<string, unknown>) => Promise<{
-              error: { message: string } | null
-            }>
-          }
-        }
+        // Best-effort sob a sessão do ator (não bloqueia criação).
+        const db = supabase as unknown as AnyDb
         await db.from("audit_logs").insert({
           actor_profile_id: actorProfileId,
           target_profile_id: metadata.indicator_profile_id ?? null,
