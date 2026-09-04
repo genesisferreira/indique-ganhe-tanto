@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server"
-import { createAdminClient, createClient } from "@/lib/supabase/server"
+import { completeFirstPasswordChange } from "@/lib/auth/complete-first-password-change"
+import { logFirstPasswordChangeDbError } from "@/lib/auth/password-change-db-log"
+import { createClient } from "@/lib/supabase/server"
+import { createServiceRoleClient } from "@/lib/supabase/service-role"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -7,93 +10,104 @@ export const dynamic = "force-dynamic"
 /**
  * Limpa must_change_password somente para o auth.uid() da sessão.
  * Deve ser chamado DEPOIS de supabase.auth.updateUser({ password }) com sucesso.
+ *
+ * Auth: createClient() + getUser() (sessão real).
+ * Privilegiado: createServiceRoleClient() sem cookies, só após autenticação,
+ * sempre bound a user.id da sessão.
  */
 export async function POST() {
+  // A) Sessão — NUNCA service role para identidade.
   const supabase = await createClient()
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser()
 
-  if (authError || !user) {
-    return NextResponse.json(
-      { ok: false, message: "Sessão não encontrada. Faça login novamente." },
-      { status: 401 }
-    )
-  }
-
-  const admin = await createAdminClient()
-  const db = admin as unknown as {
-    from: (t: string) => {
-      select: (cols: string) => {
-        eq: (c: string, v: string) => {
-          maybeSingle: () => Promise<{
-            data: { id: string; must_change_password: boolean | null } | null
-            error: { message: string } | null
-          }>
-        }
-      }
-      update: (values: Record<string, unknown>) => {
-        eq: (c: string, v: string) => {
-          eq: (c2: string, v2: boolean) => {
-            select: (cols: string) => {
-              maybeSingle: () => Promise<{
-                data: { id: string; must_change_password: boolean | null } | null
-                error: { message: string } | null
-              }>
-            }
-          }
-        }
-      }
+  // B) Privilegiado — lazy, só após getUser OK.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let privileged: any = null
+  function getPrivileged() {
+    if (!privileged) {
+      privileged = createServiceRoleClient()
     }
+    return privileged
   }
 
-  const { data: profile, error: profileError } = await db
-    .from("profiles")
-    .select("id, must_change_password")
-    .eq("id", user.id)
-    .maybeSingle()
+  const result = await completeFirstPasswordChange({
+    getUser: async () => {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser()
+      if (error || !user) return null
+      return { id: user.id }
+    },
+    getPrivilegedDb: () => {
+      const db = getPrivileged()
+      return {
+        findProfileById: async (id: string) => {
+          const { data, error } = await db
+            .from("profiles")
+            .select("id, must_change_password")
+            .eq("id", id)
+            .maybeSingle()
+          const row = data as {
+            id?: string
+            must_change_password?: boolean | null
+          } | null
+          return {
+            data: row?.id
+              ? {
+                  id: String(row.id),
+                  must_change_password: row.must_change_password ?? null,
+                }
+              : null,
+            error: error
+              ? {
+                  message: error.message,
+                  code: (error as { code?: string }).code,
+                }
+              : null,
+          }
+        },
+        clearMustChangePassword: async (id: string) => {
+          const { data, error } = await db
+            .from("profiles")
+            .update({ must_change_password: false })
+            .eq("id", id)
+            .eq("must_change_password", true)
+            .select("id, must_change_password")
+            .maybeSingle()
+          const row = data as {
+            id?: string
+            must_change_password?: boolean | null
+          } | null
+          return {
+            data: row?.id
+              ? {
+                  id: String(row.id),
+                  must_change_password: row.must_change_password ?? null,
+                }
+              : null,
+            error: error
+              ? {
+                  message: error.message,
+                  code: (error as { code?: string }).code,
+                }
+              : null,
+          }
+        },
+      }
+    },
+    logError: logFirstPasswordChangeDbError,
+  })
 
-  if (profileError || !profile) {
+  if (!result.ok) {
     return NextResponse.json(
-      { ok: false, message: "Perfil não encontrado." },
-      { status: 404 }
-    )
-  }
-
-  if (profile.must_change_password !== true) {
-    return NextResponse.json({
-      ok: true,
-      alreadyCleared: true,
-      message: "Nenhuma troca obrigatória pendente.",
-    })
-  }
-
-  const { data: updated, error: updateError } = await db
-    .from("profiles")
-    .update({ must_change_password: false })
-    .eq("id", user.id)
-    .eq("must_change_password", true)
-    .select("id, must_change_password")
-    .maybeSingle()
-
-  if (updateError || !updated) {
-    return NextResponse.json(
-      { ok: false, message: "Não foi possível concluir a troca de senha." },
-      { status: 500 }
-    )
-  }
-
-  if (updated.must_change_password !== false) {
-    return NextResponse.json(
-      { ok: false, message: "Não foi possível confirmar a limpeza da flag." },
-      { status: 500 }
+      { ok: false, message: result.message },
+      { status: result.status }
     )
   }
 
   return NextResponse.json({
     ok: true,
-    alreadyCleared: false,
-    message: "Senha atualizada. Acesso liberado.",
+    alreadyCleared: result.alreadyCleared,
+    message: result.message,
   })
 }
