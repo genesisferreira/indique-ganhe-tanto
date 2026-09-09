@@ -72,7 +72,130 @@ describe("sanitizeIndicatorIdsForProfilesIn — defesa PostgREST 22P02", () => {
   })
 })
 
+/**
+ * Espelho da fórmula pré-hotfix (e61d94c) para dataset SEM null.
+ * Se divergir do helper extraído, a refatoração alterou métricas.
+ */
+function legacyAggregateValidOnly(
+  referralRows: AdminDashboardReferralChartRow[],
+  now: Date
+): {
+  monthlyData: Array<{ mes: string; indicacoes: number; conversoes: number }>
+  indicatorAgg: Map<string, { total: number; conversoes: number }>
+  indicatorIds: string[]
+} {
+  const monthLabels = Array.from({ length: 6 }).map((_, index) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1)
+    return {
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      mes: d.toLocaleDateString("pt-BR", { month: "short" }).replace(".", ""),
+    }
+  })
+  const monthlyAccumulator = new Map(
+    monthLabels.map((m) => [m.key, { mes: m.mes, indicacoes: 0, conversoes: 0 }])
+  )
+  const indicatorAgg = new Map<string, { total: number; conversoes: number }>()
+  for (const row of referralRows) {
+    const created = new Date(row.created_at)
+    const monthKey = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, "0")}`
+    const monthEntry = monthlyAccumulator.get(monthKey)
+    if (monthEntry) {
+      monthEntry.indicacoes += 1
+      if (row.status === "aprovada") {
+        monthEntry.conversoes += 1
+      }
+    }
+    const current = indicatorAgg.get(row.indicator_profile_id as string) ?? {
+      total: 0,
+      conversoes: 0,
+    }
+    current.total += 1
+    if (row.status === "aprovada") {
+      current.conversoes += 1
+    }
+    indicatorAgg.set(row.indicator_profile_id as string, current)
+  }
+  const monthlyData = monthLabels.map(
+    (m) => monthlyAccumulator.get(m.key) ?? { mes: m.mes, indicacoes: 0, conversoes: 0 }
+  )
+  return { monthlyData, indicatorAgg, indicatorIds: [...indicatorAgg.keys()] }
+}
+
+describe("aggregateAdminDashboardReferralCharts — equivalência (somente UUID)", () => {
+  it("DATASET SEM NULL: helper ≡ fórmula pré-hotfix (monthly + agg + ids + ordem)", () => {
+    const now = new Date(2026, 8, 9, 12, 0, 0) // 9 set 2026
+    const rows: AdminDashboardReferralChartRow[] = [
+      {
+        created_at: new Date(2026, 8, 2).toISOString(),
+        status: "pendente",
+        indicator_profile_id: INDICATOR_A,
+      },
+      {
+        created_at: new Date(2026, 8, 3).toISOString(),
+        status: "aprovada",
+        indicator_profile_id: INDICATOR_A,
+      },
+      {
+        created_at: new Date(2026, 7, 10).toISOString(),
+        status: "aprovada",
+        indicator_profile_id: INDICATOR_B,
+      },
+      {
+        created_at: new Date(2026, 6, 20).toISOString(),
+        status: "em_atendimento",
+        indicator_profile_id: INDICATOR_B,
+      },
+      {
+        created_at: new Date(2026, 5, 5).toISOString(),
+        status: "aprovada",
+        indicator_profile_id: INDICATOR_A,
+      },
+    ]
+
+    const legacy = legacyAggregateValidOnly(rows, now)
+    const next = aggregateAdminDashboardReferralCharts(rows, now)
+
+    assert.deepEqual(next.monthlyData, legacy.monthlyData)
+    assert.deepEqual(next.indicatorIds, legacy.indicatorIds)
+    assert.equal(next.indicatorAgg.size, legacy.indicatorAgg.size)
+    for (const [id, agg] of legacy.indicatorAgg) {
+      assert.deepEqual(next.indicatorAgg.get(id), agg)
+    }
+
+    const topLegacy = [...legacy.indicatorAgg.entries()]
+      .sort((a, b) => b[1].conversoes - a[1].conversoes || b[1].total - a[1].total)
+      .slice(0, 5)
+    const topNext = [...next.indicatorAgg.entries()]
+      .sort((a, b) => b[1].conversoes - a[1].conversoes || b[1].total - a[1].total)
+      .slice(0, 5)
+    assert.deepEqual(topNext, topLegacy)
+  })
+})
+
 describe("aggregateAdminDashboardReferralCharts — hotfix null indicator", () => {
+  it("1b) misto A/null/B/null: gerais=4; agg só A,B; profiles.in sem null", () => {
+    const rows: AdminDashboardReferralChartRow[] = [
+      rowInCurrentMonth({ status: "pendente", indicator_profile_id: INDICATOR_A }),
+      rowInCurrentMonth({ status: "pendente", indicator_profile_id: null }),
+      rowInCurrentMonth({ status: "aprovada", indicator_profile_id: INDICATOR_B }),
+      rowInCurrentMonth({ status: "aprovada", indicator_profile_id: null }),
+    ]
+    const { monthlyData, indicatorAgg, indicatorIds } =
+      aggregateAdminDashboardReferralCharts(rows)
+    assert.equal(
+      monthlyData.reduce((s, m) => s + m.indicacoes, 0),
+      4
+    )
+    assert.deepEqual([...indicatorIds].sort(), [INDICATOR_A, INDICATOR_B].sort())
+    assert.equal(indicatorAgg.size, 2)
+    assert.equal(
+      sanitizeIndicatorIdsForProfilesIn(indicatorIds).some(
+        (id) => id == null || id === "null"
+      ),
+      false
+    )
+  })
+
   it("1) null + UUID: null NÃO entra em indicatorIds; UUID entra; mês conta ambos", () => {
     const rows: AdminDashboardReferralChartRow[] = [
       rowInCurrentMonth({
