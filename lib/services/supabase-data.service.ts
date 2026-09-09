@@ -22,6 +22,11 @@ import {
 } from "@/lib/referral-field-normalize"
 import { isReferralContractType } from "@/lib/referral-contract-type"
 import { normalizeBrbyteSyncStatus } from "@/types/referral"
+import {
+  aggregateAdminDashboardReferralCharts,
+  sanitizeIndicatorIdsForProfilesIn,
+  type AdminDashboardReferralChartRow,
+} from "@/lib/services/admin-dashboard-referral-charts"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { PAYMENT_RECEIPTS_BUCKET } from "@/lib/supabase/upload-payment-receipt"
 import type { DashboardIndicador } from "@/types/dashboard"
@@ -1830,43 +1835,12 @@ export async function loadAdminDashboardMetricsFromSupabase(): Promise<AdminDash
       return null
     }
 
-    const now = new Date()
-    const monthLabels = Array.from({ length: 6 }).map((_, index) => {
-      const d = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1)
-      return {
-        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-        mes: d.toLocaleDateString("pt-BR", { month: "short" }).replace(".", ""),
-      }
-    })
-    const monthlyAccumulator = new Map(
-      monthLabels.map((m) => [m.key, { mes: m.mes, indicacoes: 0, conversoes: 0 }])
-    )
+    const chartRows = (referralRows ?? []) as AdminDashboardReferralChartRow[]
+    const { monthlyData, indicatorAgg, indicatorIds: rawIndicatorIds } =
+      aggregateAdminDashboardReferralCharts(chartRows)
+    // Defesa: nunca enviar null/"null" a profiles.in("id", …) (PostgREST 22P02).
+    const indicatorIds = sanitizeIndicatorIdsForProfilesIn(rawIndicatorIds)
 
-    const indicatorAgg = new Map<string, { total: number; conversoes: number }>()
-    for (const row of (referralRows ?? []) as Array<{
-      created_at: string
-      status: string
-      indicator_profile_id: string
-    }>) {
-      const created = new Date(row.created_at)
-      const monthKey = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, "0")}`
-      const monthEntry = monthlyAccumulator.get(monthKey)
-      if (monthEntry) {
-        monthEntry.indicacoes += 1
-        if (row.status === "aprovada") {
-          monthEntry.conversoes += 1
-        }
-      }
-
-      const current = indicatorAgg.get(row.indicator_profile_id) ?? { total: 0, conversoes: 0 }
-      current.total += 1
-      if (row.status === "aprovada") {
-        current.conversoes += 1
-      }
-      indicatorAgg.set(row.indicator_profile_id, current)
-    }
-
-    const indicatorIds = [...indicatorAgg.keys()]
     let indicatorNameById = new Map<string, string>()
     if (indicatorIds.length > 0) {
       const { data: indicatorProfiles, error: indicatorProfilesError } = await db
@@ -1894,9 +1868,6 @@ export async function loadAdminDashboardMetricsFromSupabase(): Promise<AdminDash
       )
     }
 
-    const monthlyData = monthLabels.map(
-      (m) => monthlyAccumulator.get(m.key) ?? { mes: m.mes, indicacoes: 0, conversoes: 0 }
-    )
     const topIndicadores = [...indicatorAgg.entries()]
       .sort((a, b) => b[1].conversoes - a[1].conversoes || b[1].total - a[1].total)
       .slice(0, 5)
