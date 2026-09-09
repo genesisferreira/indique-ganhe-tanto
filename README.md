@@ -253,4 +253,4 @@ This repository is linked to a [v0](https://v0.app) project.
 
 ## Licença
 
-Projeto proprietário - Tanto Telecom © 2024
+Projeto proprietário - Tanto Telecom © 2026
