@@ -1,6 +1,6 @@
 "use client"
 
-import { getSupabaseClient, resetSupabaseBrowserClient } from "@/lib/supabase/client"
+import { getSupabaseClient } from "@/lib/supabase/client"
 
 const SUPABASE_STORAGE_PREFIXES = ["sb-", "supabase.auth"]
 
@@ -19,17 +19,23 @@ export function clearSupabaseLocalStorage(): void {
   }
 }
 
-/** Encerra sessão Supabase no browser e limpa caches locais relacionados. */
+/**
+ * Encerra sessão Supabase no browser e limpa caches locais relacionados.
+ *
+ * A instância JS do browser client é PRESERVADA intencionalmente.
+ * Destruí-la e recriar forçaria uma segunda GoTrueClient no mesmo contexto
+ * (mesma storageKey), disparando o warning de múltiplas instâncias.
+ * O estado de autenticação é encerrado por signOut(); a instância continuar
+ * existindo não mantém o usuário autenticado.
+ */
 export async function performClientLogout(): Promise<{ error: Error | null }> {
   try {
     const supabase = getSupabaseClient()
     const { error } = await supabase.auth.signOut({ scope: "global" })
     clearSupabaseLocalStorage()
-    resetSupabaseBrowserClient()
     return { error: error ? new Error(error.message) : null }
   } catch (err) {
     clearSupabaseLocalStorage()
-    resetSupabaseBrowserClient()
     return {
       error: err instanceof Error ? err : new Error(String(err)),
     }
