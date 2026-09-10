@@ -372,7 +372,10 @@ begin
   set total_received_today = 0,
       last_daily_reset_on = v_today,
       updated_at = timezone('utc', now())
-  where es.last_daily_reset_on is distinct from v_today
+  from public.employee_sector_memberships m
+  where m.id = es.membership_id
+    and m.is_active = true
+    and es.last_daily_reset_on is distinct from v_today
     and (es.total_received_today > 0 or es.last_daily_reset_on is null);
 end;
 $$;
@@ -403,6 +406,39 @@ begin
   );
 end;
 $$;
+
+-- Settings operacionais: membership ATIVA (Sprint 2.1 unique parcial
+-- employee_id+sector_id WHERE is_active). Nunca employee_id+sector_id sozinhos.
+create or replace function public.lock_active_sector_assignment_settings(
+  p_employee_id uuid,
+  p_sector_id uuid
+)
+returns public.employee_sector_assignment_settings
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row public.employee_sector_assignment_settings%rowtype;
+begin
+  select es.*
+  into v_row
+  from public.employee_sector_assignment_settings es
+  inner join public.employee_sector_memberships m
+    on m.id = es.membership_id
+   and m.is_active = true
+   and m.employee_id = p_employee_id
+   and m.sector_id = p_sector_id
+  where es.employee_id = p_employee_id
+    and es.sector_id = p_sector_id
+  for update of es;
+
+  return v_row;
+end;
+$$;
+
+comment on function public.lock_active_sector_assignment_settings(uuid, uuid) is
+  'Trava a settings da membership ATIVA (employee+setor). Membership histórica é ignorada. Sprint 2.2B.';
 
 -- Identidade: employee active + membership ativa + setor ativo + profile ativo.
 -- NÃO exige profiles.role. Membership NÃO autoriza rota.
@@ -570,11 +606,15 @@ begin
     );
   end if;
 
-  select * into strict v_settings
-  from public.employee_sector_assignment_settings
-  where employee_id = v_employee_id
-    and sector_id = v_sector.id
-  for update;
+  v_settings := public.lock_active_sector_assignment_settings(v_employee_id, v_sector.id);
+
+  if v_settings.id is null or v_settings.membership_id is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'no_employee_available',
+      'message', 'Nenhum funcionário elegível na fila deste setor.'
+    );
+  end if;
 
   insert into public.sector_work_assignments (
     sector_id, employee_id, membership_id, work_type, work_id,
@@ -713,13 +753,10 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_eligible');
   end if;
 
-  select * into v_to
-  from public.employee_sector_assignment_settings
-  where employee_id = p_to_employee_id
-    and sector_id = v_asg.sector_id
-  for update;
+  v_to := public.lock_active_sector_assignment_settings(p_to_employee_id, v_asg.sector_id);
 
-  if not found
+  if v_to.id is null
+     or v_to.membership_id is null
      or v_to.is_available is not true
      or v_to.receiving_assignments is not true
      or v_to.total_received_today >= coalesce(v_to.daily_limit, v_queue.daily_limit_default)
@@ -733,8 +770,7 @@ begin
 
   select * into v_from
   from public.employee_sector_assignment_settings
-  where employee_id = v_asg.employee_id
-    and sector_id = v_asg.sector_id
+  where membership_id = v_asg.membership_id
   for update;
 
   update public.sector_work_assignments
@@ -879,8 +915,7 @@ begin
   update public.employee_sector_assignment_settings
   set active_assignments = greatest(active_assignments - 1, 0),
       updated_at = v_now
-  where employee_id = v_asg.employee_id
-    and sector_id = v_asg.sector_id;
+  where membership_id = v_asg.membership_id;
 
   perform public.record_sector_assignment_event(
     v_asg.id, v_asg.sector_id, v_asg.employee_id, v_event, p_actor_profile_id,
@@ -982,13 +1017,10 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_eligible');
   end if;
 
-  select * into v_settings
-  from public.employee_sector_assignment_settings
-  where employee_id = p_employee_id
-    and sector_id = v_sector.id
-  for update;
+  v_settings := public.lock_active_sector_assignment_settings(p_employee_id, v_sector.id);
 
-  if not found
+  if v_settings.id is null
+     or v_settings.membership_id is null
      or v_settings.is_available is not true
      or v_settings.receiving_assignments is not true
      or v_settings.total_received_today >= coalesce(v_settings.daily_limit, v_queue.daily_limit_default)
@@ -1077,6 +1109,11 @@ revoke all on function public.lock_sector_work_item_xact(uuid, text, uuid) from 
 revoke all on function public.lock_sector_work_item_xact(uuid, text, uuid) from anon;
 revoke all on function public.lock_sector_work_item_xact(uuid, text, uuid) from authenticated;
 grant execute on function public.lock_sector_work_item_xact(uuid, text, uuid) to service_role;
+
+revoke all on function public.lock_active_sector_assignment_settings(uuid, uuid) from public;
+revoke all on function public.lock_active_sector_assignment_settings(uuid, uuid) from anon;
+revoke all on function public.lock_active_sector_assignment_settings(uuid, uuid) from authenticated;
+grant execute on function public.lock_active_sector_assignment_settings(uuid, uuid) to service_role;
 
 revoke all on function public.reset_sector_assignment_daily_counters() from public;
 revoke all on function public.reset_sector_assignment_daily_counters() from anon;

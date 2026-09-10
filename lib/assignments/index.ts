@@ -3,6 +3,8 @@ export {
   effectiveMaxActiveAssignments,
   isSectorEmployeeAssignmentEligible,
   isSectorQueueCandidate,
+  resolveActiveMembershipSettings,
+  settingsMembershipIdForRelease,
 } from "@/lib/assignments/eligibility"
 export {
   compareRoundRobinCandidates,

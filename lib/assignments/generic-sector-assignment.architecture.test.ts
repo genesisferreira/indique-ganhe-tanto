@@ -77,6 +77,51 @@ describe("patch generic sector assignment engine", () => {
     assert.match(norm, /where status = 'active'/)
   })
 
+  it("2.2B lookup operacional só via membership ativa ou membership_id gravado", () => {
+    assert.match(norm, /create or replace function public\.lock_active_sector_assignment_settings/)
+    assert.match(norm, /m\.is_active = true/)
+    const assignIdx = norm.indexOf("create or replace function public.assign_sector_work_item")
+    const assignBody = norm.slice(
+      assignIdx,
+      norm.indexOf("create or replace function public.transfer_sector_assignment")
+    )
+    assert.match(assignBody, /lock_active_sector_assignment_settings/)
+    assert.equal(/into strict/.test(assignBody), false)
+
+    const transferIdx = norm.indexOf("create or replace function public.transfer_sector_assignment")
+    const transferBody = norm.slice(
+      transferIdx,
+      norm.indexOf("create or replace function public.release_sector_assignment")
+    )
+    assert.match(transferBody, /lock_active_sector_assignment_settings/)
+    assert.match(transferBody, /where membership_id = v_asg\.membership_id/)
+
+    const releaseIdx = norm.indexOf("create or replace function public.release_sector_assignment")
+    const releaseBody = norm.slice(
+      releaseIdx,
+      norm.indexOf("create or replace function public.claim_sector_work_item")
+    )
+    assert.match(releaseBody, /where membership_id = v_asg\.membership_id/)
+    assert.equal(
+      /where employee_id = v_asg\.employee_id\s+and sector_id = v_asg\.sector_id/.test(releaseBody),
+      false
+    )
+
+    const claimIdx = norm.indexOf("create or replace function public.claim_sector_work_item")
+    const claimBody = norm.slice(claimIdx)
+    assert.match(claimBody, /lock_active_sector_assignment_settings/)
+  })
+
+  it("I) unique parcial 2.1: uma membership ativa por employee+sector", () => {
+    const foundation = readFileSync(
+      join(repoRoot, "supabase/patch-employee-sector-foundation.sql"),
+      "utf8"
+    )
+    assert.match(foundation, /create unique index if not exists employee_sector_memberships_active_uidx/)
+    assert.match(foundation, /on public\.employee_sector_memberships \(employee_id, sector_id\)/)
+    assert.match(foundation, /where is_active = true/)
+  })
+
   it("R) transfer bloqueia inelegível", () => {
     const transferIdx = norm.indexOf("create or replace function public.transfer_sector_assignment")
     const transferBody = norm.slice(transferIdx)
@@ -176,6 +221,7 @@ describe("patch generic sector assignment engine", () => {
       "release_sector_assignment",
       "claim_sector_work_item",
       "is_sector_employee_assignment_eligible",
+      "lock_active_sector_assignment_settings",
     ]) {
       assert.match(
         norm,

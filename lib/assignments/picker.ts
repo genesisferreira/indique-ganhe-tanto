@@ -8,6 +8,7 @@ import type { EmployeeStatus } from "@/types/employee"
 
 export type SectorQueueCandidate = {
   employeeId: string
+  membershipId?: string
   employeeStatus: EmployeeStatus
   membershipActive: boolean
   sectorActive: boolean

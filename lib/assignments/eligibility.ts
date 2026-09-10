@@ -67,3 +67,40 @@ export function isSectorQueueCandidate(input: {
   if (maxActive != null && input.activeAssignments >= maxActive) return false
   return true
 }
+
+export type MembershipRef = {
+  id: string
+  employeeId: string
+  sectorId: string
+  isActive: boolean
+}
+
+export type SettingsRef = {
+  membershipId: string
+}
+
+/** Membership ATIVA é a identidade operacional. Histórica é ignorada. */
+export function resolveActiveMembershipSettings(input: {
+  employeeId: string
+  sectorId: string
+  memberships: readonly MembershipRef[]
+  settings: readonly SettingsRef[]
+}): { membershipId: string } | null {
+  const active = input.memberships.filter(
+    (m) =>
+      m.employeeId === input.employeeId &&
+      m.sectorId === input.sectorId &&
+      m.isActive === true
+  )
+  if (active.length !== 1) return null
+  const membershipId = active[0]?.id
+  if (!membershipId) return null
+  const hasSettings = input.settings.some((s) => s.membershipId === membershipId)
+  if (!hasSettings) return null
+  return { membershipId }
+}
+
+/** Close/release decrementa a settings da membership gravada na assignment. */
+export function settingsMembershipIdForRelease(assignmentMembershipId: string): string {
+  return assignmentMembershipId
+}
