@@ -6308,6 +6308,9 @@ export async function claimComercialLead(
       forbidden:
         msgFromServer ??
         "Apenas usuários com perfil comercial podem assumir leads.",
+      not_eligible:
+        msgFromServer ??
+        "Perfil inelegível para assumir novos leads no momento.",
       unauthorized:
         msgFromServer ?? "Sessão não encontrada. Faça login novamente.",
     }

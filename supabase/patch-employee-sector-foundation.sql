@@ -3,18 +3,18 @@
 -- Cria: employees, sectors, employee_sector_memberships, employee_events.
 -- Backfill: profiles.role = 'comercial' → employee + membership no setor commercial.
 --
--- NÃO altera: commercial_lead_settings, commercial_availability, referrals,
--- commercial_profile_id, round-robin, SLA, rewards, wallet, Auth users, BRByte.
+-- NÃO altera schema de: commercial_lead_settings, commercial_availability,
+-- referrals, rewards, wallet, Auth users, BRByte.
+-- NÃO redistribui carteira já atribuída.
 -- NÃO executa DML financeiro.
 -- Idempotente: CREATE IF NOT EXISTS, ON CONFLICT DO NOTHING, DROP TRIGGER IF EXISTS.
 --
--- Disponibilidade (documentação):
---   employees.status     = elegibilidade GLOBAL futura (não alimenta o RR atual).
+-- Disponibilidade:
+--   employees.status + membership commercial ativa
+--     = elegibilidade GLOBAL para NOVAS atribuições (assign/pick/claim).
 --   commercial_availability + commercial_lead_settings
---                        = disponibilidade OPERACIONAL do setor Comercial existente.
---   Regra futura de distribuição (NÃO implementada aqui):
---     status=active AND membership ativo AND regras do setor.
---   Round-robin Comercial desta sprint permanece inalterado.
+--     = disponibilidade OPERACIONAL do setor Comercial (limites, pause de fila).
+--   Leads já atribuídos (commercial_profile_id) permanecem intactos.
 
 begin;
 
@@ -481,5 +481,384 @@ inner join public.sectors s on s.code = 'commercial'
 where p.role = 'comercial'::public.user_role
 on conflict (employee_id, sector_id) where is_active = true
 do nothing;
+
+-- ============================================================
+-- Sprint 2.1B — elegibilidade de NOVAS atribuições comerciais
+-- Helper interno (não é RPC de produto). Sem fallback se employee faltar:
+-- o backfill acima cobre profiles.role='comercial'.
+-- daily_limit NÃO entra no helper: assign/pick já aplicam; claim nunca aplicou.
+-- SEM GRANT/REVOKE nas RPCs assign/pick/claim (preserva ACLs da sprint SLA).
+-- ============================================================
+create or replace function public.is_commercial_employee_assignment_eligible(
+  p_profile_id uuid
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.profiles p
+    inner join public.employees e on e.profile_id = p.id
+    inner join public.employee_sector_memberships m
+      on m.employee_id = e.id
+      and m.is_active = true
+    inner join public.sectors s
+      on s.id = m.sector_id
+      and s.code = 'commercial'
+      and s.is_active = true
+    where p.id = p_profile_id
+      and p.role = 'comercial'::public.user_role
+      and coalesce(p.is_active, true) = true
+      and e.status = 'active'::public.employee_status
+  );
+$$;
+
+comment on function public.is_commercial_employee_assignment_eligible(uuid) is
+  'Elegibilidade de NOVA atribuição Comercial: role comercial, profile ativo, employee active, membership commercial ativa. Não autoriza rotas. Sprint 2.1B.';
+
+revoke all on function public.is_commercial_employee_assignment_eligible(uuid) from public;
+revoke all on function public.is_commercial_employee_assignment_eligible(uuid) from anon;
+revoke all on function public.is_commercial_employee_assignment_eligible(uuid) from authenticated;
+grant execute on function public.is_commercial_employee_assignment_eligible(uuid) to service_role;
+
+create or replace function public.assign_referral_to_next_commercial(p_referral_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_ref public.referrals%rowtype;
+  v_commercial_id uuid;
+  v_old_status public.referral_status;
+  v_now timestamptz := timezone('utc', now());
+  v_today date := (v_now at time zone 'utc')::date;
+begin
+  perform public.log_lead_assignment_debug(
+    'assign_referral_to_next_commercial',
+    p_referral_id,
+    null,
+    jsonb_build_object('phase', 'start')
+  );
+
+  if p_referral_id is null then
+    return jsonb_build_object('ok', false, 'code', 'invalid_referral', 'message', 'Indicação inválida.');
+  end if;
+
+  select * into v_ref
+  from public.referrals
+  where id = p_referral_id
+  for update;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'code', 'not_found', 'message', 'Indicação não encontrada.');
+  end if;
+
+  if v_ref.commercial_profile_id is not null then
+    perform public.log_lead_assignment_debug(
+      'assign_referral_to_next_commercial',
+      p_referral_id,
+      v_ref.commercial_profile_id,
+      jsonb_build_object('phase', 'already_assigned', 'status', v_ref.status::text)
+    );
+    return jsonb_build_object(
+      'ok', true,
+      'code', 'already_assigned',
+      'referral_id', p_referral_id,
+      'commercial_profile_id', v_ref.commercial_profile_id,
+      'status', v_ref.status::text
+    );
+  end if;
+
+  if v_ref.status in (
+    'recusada'::public.referral_status,
+    'paga'::public.referral_status
+  ) then
+    perform public.log_lead_assignment_debug(
+      'assign_referral_to_next_commercial',
+      p_referral_id,
+      null,
+      jsonb_build_object('phase', 'skip_terminal_status', 'status', v_ref.status::text)
+    );
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'terminal_status',
+      'message', 'Indicação encerrada; distribuição automática não se aplica.',
+      'status', v_ref.status::text
+    );
+  end if;
+
+  update public.commercial_lead_settings s
+  set total_received_today = 0,
+      updated_at = v_now
+  where (s.last_lead_received_at is null
+         or (s.last_lead_received_at at time zone 'utc')::date < v_today)
+    and s.total_received_today > 0;
+
+  select s.commercial_profile_id
+  into v_commercial_id
+  from public.commercial_lead_settings s
+  where public.is_commercial_employee_assignment_eligible(s.commercial_profile_id)
+    and s.is_available = true
+    and s.receiving_leads = true
+    and s.total_received_today < s.daily_limit
+  order by s.last_lead_received_at asc nulls first, s.active_leads asc, s.commercial_profile_id asc
+  limit 1
+  for update of s;
+
+  if v_commercial_id is null then
+    perform public.log_lead_assignment_debug(
+      'assign_referral_to_next_commercial',
+      p_referral_id,
+      null,
+      jsonb_build_object('phase', 'no_commercial_available', 'status', v_ref.status::text)
+    );
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'no_commercial_available',
+      'message', 'Nenhum comercial disponível para receber leads no momento.',
+      'status', v_ref.status::text
+    );
+  end if;
+
+  v_old_status := v_ref.status;
+
+  update public.referrals
+  set commercial_profile_id = v_commercial_id,
+      status = 'em_atendimento'::public.referral_status,
+      assigned_at = coalesce(assigned_at, v_now),
+      last_interaction_at = v_now,
+      updated_at = v_now
+  where id = p_referral_id
+    and commercial_profile_id is null;
+
+  if not found then
+    perform public.log_lead_assignment_debug(
+      'assign_referral_to_next_commercial',
+      p_referral_id,
+      null,
+      jsonb_build_object('phase', 'race_already_assigned')
+    );
+    return jsonb_build_object(
+      'ok', true,
+      'code', 'already_assigned',
+      'referral_id', p_referral_id,
+      'message', 'Outro processo já atribuiu o lead.'
+    );
+  end if;
+
+  update public.commercial_lead_settings
+  set last_lead_received_at = v_now,
+      active_leads = active_leads + 1,
+      total_received_today = total_received_today + 1,
+      updated_at = v_now
+  where commercial_profile_id = v_commercial_id;
+
+  insert into public.referral_history (
+    referral_id,
+    actor_profile_id,
+    old_status,
+    new_status,
+    action_note,
+    metadata
+  )
+  values (
+    p_referral_id,
+    v_commercial_id,
+    v_old_status,
+    'em_atendimento'::public.referral_status,
+    'Lead atribuído automaticamente ao comercial',
+    jsonb_build_object(
+      'action', 'commercial_assigned',
+      'assigned_commercial_id', v_commercial_id,
+      'distribution', 'round_robin_last_lead_received_at'
+    )
+  );
+
+  perform public.notify_commercial_lead_assigned(v_commercial_id, p_referral_id);
+
+  perform public.log_lead_assignment_debug(
+    'assign_referral_to_next_commercial',
+    p_referral_id,
+    v_commercial_id,
+    jsonb_build_object(
+      'phase', 'assigned',
+      'commercial_profile_id', v_commercial_id,
+      'previous_status', v_old_status::text
+    )
+  );
+
+  return jsonb_build_object(
+    'ok', true,
+    'referral_id', p_referral_id,
+    'commercial_profile_id', v_commercial_id,
+    'status', 'em_atendimento',
+    'previous_status', v_old_status::text
+  );
+exception
+  when others then
+    perform public.log_lead_assignment_debug(
+      'assign_referral_to_next_commercial',
+      p_referral_id,
+      v_commercial_id,
+      jsonb_build_object('phase', 'error', 'message', sqlerrm, 'sqlstate', sqlstate)
+    );
+    return jsonb_build_object('ok', false, 'code', 'exception', 'message', sqlerrm);
+end;
+$$;
+
+comment on function public.assign_referral_to_next_commercial(uuid) is
+  'Atribui lead do pool ao próximo comercial elegível (employee active + membership commercial + settings). Idempotente se já atribuído. Sprint 2.1B.';
+
+create or replace function public.pick_next_available_commercial(
+  p_exclude_commercial_id uuid default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_commercial_id uuid;
+  v_now timestamptz := timezone('utc', now());
+  v_today date := (v_now at time zone 'utc')::date;
+begin
+  update public.commercial_lead_settings s
+  set total_received_today = 0,
+      updated_at = v_now
+  where (s.last_lead_received_at is null
+         or (s.last_lead_received_at at time zone 'utc')::date < v_today)
+    and s.total_received_today > 0;
+
+  select s.commercial_profile_id
+  into v_commercial_id
+  from public.commercial_lead_settings s
+  where public.is_commercial_employee_assignment_eligible(s.commercial_profile_id)
+    and s.is_available = true
+    and s.receiving_leads = true
+    and s.total_received_today < s.daily_limit
+    and (p_exclude_commercial_id is null or s.commercial_profile_id <> p_exclude_commercial_id)
+  order by s.last_lead_received_at asc nulls first, s.active_leads asc, s.commercial_profile_id asc
+  limit 1
+  for update of s;
+
+  return v_commercial_id;
+end;
+$$;
+
+comment on function public.pick_next_available_commercial(uuid) is
+  'Próximo comercial para NOVA atribuição/SLA. Exige employee active + membership commercial. Não mexe em leads já atribuídos. Sprint 2.1B.';
+
+create or replace function public.claim_referral_lead(p_referral_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_role public.user_role;
+  v_ref public.referrals%rowtype;
+  v_old_status public.referral_status;
+  v_now timestamptz := timezone('utc', now());
+  v_is_available boolean;
+  v_receiving_leads boolean;
+begin
+  if v_uid is null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'unauthorized',
+      'message', 'Sessão inválida. Faça login novamente.'
+    );
+  end if;
+
+  select p.role into v_role
+  from public.profiles p
+  where p.id = v_uid;
+
+  if v_role is distinct from 'comercial'::public.user_role then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'forbidden',
+      'message', 'Apenas usuários com perfil comercial podem assumir leads.'
+    );
+  end if;
+
+  if not public.is_commercial_employee_assignment_eligible(v_uid) then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'not_eligible',
+      'message', 'Perfil inelegível para assumir novos leads (status, setor Comercial ou conta inativa).'
+    );
+  end if;
+
+  -- daily_limit NÃO se aplica ao claim (semântica histórica). Aplica is_available/receiving_leads.
+  select s.is_available, s.receiving_leads
+  into v_is_available, v_receiving_leads
+  from public.commercial_lead_settings s
+  where s.commercial_profile_id = v_uid;
+
+  if v_is_available is not true or v_receiving_leads is not true then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'not_eligible',
+      'message', 'Disponibilidade comercial não permite assumir novos leads no momento.'
+    );
+  end if;
+
+  select * into strict v_ref
+  from public.referrals
+  where id = p_referral_id
+  for update;
+
+  v_old_status := v_ref.status;
+
+  if v_ref.commercial_profile_id is not null then
+    return jsonb_build_object('ok', false, 'code', 'already_claimed');
+  end if;
+
+  update public.referrals
+  set
+    commercial_profile_id = v_uid,
+    status = 'em_atendimento'::public.referral_status,
+    assigned_at = v_now,
+    first_response_at = v_now,
+    last_interaction_at = v_now,
+    updated_at = v_now
+  where id = p_referral_id;
+
+  insert into public.referral_history (
+    referral_id,
+    actor_profile_id,
+    old_status,
+    new_status,
+    action_note,
+    metadata
+  )
+  values (
+    p_referral_id,
+    v_uid,
+    v_old_status,
+    'em_atendimento'::public.referral_status,
+    'Lead assumido pelo comercial',
+    jsonb_build_object('action', 'claim_lead_rpc')
+  );
+
+  return jsonb_build_object(
+    'ok', true,
+    'referral_id', p_referral_id,
+    'commercial_profile_id', v_uid
+  );
+exception
+  when no_data_found then
+    return jsonb_build_object('ok', false, 'code', 'not_found');
+end;
+$$;
+
+comment on function public.claim_referral_lead(uuid) is
+  'Comercial assume lead do pool. Exige employee active + membership commercial + settings disponíveis. daily_limit não se aplica (histórico). Sprint 2.1B.';
 
 commit;

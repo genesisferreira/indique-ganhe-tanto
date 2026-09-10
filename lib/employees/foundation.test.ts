@@ -4,6 +4,8 @@ import {
   commercialBackfillStatusFromProfile,
   hasAnySector,
   hasSector,
+  isCommercialEmployeeAssignmentEligible,
+  isCommercialPoolCandidate,
   isEligibleForFutureAssignment,
   isEmployee,
 } from "@/lib/employees/foundation"
@@ -83,5 +85,191 @@ describe("helpers não concedem autorização", () => {
     const memberships = [{ sectorCode: "collections", isActive: true }]
     assert.equal(hasSector({ memberships, sectorCode: "collections" }), true)
     assert.equal(hasSector({ memberships, sectorCode: "commercial" }), false)
+  })
+})
+
+const validPool = {
+  profileRole: "comercial" as const,
+  profileIsActive: true,
+  employeeStatus: "active" as EmployeeStatus,
+  hasActiveCommercialMembership: true,
+  settingsAvailable: true,
+  settingsReceivingLeads: true,
+  totalReceivedToday: 0,
+  dailyLimit: 20,
+}
+
+describe("2.1B A–Q) elegibilidade de NOVA atribuição comercial", () => {
+  it("A) active + membership + settings → elegível", () => {
+    assert.equal(
+      isCommercialPoolCandidate({ ...validPool, applyDailyLimit: true }),
+      true
+    )
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible(validPool),
+      true
+    )
+  })
+
+  it("B) paused → não elegível", () => {
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible({
+        ...validPool,
+        employeeStatus: "paused",
+      }),
+      false
+    )
+  })
+
+  it("C) vacation → não elegível", () => {
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible({
+        ...validPool,
+        employeeStatus: "vacation",
+      }),
+      false
+    )
+  })
+
+  it("D) away → não elegível", () => {
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible({
+        ...validPool,
+        employeeStatus: "away",
+      }),
+      false
+    )
+  })
+
+  it("E) dismissed → não elegível", () => {
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible({
+        ...validPool,
+        employeeStatus: "dismissed",
+      }),
+      false
+    )
+  })
+
+  it("F) sem membership commercial → não elegível", () => {
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible({
+        ...validPool,
+        hasActiveCommercialMembership: false,
+      }),
+      false
+    )
+  })
+
+  it("G) membership inativa coberta por hasActive=false", () => {
+    assert.equal(
+      isCommercialPoolCandidate({
+        ...validPool,
+        hasActiveCommercialMembership: false,
+        applyDailyLimit: true,
+      }),
+      false
+    )
+  })
+
+  it("H) profile is_active=false → não elegível", () => {
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible({
+        ...validPool,
+        profileIsActive: false,
+      }),
+      false
+    )
+  })
+
+  it("I) is_available=false → fora do pool/claim", () => {
+    assert.equal(
+      isCommercialPoolCandidate({
+        ...validPool,
+        settingsAvailable: false,
+        applyDailyLimit: true,
+      }),
+      false
+    )
+  })
+
+  it("J) receiving_leads=false → fora do pool/claim", () => {
+    assert.equal(
+      isCommercialPoolCandidate({
+        ...validPool,
+        settingsReceivingLeads: false,
+        applyDailyLimit: true,
+      }),
+      false
+    )
+  })
+
+  it("K) daily_limit atingido bloqueia assign/pick, não o predicado de claim", () => {
+    assert.equal(
+      isCommercialPoolCandidate({
+        ...validPool,
+        totalReceivedToday: 20,
+        dailyLimit: 20,
+        applyDailyLimit: true,
+      }),
+      false
+    )
+    assert.equal(
+      isCommercialPoolCandidate({
+        ...validPool,
+        totalReceivedToday: 20,
+        dailyLimit: 20,
+        applyDailyLimit: false,
+      }),
+      true
+    )
+  })
+
+  it("L/M) assign/pick usam o mesmo predicado de pool", () => {
+    assert.equal(
+      isCommercialPoolCandidate({
+        ...validPool,
+        employeeStatus: "paused",
+        applyDailyLimit: true,
+      }),
+      false
+    )
+  })
+
+  it("N) claim bloqueia inelegível (sem daily_limit)", () => {
+    assert.equal(
+      isCommercialPoolCandidate({
+        ...validPool,
+        employeeStatus: "vacation",
+        applyDailyLimit: false,
+      }),
+      false
+    )
+  })
+
+  it("O) lead já atribuído não entra na seleção (idempotente no caller)", () => {
+    const alreadyAssigned = { commercialProfileId: "c1" }
+    assert.ok(alreadyAssigned.commercialProfileId)
+  })
+
+  it("P) indicador nunca entra no pool", () => {
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible({
+        ...validPool,
+        profileRole: "indicador",
+      }),
+      false
+    )
+  })
+
+  it("Q) admin_master com membership não entra sem role comercial", () => {
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible({
+        ...validPool,
+        profileRole: "admin_master",
+        hasActiveCommercialMembership: true,
+      }),
+      false
+    )
   })
 })

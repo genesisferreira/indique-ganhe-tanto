@@ -155,11 +155,30 @@ describe("patch employee sector foundation", () => {
     assert.equal(/mark_first_invoice_paid_from_sync/i.test(patch), false)
   })
 
-  it("Q) não altera helpers/RPC SLA", () => {
-    assert.equal(/assign_referral_to_next_commercial/i.test(patch), false)
-    assert.equal(/pick_next_available_commercial/i.test(patch), false)
+  it("Q) SLA de cron não é reescrita; assign/pick usam helper sem reconceder GRANT", () => {
+    assert.match(patch, /is_commercial_employee_assignment_eligible/)
+    assert.match(norm, /create or replace function public\.assign_referral_to_next_commercial/)
+    assert.match(norm, /create or replace function public\.pick_next_available_commercial/)
     assert.equal(/detect_commercial_sla/i.test(patch), false)
     assert.equal(/redistribute_overdue_commercial_leads/i.test(patch), false)
+    assert.equal(
+      /grant\s+execute\s+on\s+function\s+public\.assign_referral_to_next_commercial[\s\S]{0,80}to\s+authenticated/i.test(
+        patch
+      ),
+      false
+    )
+    assert.equal(
+      /grant\s+execute\s+on\s+function\s+public\.pick_next_available_commercial[\s\S]{0,80}to\s+authenticated/i.test(
+        patch
+      ),
+      false
+    )
+    assert.equal(
+      /grant\s+execute\s+on\s+function\s+public\.is_commercial_employee_assignment_eligible[\s\S]{0,80}to\s+authenticated/i.test(
+        patch
+      ),
+      false
+    )
   })
 
   it("R) anon não recebe acesso indevido", () => {
@@ -206,11 +225,49 @@ describe("patch employee sector foundation", () => {
     assert.equal(/session_replication_role/i.test(norm), false)
   })
 
-  it("patches financeiros e SLA versionados permanecem intactos neste commit relativo", () => {
-    for (const rel of [...FINANCIAL_PATCHES, ...SLA_PATCHES, ...COMMERCIAL_TABLES]) {
-      const src = readFileSync(join(repoRoot, rel), "utf8")
-      assert.ok(src.length > 20, rel)
-    }
+  it("2.1B helper nas três funções que escolhem NOVO comercial; claim sem daily_limit; leads atribuídos intactos", () => {
+    const helper = "is_commercial_employee_assignment_eligible"
+    assert.ok(norm.includes(helper))
+    const assignIdx = norm.indexOf(
+      "create or replace function public.assign_referral_to_next_commercial"
+    )
+    const pickIdx = norm.indexOf(
+      "create or replace function public.pick_next_available_commercial"
+    )
+    const claimIdx = norm.indexOf(
+      "create or replace function public.claim_referral_lead"
+    )
+    assert.ok(assignIdx > 0 && pickIdx > assignIdx && claimIdx > pickIdx)
+    assert.ok(norm.indexOf(helper, assignIdx) > assignIdx)
+    assert.ok(norm.indexOf(helper, pickIdx) > pickIdx)
+    assert.ok(norm.indexOf(helper, claimIdx) > claimIdx)
+
+    const claimBody = norm.slice(claimIdx)
+    assert.equal(/total_received_today\s*<\s*s\.daily_limit/.test(claimBody), false)
+    assert.match(claimBody, /code', 'not_eligible'/)
+
+    const assignBody = norm.slice(assignIdx, pickIdx)
+    assert.match(assignBody, /already_assigned/)
+    assert.match(assignBody, /and commercial_profile_id is null/)
+
+    assert.equal(/delete from public\.referrals/i.test(patch), false)
+    assert.equal(/update public\.referrals[\s\S]{0,80}set commercial_profile_id = null/i.test(patch), false)
+  })
+
+  it("R–T) patch não toca assisted, ERP conversion nem financeiro", () => {
+    assert.equal(/commercial_assisted_referral/i.test(patch), false)
+    assert.equal(/ensureRewardForReferral/i.test(patch), false)
+    assert.equal(/mark_first_invoice_paid/i.test(patch), false)
+    const conversion = readFileSync(
+      join(repoRoot, "lib/brbyte/check-conversion.service.ts"),
+      "utf8"
+    )
+    assert.equal(conversion.includes("ensureRewardForReferral"), false)
+    const assisted = readFileSync(
+      join(repoRoot, "lib/commercial-assisted/create-assisted-referral.ts"),
+      "utf8"
+    )
+    assert.match(assisted, /COMMERCIAL_ASSISTED_REFERRAL_SOURCE/)
   })
 
   it("nenhum TS client importa createServiceRoleClient neste sprint (superfície browser)", () => {
