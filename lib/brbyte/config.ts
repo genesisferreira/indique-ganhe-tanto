@@ -50,6 +50,7 @@ export function isBrbyteAutoCheckFirstInvoiceEnabled(): boolean {
   )
 }
 
+/** Autoriza crédito automático após detecção da 1ª fatura. Independente de AUTO_CHECK. */
 export function isBrbyteAutoMarkPaidEnabled(): boolean {
   return parseTruthy(process.env.BRBYTE_AUTO_MARK_PAID_ENABLED)
 }

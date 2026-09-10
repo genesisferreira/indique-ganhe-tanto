@@ -8,12 +8,14 @@ import {
   parseInvoiceCreditDate,
   pickFirstValidInvoice,
 } from "@/lib/brbyte/check-first-invoice-response"
+import { canAutoCreditFirstInvoiceReward } from "@/lib/brbyte/first-invoice-auto-credit-gate"
 import { validateFirstInvoiceRewardGuards } from "@/lib/brbyte/first-invoice-reward-guards"
 import { brbyteAdminLogin } from "@/lib/brbyte/admin-http"
 import {
   getBrbyteCreateInterestConfig,
   getBrbyteOperationalConfig,
   isBrbyteAutoCheckFirstInvoiceEnabled,
+  isBrbyteAutoMarkPaidEnabled,
   isBrbyteCreateInterestEnabled,
 } from "@/lib/brbyte/config"
 import { fetchInvoiceInfo } from "@/lib/brbyte/invoice-info"
@@ -443,6 +445,59 @@ async function persistContractPk(
     .eq("id", referralId)
 }
 
+/**
+ * Fatura paga detectada no ERP, mas crédito automático bloqueado (AUTO_MARK=false).
+ * Não seta first_invoice_paid. Mantém waiting_invoice para o cron reconsultar
+ * quando o gate for ligado. Não chama persistPaidInvoice (evita paid_confirmed
+ * sem crédito autorizado).
+ */
+async function persistPaidDetectedWithoutCredit(
+  referralId: string,
+  patch: {
+    contractPk: string
+    invoicePk: string
+    listPayload: Record<string, unknown> | null
+    infoPayload: Record<string, unknown> | null
+    syncRunId: string | null
+    httpStatus: number | null
+    checkedAtIso: string
+    gateReason: string
+    invoiceDateCredit: string | null
+    invoiceAmountPaid: number | null
+    invoiceAmountDocument: number | null
+  }
+): Promise<void> {
+  await getDb()
+    .from("referrals")
+    .update({
+      brbyte_contract_pk: patch.contractPk,
+      brbyte_id_contrato: patch.contractPk,
+      brbyte_first_invoice_pk: patch.invoicePk,
+      brbyte_sync_status: "waiting_invoice",
+      brbyte_sync_error: null,
+      brbyte_last_sync_at: patch.checkedAtIso,
+      brbyte_last_http_status: patch.httpStatus,
+      brbyte_last_endpoint: BRBYTE_API_PATHS.invoiceListInfo,
+      brbyte_first_invoice_payload: {
+        action: "check_first_invoice",
+        paid: false,
+        paid_detected: true,
+        financial_credit_blocked: true,
+        financial_gate_reason: patch.gateReason,
+        invoice_date_credit: patch.invoiceDateCredit,
+        invoice_amount_paid: patch.invoiceAmountPaid,
+        invoice_amount_document: patch.invoiceAmountDocument,
+        contract_pk: patch.contractPk,
+        invoice_pk: patch.invoicePk,
+        list: patch.listPayload,
+        info: patch.infoPayload,
+        sync_run_id: patch.syncRunId,
+        checked_at: patch.checkedAtIso,
+      },
+    })
+    .eq("id", referralId)
+}
+
 async function persistWaitingInvoice(
   referralId: string,
   patch: {
@@ -480,6 +535,7 @@ async function persistWaitingInvoice(
     .eq("id", referralId)
 }
 
+/** Só após crédito autorizado (RPC) ou skip financeiro de pré-cadastro. Não usar se AUTO_MARK=false. */
 async function persistPaidInvoice(
   referralId: string,
   patch: {
@@ -1097,6 +1153,89 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
       brbyteClientPk: clientPk,
       message:
         "Primeira mensalidade confirmada no ERP. Registro sem recompensa (pré-cadastro).",
+      durationMs: Date.now() - started,
+    }
+  }
+
+  // Gate de crédito automático: cron e checagem ERP admin (/check-first-invoice).
+  // NÃO afeta a ação manual explícita mark_first_invoice_paid da UI.
+  const creditGate = canAutoCreditFirstInvoiceReward({
+    autoMarkPaidEnabled: isBrbyteAutoMarkPaidEnabled(),
+  })
+  if (!creditGate.allowed) {
+    const checkedAtIso = new Date().toISOString()
+    await persistPaidDetectedWithoutCredit(referralId, {
+      contractPk,
+      invoicePk,
+      listPayload: listResult.payload,
+      infoPayload: infoResult.payload,
+      syncRunId,
+      httpStatus: infoResult.httpStatus,
+      checkedAtIso,
+      gateReason: creditGate.reason,
+      invoiceDateCredit: infoResult.info.invoiceDateCredit,
+      invoiceAmountPaid: infoResult.info.invoiceAmountPaid,
+      invoiceAmountDocument: infoResult.info.invoiceAmountDocument,
+    })
+    const gateMessage =
+      "Primeira fatura paga detectada no Controllr, mas crédito financeiro bloqueado: BRBYTE_AUTO_MARK_PAID_ENABLED=false."
+    await finishSyncRun(syncRunId, {
+      status: "ok",
+      api_reachable: true,
+      processed: 1,
+      skipped_records: 1,
+      duration_ms: Date.now() - started,
+      meta: {
+        ...syncRunAuditMeta({
+          referralId,
+          endpoint: BRBYTE_API_PATHS.invoiceListInfo,
+          httpStatus: infoResult.httpStatus,
+          success: true,
+          paid: true,
+          contractPk,
+          invoicePk,
+        }),
+        financial_credit_blocked: true,
+        financial_gate_reason: creditGate.reason,
+      },
+    })
+    await logBrbyteReferralHistory({
+      referralId,
+      phase: CHECK_FIRST_INVOICE_PHASE,
+      oldStatus: referral.brbyte_sync_status,
+      newStatus: "waiting_invoice",
+      endpoint: BRBYTE_API_PATHS.invoiceListInfo,
+      httpStatus: infoResult.httpStatus,
+      message: gateMessage,
+      payload: {
+        financial_credit_blocked: true,
+        financial_gate_reason: creditGate.reason,
+        invoice_pk: invoicePk,
+        invoice_amount_paid: infoResult.info.invoiceAmountPaid,
+        reward_created: false,
+        wallet_credited: false,
+      },
+      createdBy: input.actorUserId ?? null,
+    })
+    await logAudit(input.actorUserId ?? null, referralId, {
+      paid: true,
+      financial_credit_blocked: true,
+      financial_gate_reason: creditGate.reason,
+      contract_pk: contractPk,
+      invoice_pk: invoicePk,
+    })
+    return {
+      ok: true,
+      paid: true,
+      skipped: true,
+      reason: creditGate.reason,
+      financialCreditBlocked: true,
+      referralId,
+      syncRunId,
+      contractPk,
+      invoicePk,
+      brbyteClientPk: clientPk,
+      message: gateMessage,
       durationMs: Date.now() - started,
     }
   }

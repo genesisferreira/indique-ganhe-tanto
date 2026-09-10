@@ -228,6 +228,8 @@ export type BrbyteCheckFirstInvoiceResult = {
   paid: boolean
   skipped?: boolean
   reason?: string
+  /** true quando a fatura foi detectada paga mas AUTO_MARK bloqueou o crédito. */
+  financialCreditBlocked?: boolean
   idempotent?: boolean
   referralId: string
   syncRunId: string | null
