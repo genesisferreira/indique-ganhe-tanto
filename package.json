@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test:public-plans": "npx tsx --test lib/public-pre-registration/plan-resolver.test.ts lib/public-pre-registration/offers.test.ts lib/public-pre-registration/birth-and-normalize.test.ts lib/commercial-offers/catalog.test.ts",
-    "test:brbyte": "npx tsx --test lib/brbyte/referral-auto-flow.test.ts lib/brbyte/http-error-diagnostics.test.ts lib/brbyte/client-date-birth-payload.test.ts lib/brbyte/first-invoice-auto-credit-gate.test.ts lib/brbyte/erp-conversion-commercial-sync.test.ts lib/brbyte/trg-aprovada-skip-erp-converted.architecture.test.ts lib/finance/first-invoice-rpc-hardening.test.ts lib/finance/financial-rpc-hardening.architecture.test.ts lib/public-pre-registration/birth-and-normalize.test.ts lib/public-pre-registration/offers.test.ts lib/commercial-offers/catalog.test.ts",
+    "test:brbyte": "npx tsx --test lib/brbyte/referral-auto-flow.test.ts lib/brbyte/http-error-diagnostics.test.ts lib/brbyte/client-date-birth-payload.test.ts lib/brbyte/first-invoice-auto-credit-gate.test.ts lib/brbyte/erp-conversion-commercial-sync.test.ts lib/brbyte/trg-aprovada-skip-erp-converted.architecture.test.ts lib/finance/first-invoice-rpc-hardening.test.ts lib/finance/financial-rpc-hardening.architecture.test.ts lib/employees/foundation.test.ts lib/employees/employee-sector-foundation.architecture.test.ts lib/public-pre-registration/birth-and-normalize.test.ts lib/public-pre-registration/offers.test.ts lib/commercial-offers/catalog.test.ts",
     "test:referral-brbyte": "npm run test:brbyte"
   },
   "dependencies": {
