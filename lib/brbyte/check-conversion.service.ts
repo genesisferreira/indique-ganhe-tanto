@@ -13,6 +13,13 @@ import {
   isBrbyteAutoCheckConversionEnabled,
   isBrbyteCreateInterestEnabled,
 } from "@/lib/brbyte/config"
+import {
+  buildCommercialConversionHistoryInsert,
+  buildCommercialRepairUpdate,
+  buildConvertedReferralUpdate,
+  classifyErpConversionCheck,
+  deriveCommercialStateFromErpConversion,
+} from "@/lib/brbyte/erp-conversion-commercial-sync"
 import { logBrbyteReferralHistory } from "@/lib/brbyte/referral-history"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import {
@@ -30,6 +37,9 @@ const NOT_CONVERTED_MESSAGE = "Ainda não convertido no Controllr"
 
 type ReferralCheckConversionRow = {
   id: string
+  status: string | null
+  pipeline_stage: string | null
+  won_at: string | null
   brbyte_id_interessado: string | null
   brbyte_client_pk: string | null
   brbyte_sync_status: string | null
@@ -44,7 +54,7 @@ type BrbyteLooseDb = {
           error: { message: string; code?: string } | null
         }>
       }
-    }
+    } & PromiseLike<{ error: { message: string; code?: string } | null }>
     update: (values: unknown) => {
       eq: (
         col: string,
@@ -154,6 +164,9 @@ async function loadReferralForCheckConversion(
     .select(
       `
       id,
+      status,
+      pipeline_stage,
+      won_at,
       brbyte_id_interessado,
       brbyte_client_pk,
       brbyte_sync_status
@@ -170,26 +183,34 @@ async function loadReferralForCheckConversion(
   return data
 }
 
-function validateReferralForCheck(row: ReferralCheckConversionRow): string | null {
-  const interestPk = row.brbyte_id_interessado?.trim()
-  if (!interestPk) {
-    return "Esta indicação ainda não possui Interessado vinculado no Controllr."
-  }
+function classifyReferralForCheck(row: ReferralCheckConversionRow) {
+  return classifyErpConversionCheck({
+    brbyteIdInteressado: row.brbyte_id_interessado,
+    brbyteClientPk: row.brbyte_client_pk,
+    brbyteSyncStatus: row.brbyte_sync_status,
+    currentStatus: row.status,
+    currentPipelineStage: row.pipeline_stage,
+    normalizeSyncStatus: normalizeBrbyteSyncStatus,
+  })
+}
 
-  if (row.brbyte_client_pk?.trim()) {
-    return "Esta indicação já possui cliente vinculado no Controllr."
-  }
+async function insertCommercialConversionHistory(input: {
+  referralId: string
+  actorUserId: string | null
+  commercial: ReturnType<typeof deriveCommercialStateFromErpConversion>
+  clientPk: string | null
+  syncRunId: string | null
+}): Promise<void> {
+  const row = buildCommercialConversionHistoryInsert(input)
+  if (!row) return
 
-  const syncStatus = normalizeBrbyteSyncStatus(row.brbyte_sync_status)
-  if (syncStatus === "converted") {
-    return "Interessado já consta como convertido no CRM."
+  const { error } = await getDb().from("referral_history").insert(row)
+  if (error) {
+    console.error(LOG_TAG, {
+      step: "referral_history_commercial",
+      message: error.message,
+    })
   }
-
-  if (syncStatus !== "created") {
-    return "A verificação só está disponível quando o status da integração é Interessado criado."
-  }
-
-  return null
 }
 
 function syncRunAuditMeta(input: {
@@ -222,44 +243,124 @@ async function persistReferralConversionFromCheck(
     syncRunId: string | null
     httpStatus: number | null
     syncedAtIso: string
+    actorUserId: string | null
+    currentStatus: string | null
+    currentPipelineStage: string | null
+    currentWonAt: string | null
   }
-): Promise<boolean> {
+): Promise<{ ok: boolean; commercialUpdated: boolean }> {
+  const commercial = deriveCommercialStateFromErpConversion({
+    erpConverted: true,
+    currentStatus: patch.currentStatus,
+    currentPipelineStage: patch.currentPipelineStage,
+  })
+
+  const updatePayload = buildConvertedReferralUpdate({
+    commercial,
+    clientPk: patch.clientPk,
+    resolution: patch.resolution,
+    payload: patch.payload,
+    syncRunId: patch.syncRunId,
+    httpStatus: patch.httpStatus,
+    syncedAtIso: patch.syncedAtIso,
+    listClientInterestEndpoint: BRBYTE_API_PATHS.listClientInterest,
+    currentWonAt: patch.currentWonAt,
+  })
+
   const { error } = await getDb()
     .from("referrals")
-    .update({
-      brbyte_client_pk: patch.clientPk,
-      brbyte_id_cliente: patch.clientPk,
-      brbyte_client_synced_at: patch.syncedAtIso,
-      brbyte_interessado_payload: {
-        action: "check_conversion",
-        endpoint: BRBYTE_API_PATHS.listClientInterest,
-        converted: true,
-        interest_pk: patch.resolution.interestPk,
-        client_pk: patch.resolution.clientPk,
-        plan_pk: patch.resolution.planPk,
-        address_pk: patch.resolution.addressPk,
-        email_pk: patch.resolution.emailPk,
-        ticket_pk: patch.resolution.ticketPk,
-        response: patch.payload,
-        result: patch.resolution.rawResult,
-        sync_run_id: patch.syncRunId,
-        checked_at: patch.syncedAtIso,
-      },
-      brbyte_sync_status: "converted",
-      brbyte_sync_error: null,
-      brbyte_last_sync_at: patch.syncedAtIso,
-      brbyte_last_error_at: null,
-      brbyte_last_http_status: patch.httpStatus,
-      brbyte_last_endpoint: BRBYTE_API_PATHS.listClientInterest,
-    })
+    .update(updatePayload)
     .eq("id", referralId)
 
   if (error) {
     console.error(LOG_TAG, { step: "persist_conversion", message: error.message })
-    return false
+    return { ok: false, commercialUpdated: false }
   }
 
-  return true
+  await insertCommercialConversionHistory({
+    referralId,
+    actorUserId: patch.actorUserId,
+    commercial,
+    clientPk: patch.clientPk,
+    syncRunId: patch.syncRunId,
+  })
+
+  return { ok: true, commercialUpdated: commercial.needsCommercialUpdate }
+}
+
+async function repairCommercialStateForConvertedReferral(input: {
+  row: ReferralCheckConversionRow
+  actorUserId: string | null
+  syncRunId: string | null
+}): Promise<{ ok: boolean; updated: boolean; message: string }> {
+  const commercial = deriveCommercialStateFromErpConversion({
+    erpConverted: true,
+    currentStatus: input.row.status,
+    currentPipelineStage: input.row.pipeline_stage,
+  })
+
+  const repairPayload = buildCommercialRepairUpdate({
+    commercial,
+    syncedAtIso: new Date().toISOString(),
+    currentWonAt: input.row.won_at,
+  })
+
+  if (!repairPayload) {
+    return {
+      ok: true,
+      updated: false,
+      message: "Estado comercial já alinhado à conversão Controllr.",
+    }
+  }
+
+  const { error } = await getDb()
+    .from("referrals")
+    .update(repairPayload)
+    .eq("id", input.row.id)
+
+  if (error) {
+    console.error(LOG_TAG, { step: "repair_commercial", message: error.message })
+    return {
+      ok: false,
+      updated: false,
+      message: `Falha ao alinhar status/pipeline após conversão ERP: ${error.message}`,
+    }
+  }
+
+  await insertCommercialConversionHistory({
+    referralId: input.row.id,
+    actorUserId: input.actorUserId,
+    commercial,
+    clientPk: input.row.brbyte_client_pk,
+    syncRunId: input.syncRunId,
+  })
+
+  await logBrbyteReferralHistory({
+    referralId: input.row.id,
+    phase: CHECK_CONVERSION_PHASE,
+    oldStatus: normalizeBrbyteSyncStatus(input.row.brbyte_sync_status),
+    newStatus: "converted",
+    message:
+      "Estado comercial alinhado à conversão Controllr (reparo idempotente).",
+    payload: {
+      action: "erp_conversion_commercial_repair",
+      old_status: commercial.previousStatus,
+      new_status: commercial.targetStatus,
+      old_pipeline_stage: commercial.previousPipelineStage,
+      new_pipeline_stage: commercial.targetPipelineStage,
+      brbyte_client_pk: input.row.brbyte_client_pk,
+      reward_created: false,
+      wallet_credited: false,
+    },
+    createdBy: input.actorUserId,
+  })
+
+  return {
+    ok: true,
+    updated: true,
+    message:
+      "Estado comercial sincronizado a partir da conversão já confirmada no Controllr.",
+  }
 }
 
 async function persistReferralCheckPending(
@@ -389,8 +490,9 @@ export async function checkBrbyteInterestConversionFromReferral(input: {
   }
 
   const interestPk = row.brbyte_id_interessado?.trim() ?? null
-  const validationError = validateReferralForCheck(row)
-  if (validationError) {
+  const gate = classifyReferralForCheck(row)
+
+  if (gate.kind === "invalid") {
     await finishSyncRun(syncRunId, {
       status: "skipped",
       phase: CHECK_CONVERSION_PHASE,
@@ -399,13 +501,13 @@ export async function checkBrbyteInterestConversionFromReferral(input: {
       skipped_records: 1,
       errors_count: 0,
       duration_ms: Date.now() - started,
-      error_summary: { message: validationError },
+      error_summary: { message: gate.message },
       meta: syncRunAuditMeta({
         referralId,
         endpoint: BRBYTE_API_PATHS.listClientInterest,
         success: false,
         converted: false,
-        error: validationError,
+        error: gate.message,
       }),
     })
     return {
@@ -415,9 +517,72 @@ export async function checkBrbyteInterestConversionFromReferral(input: {
       reason: "validation",
       referralId,
       syncRunId,
-      brbyteClientPk: null,
+      brbyteClientPk: row.brbyte_client_pk,
       brbyteIdInteressado: interestPk,
-      message: validationError,
+      message: gate.message,
+      durationMs: Date.now() - started,
+    }
+  }
+
+  if (gate.kind === "already_synced") {
+    await finishSyncRun(syncRunId, {
+      status: "skipped",
+      phase: CHECK_CONVERSION_PHASE,
+      api_reachable: null,
+      processed: 0,
+      skipped_records: 1,
+      duration_ms: Date.now() - started,
+      meta: syncRunAuditMeta({
+        referralId,
+        endpoint: BRBYTE_API_PATHS.listClientInterest,
+        success: true,
+        converted: true,
+      }),
+    })
+    return {
+      ok: true,
+      converted: true,
+      skipped: true,
+      reason: "already_converted",
+      referralId,
+      syncRunId,
+      brbyteClientPk: row.brbyte_client_pk,
+      brbyteIdInteressado: interestPk,
+      message:
+        "Conversão Controllr e estado comercial já sincronizados (idempotente).",
+      durationMs: Date.now() - started,
+    }
+  }
+
+  if (gate.kind === "repair_commercial") {
+    const repaired = await repairCommercialStateForConvertedReferral({
+      row,
+      actorUserId: input.actorUserId ?? null,
+      syncRunId,
+    })
+    await finishSyncRun(syncRunId, {
+      status: repaired.ok ? "ok" : "error",
+      phase: CHECK_CONVERSION_PHASE,
+      api_reachable: null,
+      processed: repaired.updated ? 1 : 0,
+      errors_count: repaired.ok ? 0 : 1,
+      duration_ms: Date.now() - started,
+      meta: syncRunAuditMeta({
+        referralId,
+        endpoint: BRBYTE_API_PATHS.listClientInterest,
+        success: repaired.ok,
+        converted: true,
+        error: repaired.ok ? undefined : repaired.message,
+      }),
+    })
+    return {
+      ok: repaired.ok,
+      converted: true,
+      referralId,
+      syncRunId,
+      brbyteClientPk: row.brbyte_client_pk,
+      brbyteIdInteressado: interestPk,
+      message: repaired.message,
       durationMs: Date.now() - started,
     }
   }
@@ -599,9 +764,13 @@ export async function checkBrbyteInterestConversionFromReferral(input: {
     syncRunId,
     httpStatus: lookup.httpStatus,
     syncedAtIso: nowIso,
+    actorUserId: input.actorUserId ?? null,
+    currentStatus: row.status,
+    currentPipelineStage: row.pipeline_stage,
+    currentWonAt: row.won_at,
   })
 
-  if (!persisted) {
+  if (!persisted.ok) {
     await finishSyncRun(syncRunId, {
       status: "partial",
       phase: CHECK_CONVERSION_PHASE,
