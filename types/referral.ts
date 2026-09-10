@@ -219,6 +219,7 @@ export type MarkFirstInvoicePaidErrorCode =
   | "reward_not_found"
   | "reward_not_pending"
   | "already_released"
+  | "not_reward_eligible"
   | "rpc_error"
   | "unknown"
 

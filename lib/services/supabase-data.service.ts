@@ -5592,6 +5592,7 @@ const MARK_FIRST_INVOICE_ERROR_CODES: MarkFirstInvoicePaidErrorCode[] = [
   "reward_not_found",
   "reward_not_pending",
   "already_released",
+  "not_reward_eligible",
   "rpc_error",
   "unknown",
 ]
