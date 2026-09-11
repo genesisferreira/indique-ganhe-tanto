@@ -141,6 +141,16 @@ export function authorizeOperationalSectorAccess(input: {
   }
 
   if (membership.ok) {
+    if (
+      input.action === "write" &&
+      (role === "admin_consulta" || role === "admin_financeiro")
+    ) {
+      return {
+        ok: false,
+        status: 403,
+        message: "Perfil com leitura somente.",
+      }
+    }
     return {
       ok: true,
       profileId: input.profileId,
@@ -182,4 +192,64 @@ export function authorizeOperationalSectorAccess(input: {
 
 export function membershipGrantsAdminRoute(_membershipSectorCode?: string | null): false {
   return false
+}
+
+export type OperationalCaseWriteInput = {
+  sectorCode: OperationalSectorCode
+  workType: string
+  workId: string
+  role?: UserRole | string | null
+  employeeId?: string | null
+  employeeStatus?: EmployeeStatus | string | null
+  membershipActive: boolean
+  membershipSectorCode?: string | null
+  activeAssignmentEmployeeId?: string | null
+}
+
+/**
+ * Escrita operacional: Admin Master bypassa ownership.
+ * Employee precisa de assignment ATIVA do work_type/work_id.
+ * Paused/inelegível: bloqueado. admin_consulta/financeiro: sem escrita.
+ */
+export function requireOperationalCaseWriteAccess(
+  input: OperationalCaseWriteInput
+): { ok: true; kind: "member" | "admin_master" } | { ok: false; status: 403; message: string } {
+  const role = input.role as UserRole | null
+  if (isAdminMasterRole(role)) {
+    return { ok: true, kind: "admin_master" }
+  }
+  if (role === "admin_consulta" || role === "admin_financeiro") {
+    return {
+      ok: false,
+      status: 403,
+      message: "Perfil com leitura somente.",
+    }
+  }
+
+  const membership = requireActiveSectorMembership({
+    sectorCode: input.sectorCode,
+    employeeId: input.employeeId,
+    employeeStatus: input.employeeStatus,
+    membershipActive: input.membershipActive,
+    membershipSectorCode: input.membershipSectorCode,
+  })
+  if (!membership.ok) {
+    return {
+      ok: false,
+      status: 403,
+      message: `É necessário employee ativo com membership em ${input.sectorCode}.`,
+    }
+  }
+
+  const ownerId = input.activeAssignmentEmployeeId?.trim() ?? ""
+  const employeeId = input.employeeId?.trim() ?? ""
+  if (!ownerId || !employeeId || ownerId !== employeeId) {
+    return {
+      ok: false,
+      status: 403,
+      message: "Caso não atribuído a este funcionário.",
+    }
+  }
+
+  return { ok: true, kind: "member" }
 }

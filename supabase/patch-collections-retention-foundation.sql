@@ -447,6 +447,8 @@ declare
   v_assign jsonb;
   v_release jsonb;
   v_created boolean := false;
+  v_assign_code text;
+  v_fail_code text;
 begin
   if p_collection_case_id is null or p_actor_profile_id is null then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
@@ -463,6 +465,79 @@ begin
 
   if v_case.status in ('paid', 'closed') then
     return jsonb_build_object('ok', false, 'code', 'invalid_status', 'status', v_case.status);
+  end if;
+
+  -- Retry após sucesso: collection já escalada. Não desfaz. Assign deve ser idempotente.
+  if v_case.status = 'escalated_retention' then
+    select * into v_retention
+    from public.retention_cases
+    where linked_collection_case_id = v_case.id
+    for update;
+
+    if not found then
+      return jsonb_build_object('ok', false, 'code', 'exception', 'message', 'escalated without retention_case');
+    end if;
+
+    v_assign := public.assign_sector_work_item(
+      'retention',
+      'retention_case',
+      v_retention.id,
+      p_actor_profile_id,
+      jsonb_build_object('source', 'collections_escalation', 'collection_case_id', v_case.id)
+    );
+    v_assign_code := coalesce(v_assign->>'code', '');
+
+    if coalesce(v_assign->>'ok', 'false') is distinct from 'true'
+       or v_assign_code not in ('assigned', 'already_assigned') then
+      v_fail_code := case
+        when v_assign_code = 'no_employee_available' then 'no_retention_employee_available'
+        when v_assign_code = '' then 'retention_assign_failed'
+        else v_assign_code
+      end;
+      return jsonb_build_object(
+        'ok', false,
+        'code', v_fail_code,
+        'collection_case_id', v_case.id,
+        'retention_case_id', v_retention.id,
+        'assign_code', v_assign_code
+      );
+    end if;
+
+    if v_assign->>'assignment_id' is not null then
+      update public.retention_cases
+      set sector_assignment_id = (v_assign->>'assignment_id')::uuid
+      where id = v_retention.id;
+    end if;
+
+    select * into v_collections_asg
+    from public.sector_work_assignments
+    where work_type = 'collection_case'
+      and work_id = v_case.id
+      and status = 'active'
+    for update;
+
+    if found then
+      v_release := public.release_sector_assignment(
+        v_collections_asg.id,
+        'completed',
+        p_actor_profile_id,
+        'escalated_retention'
+      );
+      update public.collection_cases
+      set sector_assignment_id = null
+      where id = v_case.id;
+    end if;
+
+    return jsonb_build_object(
+      'ok', true,
+      'code', 'already_escalated',
+      'collection_case_id', v_case.id,
+      'retention_case_id', v_retention.id,
+      'assignment_id', v_assign->>'assignment_id',
+      'employee_id', v_assign->>'employee_id',
+      'assign_code', v_assign_code,
+      'release_code', v_release->>'code'
+    );
   end if;
 
   insert into public.retention_cases (
@@ -504,6 +579,30 @@ begin
     return jsonb_build_object('ok', false, 'code', 'exception', 'message', 'retention_case missing after upsert');
   end if;
 
+  -- Assign Retention ANTES de mutar Cobrança. Falha ⇒ RAISE ⇒ rollback (não persiste retention).
+  v_assign := public.assign_sector_work_item(
+    'retention',
+    'retention_case',
+    v_retention.id,
+    p_actor_profile_id,
+    jsonb_build_object(
+      'source', 'collections_escalation',
+      'collection_case_id', v_case.id
+    )
+  );
+  v_assign_code := coalesce(v_assign->>'code', '');
+
+  if coalesce(v_assign->>'ok', 'false') is distinct from 'true'
+     or v_assign_code not in ('assigned', 'already_assigned') then
+    v_fail_code := case
+      when v_assign_code = 'no_employee_available' then 'no_retention_employee_available'
+      when v_assign_code = '' then 'retention_assign_failed'
+      else v_assign_code
+    end;
+    raise exception '%', v_fail_code
+      using errcode = 'P0002';
+  end if;
+
   if v_created then
     insert into public.retention_case_events (
       case_id, event_type, actor_profile_id, old_value, new_value, metadata
@@ -518,25 +617,40 @@ begin
     );
   end if;
 
-  if v_case.status is distinct from 'escalated_retention' then
-    update public.collection_cases
-    set status = 'escalated_retention',
-        closed_at = coalesce(closed_at, v_now),
-        updated_at = v_now
-    where id = v_case.id;
-
-    insert into public.collection_case_events (
+  if v_assign_code = 'assigned' then
+    insert into public.retention_case_events (
       case_id, event_type, actor_profile_id, old_value, new_value, metadata
     )
     values (
-      v_case.id,
-      'escalated',
+      v_retention.id,
+      'assigned',
       p_actor_profile_id,
-      jsonb_build_object('status', v_case.status),
-      jsonb_build_object('status', 'escalated_retention', 'retention_case_id', v_retention.id),
-      jsonb_build_object('reason', p_reason)
+      null,
+      jsonb_build_object(
+        'assignment_id', v_assign->>'assignment_id',
+        'employee_id', v_assign->>'employee_id'
+      ),
+      jsonb_build_object('engine_code', v_assign_code)
     );
   end if;
+
+  update public.collection_cases
+  set status = 'escalated_retention',
+      closed_at = coalesce(closed_at, v_now),
+      updated_at = v_now
+  where id = v_case.id;
+
+  insert into public.collection_case_events (
+    case_id, event_type, actor_profile_id, old_value, new_value, metadata
+  )
+  values (
+    v_case.id,
+    'escalated',
+    p_actor_profile_id,
+    jsonb_build_object('status', v_case.status),
+    jsonb_build_object('status', 'escalated_retention', 'retention_case_id', v_retention.id),
+    jsonb_build_object('reason', p_reason)
+  );
 
   select * into v_collections_asg
   from public.sector_work_assignments
@@ -557,61 +671,34 @@ begin
     where id = v_case.id;
   end if;
 
-  v_assign := public.assign_sector_work_item(
-    'retention',
-    'retention_case',
-    v_retention.id,
-    p_actor_profile_id,
-    jsonb_build_object(
-      'source', 'collections_escalation',
-      'collection_case_id', v_case.id
-    )
-  );
-
-  if coalesce(v_assign->>'ok', 'false') = 'true'
-     and v_assign->>'assignment_id' is not null then
+  if v_assign->>'assignment_id' is not null then
     update public.retention_cases
     set sector_assignment_id = (v_assign->>'assignment_id')::uuid
     where id = v_retention.id;
-
-    if v_created or coalesce(v_assign->>'code', '') = 'assigned' then
-      insert into public.retention_case_events (
-        case_id, event_type, actor_profile_id, old_value, new_value, metadata
-      )
-      values (
-        v_retention.id,
-        'assigned',
-        p_actor_profile_id,
-        null,
-        jsonb_build_object(
-          'assignment_id', v_assign->>'assignment_id',
-          'employee_id', v_assign->>'employee_id'
-        ),
-        jsonb_build_object('engine_code', v_assign->>'code')
-      );
-    end if;
   end if;
 
   return jsonb_build_object(
     'ok', true,
-    'code', case when v_created then 'escalated' else 'already_escalated' end,
+    'code', 'escalated',
     'collection_case_id', v_case.id,
     'retention_case_id', v_retention.id,
     'assignment_id', v_assign->>'assignment_id',
     'employee_id', v_assign->>'employee_id',
-    'assign_code', v_assign->>'code',
+    'assign_code', v_assign_code,
     'release_code', v_release->>'code'
   );
 exception
-  when unique_violation then
-    select * into v_retention
-    from public.retention_cases
-    where linked_collection_case_id = p_collection_case_id;
+  when sqlstate 'P0002' then
     return jsonb_build_object(
-      'ok', true,
-      'code', 'already_escalated',
-      'collection_case_id', p_collection_case_id,
-      'retention_case_id', v_retention.id
+      'ok', false,
+      'code', sqlerrm,
+      'collection_case_id', p_collection_case_id
+    );
+  when unique_violation then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'unique_violation',
+      'collection_case_id', p_collection_case_id
     );
   when others then
     return jsonb_build_object('ok', false, 'code', 'exception', 'message', sqlerrm);
@@ -619,7 +706,7 @@ end;
 $$;
 
 comment on function public.escalate_collection_to_retention(uuid, uuid, text) is
-  'Escala Cobrança → Retenção com lock. Idempotente. Chama o motor 2.2; não duplica round-robin. actor é auditoria, não autorização. Sprint 3.1.';
+  'Escala Cobrança → Retenção. Assign retention (assigned/already_assigned) ANTES de mutar/release Cobrança. Falha dá rollback (P0002). actor é auditoria, não autorização. Sprint 3.1B.';
 
 revoke all on function public.escalate_collection_to_retention(uuid, uuid, text) from public;
 revoke all on function public.escalate_collection_to_retention(uuid, uuid, text) from anon;

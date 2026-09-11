@@ -4,10 +4,12 @@ import { createClient } from "@/lib/supabase/server"
 import { awaitQuery, getOpsDb } from "@/lib/collections/db"
 import {
   authorizeOperationalSectorAccess,
+  requireOperationalCaseWriteAccess,
   type OperationalSectorAction,
   type OperationalSectorCode,
   type SectorMembershipAuthResult,
 } from "@/lib/auth/sector-membership"
+import { findActiveAssignment } from "@/lib/collections/cases.service"
 import type { UserRole } from "@/types/user"
 
 export type OperationalActorContext = {
@@ -122,4 +124,39 @@ export async function authorizeOperationalRequest(input: {
       membershipSectorCode: membershipForSector ? input.sectorCode : context.membershipSectorCode,
     },
   }
+}
+
+export async function authorizeOperationalCaseWrite(input: {
+  sectorCode: OperationalSectorCode
+  workType: string
+  workId: string
+}): Promise<SectorMembershipAuthResult & { context?: OperationalActorContext }> {
+  const auth = await authorizeOperationalRequest({
+    sectorCode: input.sectorCode,
+    action: "write",
+  })
+  if (!auth.ok) return auth
+
+  const active = await findActiveAssignment({
+    workType: input.workType,
+    workId: input.workId,
+  })
+
+  const ownership = requireOperationalCaseWriteAccess({
+    sectorCode: input.sectorCode,
+    workType: input.workType,
+    workId: input.workId,
+    role: auth.role,
+    employeeId: auth.context?.employeeId ?? auth.employeeId,
+    employeeStatus: auth.context?.employeeStatus ?? null,
+    membershipActive: auth.context?.membershipActive ?? auth.membershipActive,
+    membershipSectorCode: input.sectorCode,
+    activeAssignmentEmployeeId: active?.employeeId ?? null,
+  })
+
+  if (!ownership.ok) {
+    return { ok: false, status: ownership.status, message: ownership.message }
+  }
+
+  return auth
 }

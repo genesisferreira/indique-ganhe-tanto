@@ -103,6 +103,22 @@ describe("patch collections retention foundation", () => {
     assert.match(norm, /assign_sector_work_item\(/)
   })
 
+  it("3.1B assign retention antes de mutar Cobrança; falha dá rollback", () => {
+    const fnIdx = patch.indexOf("create or replace function public.escalate_collection_to_retention")
+    const fn = patch.slice(fnIdx)
+    const firstAttemptMarker = "Assign Retention ANTES de mutar Cobrança"
+    const firstAttemptIdx = fn.indexOf(firstAttemptMarker)
+    assert.ok(firstAttemptIdx > 0)
+    const firstAttempt = fn.slice(firstAttemptIdx)
+    const assignIdx = firstAttempt.indexOf("assign_sector_work_item")
+    const mutateIdx = firstAttempt.indexOf("set status = 'escalated_retention'")
+    assert.ok(assignIdx >= 0 && mutateIdx > assignIdx)
+    assert.match(fn, /errcode = 'P0002'/)
+    assert.match(fn, /no_retention_employee_available/)
+    assert.match(fn, /v_assign_code not in \('assigned', 'already_assigned'\)/)
+    assert.equal(/'ok', true[\s\S]{0,80}'already_escalated'[\s\S]{0,200}unique_violation/.test(fn), false)
+  })
+
   it("RLS sem write authenticated; RPC só service_role", () => {
     assert.match(norm, /alter table public\.collection_cases enable row level security/)
     assert.match(norm, /revoke insert, update, delete, truncate on table public\.collection_cases from authenticated/)
@@ -136,6 +152,34 @@ describe("patch collections retention foundation", () => {
     assert.equal(/collections/.test(vercel), false)
     assert.equal(/cobranca/.test(vercel), false)
     assert.equal(/retencao/.test(vercel), false)
+  })
+})
+
+describe("3.1B mutações exigem ownership ativo", () => {
+  const mutationRoutes = [
+    "app/api/cobranca/cases/[id]/contact/route.ts",
+    "app/api/cobranca/cases/[id]/status/route.ts",
+    "app/api/cobranca/cases/[id]/escalate/route.ts",
+    "app/api/cobranca/cases/[id]/transfer/route.ts",
+    "app/api/cobranca/cases/[id]/close/route.ts",
+    "app/api/retencao/cases/[id]/contact/route.ts",
+    "app/api/retencao/cases/[id]/status/route.ts",
+    "app/api/retencao/cases/[id]/transfer/route.ts",
+    "app/api/retencao/cases/[id]/close/route.ts",
+  ]
+
+  it("POSTs operacionais usam authorizeOperationalCaseWrite", () => {
+    for (const rel of mutationRoutes) {
+      const src = readFileSync(join(repoRoot, rel), "utf8")
+      assert.match(src, /authorizeOperationalCaseWrite/, rel)
+      assert.equal(/authorizeOperationalRequest\(/.test(src), false, rel)
+    }
+  })
+
+  it("escalate.ts não mascara falha com already_escalated", () => {
+    const src = readFileSync(join(repoRoot, "lib/collections/escalate.ts"), "utf8")
+    assert.equal(src.includes("parsed.ok || isIdempotentEscalation"), false)
+    assert.match(src, /ok:\s*parsed\.ok === true/)
   })
 })
 

@@ -33,7 +33,7 @@ export async function escalateCollectionToRetention(input: {
   const parsed = parseSectorEngineResult(data)
   const obj = data && typeof data === "object" ? (data as Record<string, unknown>) : null
   return {
-    ok: parsed.ok || isIdempotentEscalation(parsed.code),
+    ok: parsed.ok === true,
     code: parsed.code,
     collectionCaseId:
       typeof obj?.collection_case_id === "string"

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
-import { authorizeOperationalRequest } from "@/lib/collections/actor"
+import { authorizeOperationalCaseWrite } from "@/lib/collections/actor"
 import { transferCollectionCase } from "@/lib/collections/cases.service"
 import { jsonError, stripBrowserActor } from "@/lib/collections/http"
-import { COLLECTION_SECTOR_CODE } from "@/types/collections"
+import { COLLECTION_SECTOR_CODE, COLLECTION_WORK_TYPE } from "@/types/collections"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -11,9 +11,11 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = await authorizeOperationalRequest({
+  const { id } = await context.params
+  const auth = await authorizeOperationalCaseWrite({
     sectorCode: COLLECTION_SECTOR_CODE,
-    action: "write",
+    workType: COLLECTION_WORK_TYPE,
+    workId: id,
   })
   if (!auth.ok) return jsonError(auth.status, auth.message)
 
@@ -21,7 +23,6 @@ export async function POST(
   const toEmployeeId = String(body.toEmployeeId ?? body.to_employee_id ?? "").trim()
   if (!toEmployeeId) return jsonError(400, "Informe o funcionário de destino.")
 
-  const { id } = await context.params
   const result = await transferCollectionCase({
     caseId: id,
     toEmployeeId,

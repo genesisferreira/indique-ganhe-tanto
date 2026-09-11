@@ -97,6 +97,38 @@ describe("R) browser não controla actor", () => {
   })
 })
 
+describe("N/O) admin_consulta e admin_financeiro não escrevem no setor", () => {
+  it("consulta write 403 mesmo com membership", () => {
+    const auth = authorizeOperationalSectorAccess({
+      ...memberBase,
+      role: "admin_consulta",
+      action: "write",
+    })
+    assert.equal(auth.ok, false)
+  })
+
+  it("financeiro write 403 mesmo com membership", () => {
+    const auth = authorizeOperationalSectorAccess({
+      ...memberBase,
+      role: "admin_financeiro",
+      action: "write",
+    })
+    assert.equal(auth.ok, false)
+  })
+
+  it("consulta continua lendo", () => {
+    const auth = authorizeOperationalSectorAccess({
+      ...memberBase,
+      role: "admin_consulta",
+      membershipActive: false,
+      employeeId: null,
+      employeeStatus: null,
+      action: "read",
+    })
+    assert.equal(auth.ok, true)
+  })
+})
+
 describe("indicador não acessa módulos", () => {
   it("/cobranca e /retencao bloqueados", () => {
     assert.equal(evaluateRouteAccessForRole("/cobranca", "indicador").allowed, false)
