@@ -38,4 +38,11 @@ describe("3.1E-B migration versionada e não financeira", () => {
     assert.equal(sql.includes("salary"), false)
     assert.equal(sql.includes("drop table"), false)
   })
+
+  it("existence checks de constraint são table-scoped em public.employees", () => {
+    assert.match(sql, /conname = 'employees_manager_employee_id_fkey'\s+and conrelid = 'public\.employees'::regclass/)
+    assert.match(sql, /conname = 'employees_manager_not_self_chk'\s+and conrelid = 'public\.employees'::regclass/)
+    assert.match(sql, /conname = 'employees_job_title_len_chk'\s+and conrelid = 'public\.employees'::regclass/)
+    assert.equal((sql.match(/where conname =/g) ?? []).length, 3)
+  })
 })

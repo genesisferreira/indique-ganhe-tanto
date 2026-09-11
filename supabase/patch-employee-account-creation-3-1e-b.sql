@@ -23,6 +23,7 @@ begin
     select 1
     from pg_constraint
     where conname = 'employees_manager_employee_id_fkey'
+      and conrelid = 'public.employees'::regclass
   ) then
     alter table public.employees
       add constraint employees_manager_employee_id_fkey
@@ -38,6 +39,7 @@ begin
     select 1
     from pg_constraint
     where conname = 'employees_manager_not_self_chk'
+      and conrelid = 'public.employees'::regclass
   ) then
     alter table public.employees
       add constraint employees_manager_not_self_chk
@@ -51,6 +53,7 @@ begin
     select 1
     from pg_constraint
     where conname = 'employees_job_title_len_chk'
+      and conrelid = 'public.employees'::regclass
   ) then
     alter table public.employees
       add constraint employees_job_title_len_chk
