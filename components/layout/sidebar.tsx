@@ -59,6 +59,7 @@ import { useAuth } from "@/components/auth/auth-provider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import type { UserRole } from "@/types/user"
 import { shouldShowSidebarHref } from "@/lib/employees/admin-policy"
+import { CollapsibleNavGroups } from "@/components/layout/collapsible-nav-groups"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -491,77 +492,70 @@ export function Sidebar({
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-3 py-4 space-y-6 overflow-y-auto">
-          {navigation.map((group) => (
-            <div key={group.title}>
-              <h2 className="px-3 mb-2 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
-                {group.title}
-              </h2>
-              <ul className="space-y-1">
-                {group.items.map((item) => {
-                  const isActive = pathname === item.href
-                  let badgeCount: number | undefined
-                  if (item.href === "/notificacoes" && unreadNotifications > 0) {
-                    badgeCount = capBadge(unreadNotifications)
-                  } else if (
-                    item.href === "/admin/pagamentos-pendentes" &&
-                    pendingPixWithdrawals !== null &&
-                    pendingPixWithdrawals > 0
-                  ) {
-                    badgeCount = capBadge(pendingPixWithdrawals)
-                  } else if (
-                    item.href === "/admin/indicacoes" &&
-                    adminReferralsCount !== null &&
-                    adminReferralsCount > 0
-                  ) {
-                    badgeCount = capBadge(adminReferralsCount)
-                  } else if (
-                    item.href === "/admin/indicadores" &&
-                    adminIndicadoresCount !== null &&
-                    adminIndicadoresCount > 0
-                  ) {
-                    badgeCount = capBadge(adminIndicadoresCount)
-                  } else if (
-                    item.href === "/comercial/leads" &&
-                    comercialPipelineCount !== null &&
-                    comercialPipelineCount > 0
-                  ) {
-                    badgeCount = capBadge(comercialPipelineCount)
-                  } else if (
-                    item.href === "/comercial/retornos" &&
-                    comercialReturnsCount !== null &&
-                    comercialReturnsCount > 0
-                  ) {
-                    badgeCount = capBadge(comercialReturnsCount)
-                  } else if (isDataProviderMock() && item.badge) {
-                    badgeCount = item.badge
-                  }
-                  return (
-                    <li key={item.href}>
-                      <Link
-                        href={item.href}
-                        onClick={() => setIsOpen(false)}
-                        className={cn(
-                          "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                          isActive
-                            ? "bg-sidebar-accent text-sidebar-primary"
-                            : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                        )}
-                      >
-                        <item.icon className="w-5 h-5" />
-                        <span className="flex-1">{item.label}</span>
-                        {badgeCount ? (
-                          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-xs font-semibold text-primary-foreground">
-                            {badgeCount}
-                          </span>
-                        ) : null}
-                      </Link>
-                    </li>
-                  )
-                })}
-              </ul>
-            </div>
-          ))}
+        <nav className="flex-1 px-3 py-4 overflow-y-auto">
+          <CollapsibleNavGroups
+            groups={navigation}
+            pathname={pathname ?? ""}
+            persistenceKey={variant}
+            renderItem={(item, { isActive }) => {
+              let badgeCount: number | undefined
+              if (item.href === "/notificacoes" && unreadNotifications > 0) {
+                badgeCount = capBadge(unreadNotifications)
+              } else if (
+                item.href === "/admin/pagamentos-pendentes" &&
+                pendingPixWithdrawals !== null &&
+                pendingPixWithdrawals > 0
+              ) {
+                badgeCount = capBadge(pendingPixWithdrawals)
+              } else if (
+                item.href === "/admin/indicacoes" &&
+                adminReferralsCount !== null &&
+                adminReferralsCount > 0
+              ) {
+                badgeCount = capBadge(adminReferralsCount)
+              } else if (
+                item.href === "/admin/indicadores" &&
+                adminIndicadoresCount !== null &&
+                adminIndicadoresCount > 0
+              ) {
+                badgeCount = capBadge(adminIndicadoresCount)
+              } else if (
+                item.href === "/comercial/leads" &&
+                comercialPipelineCount !== null &&
+                comercialPipelineCount > 0
+              ) {
+                badgeCount = capBadge(comercialPipelineCount)
+              } else if (
+                item.href === "/comercial/retornos" &&
+                comercialReturnsCount !== null &&
+                comercialReturnsCount > 0
+              ) {
+                badgeCount = capBadge(comercialReturnsCount)
+              } else if (isDataProviderMock() && item.badge) {
+                badgeCount = item.badge
+              }
+              return (
+                <Link
+                  href={item.href}
+                  onClick={() => setIsOpen(false)}
+                  className={cn(
+                    "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-sidebar-accent text-sidebar-primary"
+                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  )}
+                >
+                  <item.icon className="w-5 h-5" />
+                  <span className="flex-1">{item.label}</span>
+                  {badgeCount ? (
+                    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-xs font-semibold text-primary-foreground">
+                      {badgeCount}
+                    </span>
+                  ) : null}
+                </Link>
+              )
+            }}
+          />
         </nav>
 
         {/* User Menu */}
