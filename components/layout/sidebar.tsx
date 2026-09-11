@@ -32,6 +32,8 @@ import {
   Cable,
   PhoneCall,
   Handshake,
+  UserCog,
+  Layers,
 } from "lucide-react"
 import { TantoBrand } from "@/components/branding/tanto-brand"
 import { Button } from "@/components/ui/button"
@@ -56,6 +58,7 @@ import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { useAuth } from "@/components/auth/auth-provider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import type { UserRole } from "@/types/user"
+import { shouldShowSidebarHref } from "@/lib/employees/admin-policy"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -110,23 +113,28 @@ const indicadorNav: NavGroup[] = [
 
 const comercialNav: NavGroup[] = [
   {
-    title: "Principal",
+    title: "Visão geral",
     items: [
       { label: "Dashboard", href: "/comercial", icon: Home },
       { label: "Notificações", href: "/notificacoes", icon: Bell },
+    ],
+  },
+  {
+    title: "Comercial",
+    items: [
       { label: "Nova indicação", href: "/comercial/nova-indicacao", icon: UserPlus },
       { label: "Meus Leads", href: "/comercial/leads", icon: Users },
       { label: "Pipeline", href: "/comercial/pipeline", icon: LayoutGrid },
       { label: "Retornos Agendados", href: "/comercial/retornos", icon: Clock },
-      { label: "Cobrança", href: "/cobranca", icon: PhoneCall },
-      { label: "Retenção", href: "/retencao", icon: Handshake },
+      { label: "Atendimentos", href: "/comercial/historico", icon: History },
+      { label: "Meu Desempenho", href: "/comercial/desempenho", icon: BarChart3 },
     ],
   },
   {
-    title: "Histórico",
+    title: "Operação",
     items: [
-      { label: "Atendimentos", href: "/comercial/historico", icon: History },
-      { label: "Meu Desempenho", href: "/comercial/desempenho", icon: BarChart3 },
+      { label: "Cobrança", href: "/cobranca", icon: PhoneCall },
+      { label: "Retenção", href: "/retencao", icon: Handshake },
     ],
   },
   {
@@ -140,13 +148,24 @@ const comercialNav: NavGroup[] = [
 
 const adminNav: NavGroup[] = [
   {
-    title: "Principal",
+    title: "Visão geral",
     items: [
       { label: "Dashboard", href: "/admin", icon: Home },
       { label: "Notificações", href: "/notificacoes", icon: Bell },
+    ],
+  },
+  {
+    title: "Comercial",
+    items: [
       { label: "Indicações", href: "/admin/indicacoes", icon: Users },
       { label: "Pipeline", href: "/admin/pipeline", icon: LayoutGrid },
       { label: "Indicadores", href: "/admin/indicadores", icon: UserPlus },
+      { label: "Comerciais", href: "/admin/comerciais", icon: Building2 },
+    ],
+  },
+  {
+    title: "Operação",
+    items: [
       { label: "Cobrança", href: "/cobranca", icon: PhoneCall },
       { label: "Retenção", href: "/retencao", icon: Handshake },
     ],
@@ -154,9 +173,9 @@ const adminNav: NavGroup[] = [
   {
     title: "Equipe",
     items: [
-      { label: "Comerciais", href: "/admin/comerciais", icon: Building2 },
+      { label: "Funcionários", href: "/admin/funcionarios", icon: UserCog },
       { label: "Administradores", href: "/admin/admins", icon: Shield },
-      { label: "Planos", href: "/admin/planos", icon: Zap },
+      { label: "Setores", href: "/admin/setores", icon: Layers },
     ],
   },
   {
@@ -164,8 +183,16 @@ const adminNav: NavGroup[] = [
     items: [
       { label: "Recompensas", href: "/admin/financeiro", icon: Wallet },
       { label: "Pagamentos Pendentes", href: "/admin/pagamentos-pendentes", icon: CreditCard },
-      { label: "Histórico Pagamentos", href: "/admin/historico-pagamentos", icon: History },
+      { label: "Histórico de Pagamentos", href: "/admin/historico-pagamentos", icon: History },
       { label: "Upload Comprovante", href: "/admin/upload-comprovante", icon: Upload },
+    ],
+  },
+  {
+    title: "Gestão",
+    items: [
+      { label: "Planos", href: "/admin/planos", icon: Zap },
+      { label: "Relatórios", href: "/admin/relatorios", icon: BarChart3 },
+      { label: "Auditoria", href: "/admin/auditoria", icon: FileText },
     ],
   },
   {
@@ -179,12 +206,10 @@ const adminNav: NavGroup[] = [
     ],
   },
   {
-    title: "Relatórios",
+    title: "Configurações",
     items: [
-      { label: "Relatórios", href: "/admin/relatorios", icon: BarChart3 },
-      { label: "Auditoria", href: "/admin/auditoria", icon: FileText },
       { label: "Configurações", href: "/admin/configuracoes", icon: Settings },
-      { label: "Cobrança (regras)", href: "/admin/configuracoes/cobranca", icon: PhoneCall },
+      { label: "Cobrança", href: "/admin/configuracoes/cobranca", icon: PhoneCall },
     ],
   },
 ]
@@ -195,21 +220,6 @@ interface SidebarProps {
   userRole: string
   /** Role do perfil para ocultar itens sensíveis (ex.: admin consulta). */
   policyRole?: UserRole | null
-}
-
-/** Rotas exclusivas de ação financeira (não exibidas para admin_consulta). */
-const ADMIN_FINANCE_ACTION_NAV_HREFS = new Set([
-  "/admin/pagamentos-pendentes",
-  "/admin/upload-comprovante",
-])
-
-function filterAdminNavForConsulta(nav: NavGroup[]): NavGroup[] {
-  return nav.map((group) => ({
-    ...group,
-    items: group.items.filter(
-      (item) => !ADMIN_FINANCE_ACTION_NAV_HREFS.has(item.href)
-    ),
-  }))
 }
 
 /** Nova indicação assistida: só comercial e admin_master (não admin_financeiro). */
@@ -255,12 +265,35 @@ export function Sidebar({
     null
   )
   const [badgeReloadTick, setBadgeReloadTick] = useState(0)
+  const [membershipCodes, setMembershipCodes] = useState<string[]>([])
 
   useEffect(() => {
     if (notifCtx) {
       setUnreadNotifications(notifCtx.unreadCount)
     }
   }, [notifCtx?.unreadCount])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      if (isSidebarDataProviderMock()) {
+        if (!cancelled) {
+          setMembershipCodes(
+            variant === "comercial" ? ["commercial", "collections", "retention"] : []
+          )
+        }
+        return
+      }
+      const res = await fetch("/api/me/sector-memberships", { cache: "no-store" })
+      const json = await res.json().catch(() => null)
+      if (!cancelled && res.ok && json?.ok) {
+        setMembershipCodes(Array.isArray(json.sectorCodes) ? json.sectorCodes : [])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [variant, pathname])
 
   useEffect(() => {
     let cancelled = false
@@ -386,11 +419,20 @@ export function Sidebar({
         : variant === "comercial"
           ? filterComercialAssistedNav(comercialNav, policyRole)
           : adminNav
-    if (variant === "admin" && policyRole === "admin_consulta") {
-      return filterAdminNavForConsulta(base)
-    }
     return base
-  }, [variant, policyRole])
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) =>
+          shouldShowSidebarHref({
+            href: item.href,
+            variant,
+            role: policyRole,
+            membershipCodes,
+          })
+        ),
+      }))
+      .filter((group) => group.items.length > 0)
+  }, [variant, policyRole, membershipCodes])
 
   const initials = userName
     .split(" ")
