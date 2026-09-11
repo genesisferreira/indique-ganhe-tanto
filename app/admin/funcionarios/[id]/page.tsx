@@ -5,6 +5,7 @@ import Link from "next/link"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/ui/page-header"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -43,8 +44,20 @@ type EmployeeDetail = {
   name: string
   email: string
   phone: string | null
+  cpf: string | null
   status: EmployeeStatus
   notes: string | null
+  jobTitle: string | null
+  birthDate: string | null
+  managerEmployeeId: string | null
+  managerName: string | null
+  account: {
+    role: string
+    isActive: boolean
+    mustChangePassword: boolean
+    loginPath: "/login"
+    statusLabel: string
+  }
   memberships: Membership[]
   events: Array<{
     id: string
@@ -61,6 +74,7 @@ type EmployeeDetail = {
 
 const EVENT_LABEL: Record<string, string> = {
   employee_created: "Funcionário criado",
+  employee_hr_updated: "Dados organizacionais atualizados",
   status_changed: "Status alterado",
   sector_added: "Setor adicionado",
   sector_removed: "Setor desativado",
@@ -79,12 +93,17 @@ export default function FuncionarioDetailPage({
   const [canWrite, setCanWrite] = useState(false)
   const [status, setStatus] = useState<EmployeeStatus>("active")
   const [notes, setNotes] = useState("")
+  const [jobTitle, setJobTitle] = useState("")
+  const [birthDate, setBirthDate] = useState("")
+  const [managerEmployeeId, setManagerEmployeeId] = useState("")
+  const [managers, setManagers] = useState<Array<{ id: string; name: string }>>([])
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
-    const [empRes, sectorRes] = await Promise.all([
+    const [empRes, sectorRes, listRes] = await Promise.all([
       fetch(`/api/admin/employees/${id}`, { cache: "no-store" }),
       fetch("/api/admin/sectors", { cache: "no-store" }),
+      fetch("/api/admin/employees", { cache: "no-store" }),
     ])
     const empJson = await empRes.json().catch(() => null)
     const sectorJson = await sectorRes.json().catch(() => null)
@@ -96,7 +115,16 @@ export default function FuncionarioDetailPage({
     setCanWrite(Boolean(empJson.canWrite))
     setStatus(empJson.employee.status)
     setNotes(empJson.employee.notes ?? "")
+    setJobTitle(empJson.employee.jobTitle ?? "")
+    setBirthDate(empJson.employee.birthDate ?? "")
+    setManagerEmployeeId(empJson.employee.managerEmployeeId ?? "")
     if (sectorRes.ok && sectorJson?.ok) setSectors(sectorJson.items ?? [])
+    const listJson = await listRes.json().catch(() => null)
+    if (listRes.ok && listJson?.ok) {
+      setManagers(
+        ((listJson.items ?? []) as Array<{ id: string; name: string }>).filter((item) => item.id !== id)
+      )
+    }
   }, [id])
 
   useEffect(() => {
@@ -108,7 +136,13 @@ export default function FuncionarioDetailPage({
     const res = await fetch(`/api/admin/employees/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status, notes }),
+      body: JSON.stringify({
+        status,
+        notes,
+        jobTitle,
+        birthDate: birthDate || null,
+        managerEmployeeId: managerEmployeeId || null,
+      }),
     })
     const json = await res.json().catch(() => null)
     setBusy(false)
@@ -160,7 +194,27 @@ export default function FuncionarioDetailPage({
         <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
           <p><span className="text-muted-foreground">Nome:</span> {employee.name}</p>
           <p><span className="text-muted-foreground">E-mail:</span> {employee.email}</p>
+          <p><span className="text-muted-foreground">CPF:</span> {employee.cpf || "—"}</p>
           <p><span className="text-muted-foreground">Telefone:</span> {employee.phone || "—"}</p>
+          <p><span className="text-muted-foreground">Nascimento:</span> {employee.birthDate || "—"}</p>
+          <p><span className="text-muted-foreground">Cargo:</span> {employee.jobTitle || "—"}</p>
+          <p><span className="text-muted-foreground">Gestor:</span> {employee.managerName || "—"}</p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50 bg-card/50">
+        <CardHeader>
+          <CardTitle>Acesso</CardTitle>
+          <CardDescription>Dados não sensíveis da conta. Senha e tokens não são exibidos.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
+          <p><span className="text-muted-foreground">Conta:</span> {employee.account?.statusLabel ?? "—"}</p>
+          <p><span className="text-muted-foreground">Identidade:</span> {employee.account?.role ?? "—"}</p>
+          <p><span className="text-muted-foreground">Login:</span> {employee.account?.loginPath ?? "/login"}</p>
+          <p>
+            <span className="text-muted-foreground">Primeiro acesso:</span>{" "}
+            {employee.account?.mustChangePassword ? "pendente" : "concluído"}
+          </p>
         </CardContent>
       </Card>
 
@@ -187,6 +241,44 @@ export default function FuncionarioDetailPage({
                 {EMPLOYEE_STATUSES.map((value) => (
                   <SelectItem key={value} value={value}>
                     {EMPLOYEE_STATUS_LABELS[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Cargo</Label>
+            <Input
+              value={jobTitle}
+              onChange={(e) => setJobTitle(e.target.value)}
+              disabled={!canWrite || busy}
+              maxLength={80}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Data de nascimento</Label>
+            <Input
+              type="date"
+              value={birthDate}
+              onChange={(e) => setBirthDate(e.target.value)}
+              disabled={!canWrite || busy}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Gestor</Label>
+            <Select
+              value={managerEmployeeId || "none"}
+              onValueChange={(value) => setManagerEmployeeId(value === "none" ? "" : value)}
+              disabled={!canWrite || busy}
+            >
+              <SelectTrigger className="max-w-xs">
+                <SelectValue placeholder="Sem gestor" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Sem gestor</SelectItem>
+                {managers.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.name}
                   </SelectItem>
                 ))}
               </SelectContent>
