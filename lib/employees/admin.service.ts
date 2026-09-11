@@ -9,13 +9,17 @@ import {
   commercialMembershipDoesNotBypassLegacy,
   decideMembershipChange,
   matchesEmployeeSearch,
+  parseCreatableEmployeeStatus,
   parseRequestedEmployeeStatus,
+  presentEmployeeAccountAccess,
+  wouldCreateDirectManagerCycle,
 } from "@/lib/employees/admin-policy"
 import {
   disableAuthUserLogin,
   enableAuthUserLogin,
   shouldInactivateProfileOnEmployeeStatus,
 } from "@/lib/auth/account-lifecycle"
+import { validateBirthDate } from "@/lib/employees/create-employee-account"
 import type { EmployeeStatus } from "@/types/employee"
 
 function db() {
@@ -68,6 +72,18 @@ export type AdminEmployeeDetail = AdminEmployeeListItem & {
   hiredAt: string | null
   dismissedAt: string | null
   createdAt: string
+  jobTitle: string | null
+  birthDate: string | null
+  managerEmployeeId: string | null
+  managerName: string | null
+  cpf: string | null
+  account: {
+    role: string
+    isActive: boolean
+    mustChangePassword: boolean
+    loginPath: "/login"
+    statusLabel: string
+  }
   memberships: AdminEmployeeMembership[]
   events: Array<{
     id: string
@@ -256,7 +272,9 @@ export async function getAdminEmployee(employeeId: string): Promise<AdminEmploye
   const client = db()
   const { data: employee } = await client
     .from("employees" as never)
-    .select("id, profile_id, status, notes, hired_at, dismissed_at, created_at, updated_at")
+    .select(
+      "id, profile_id, status, notes, hired_at, dismissed_at, created_at, updated_at, job_title, birth_date, manager_employee_id"
+    )
     .eq("id", employeeId)
     .maybeSingle()
   if (!employee?.id) return null
@@ -266,7 +284,7 @@ export async function getAdminEmployee(employeeId: string): Promise<AdminEmploye
     await Promise.all([
       client
         .from("profiles")
-        .select("id, full_name, email, phone, role, is_active")
+        .select("id, full_name, email, phone, cpf, role, is_active, must_change_password")
         .eq("id", String(emp.profile_id))
         .maybeSingle(),
       client
@@ -362,12 +380,39 @@ export async function getAdminEmployee(employeeId: string): Promise<AdminEmploye
     hasCommercialLeadSettings: hasLeadSettings,
   })
 
+  const managerId = asString(emp.manager_employee_id)
+  let managerName: string | null = null
+  if (managerId) {
+    const { data: managerEmp } = await client
+      .from("employees" as never)
+      .select("id, profile_id")
+      .eq("id", managerId)
+      .maybeSingle()
+    const managerProfileId = asString((managerEmp as Record<string, unknown> | null)?.profile_id)
+    if (managerProfileId) {
+      const { data: managerProfile } = await client
+        .from("profiles")
+        .select("full_name")
+        .eq("id", managerProfileId)
+        .maybeSingle()
+      managerName = asString((managerProfile as Record<string, unknown> | null)?.full_name)
+    }
+  }
+
+  const profileRow = profile as Record<string, unknown>
+  const mustChangePassword = profileRow.must_change_password === true
+  const profileActive = profileRow.is_active !== false
+  const accountAccess = presentEmployeeAccountAccess({
+    isActive: profileActive,
+    mustChangePassword,
+  })
+
   return {
     id: String(emp.id),
     profileId: String(emp.profile_id),
-    name: asString((profile as Record<string, unknown>).full_name) ?? "Sem nome",
-    email: asString((profile as Record<string, unknown>).email) ?? "",
-    phone: asString((profile as Record<string, unknown>).phone),
+    name: asString(profileRow.full_name) ?? "Sem nome",
+    email: asString(profileRow.email) ?? "",
+    phone: asString(profileRow.phone),
     status,
     legacyRole: String((profile as Record<string, unknown>).role ?? ""),
     sectors: mappedMemberships.map((item) => ({
@@ -384,6 +429,18 @@ export async function getAdminEmployee(employeeId: string): Promise<AdminEmploye
     hiredAt: asString(emp.hired_at),
     dismissedAt: asString(emp.dismissed_at),
     createdAt: String(emp.created_at ?? ""),
+    jobTitle: asString(emp.job_title),
+    birthDate: asString(emp.birth_date),
+    managerEmployeeId: managerId,
+    managerName,
+    cpf: asString(profileRow.cpf),
+    account: {
+      role: String(profileRow.role ?? ""),
+      isActive: profileActive,
+      mustChangePassword,
+      loginPath: accountAccess.loginPath,
+      statusLabel: accountAccess.label,
+    },
     memberships: mappedMemberships,
     events: visibleEvents.map((row) => ({
       id: String(row.id),
@@ -445,7 +502,10 @@ export async function linkOrCreateEmployee(input: {
 }): Promise<{ ok: true; employeeId: string; created: boolean } | { ok: false; message: string }> {
   const profileId = input.profileId.trim()
   if (!profileId) return { ok: false, message: "Perfil inválido." }
-  const status = parseRequestedEmployeeStatus(input.status) ?? "active"
+  if (String(input.status ?? "").trim() && !parseCreatableEmployeeStatus(input.status)) {
+    return { ok: false, message: "Estado inicial inválido. Não é possível criar já como desligado." }
+  }
+  const status = parseCreatableEmployeeStatus(input.status) ?? "active"
   const client = db()
 
   const { data: profile } = await client
@@ -539,6 +599,83 @@ export async function updateEmployeeStatus(input: {
       newValue: { status },
     })
   }
+  return { ok: true }
+}
+
+export async function updateEmployeeHrFields(input: {
+  employeeId: string
+  jobTitle?: unknown
+  birthDate?: unknown
+  managerEmployeeId?: unknown
+  actorProfileId: string
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const client = db()
+  const { data: current } = await client
+    .from("employees" as never)
+    .select("id, job_title, birth_date, manager_employee_id")
+    .eq("id", input.employeeId)
+    .maybeSingle()
+  if (!current?.id) return { ok: false, message: "Funcionário não encontrado." }
+
+  const patch: Record<string, unknown> = {}
+  if (input.jobTitle !== undefined) {
+    const job = typeof input.jobTitle === "string" ? input.jobTitle.trim().slice(0, 80) : ""
+    patch.job_title = job || null
+  }
+  if (input.birthDate !== undefined) {
+    const birth = validateBirthDate(input.birthDate)
+    if (!birth.ok) return { ok: false, message: birth.message }
+    patch.birth_date = birth.date
+  }
+  if (input.managerEmployeeId !== undefined) {
+    const managerId =
+      typeof input.managerEmployeeId === "string" ? input.managerEmployeeId.trim() : ""
+    if (!managerId) {
+      patch.manager_employee_id = null
+    } else {
+      if (managerId === input.employeeId) {
+        return { ok: false, message: "O funcionário não pode ser gestor de si mesmo." }
+      }
+      const { data: manager } = await client
+        .from("employees" as never)
+        .select("id, manager_employee_id")
+        .eq("id", managerId)
+        .maybeSingle()
+      if (!manager?.id) return { ok: false, message: "Gestor informado não existe." }
+      const managerOfManager = asString(
+        (manager as Record<string, unknown>).manager_employee_id
+      )
+      if (
+        wouldCreateDirectManagerCycle({
+          employeeId: input.employeeId,
+          managerEmployeeId: managerId,
+          managerOfManagerId: managerOfManager,
+        })
+      ) {
+        return { ok: false, message: "Ciclo direto de gestão não é permitido." }
+      }
+      patch.manager_employee_id = managerId
+    }
+  }
+  if (Object.keys(patch).length === 0) return { ok: true }
+
+  const { error } = await client
+    .from("employees" as never)
+    .update(patch as never)
+    .eq("id", input.employeeId)
+  if (error) return { ok: false, message: error.message }
+
+  await recordAdminEvent({
+    employeeId: input.employeeId,
+    eventType: "employee_hr_updated",
+    actorProfileId: input.actorProfileId,
+    oldValue: {
+      job_title: asString((current as Record<string, unknown>).job_title),
+      birth_date: asString((current as Record<string, unknown>).birth_date),
+      manager_employee_id: asString((current as Record<string, unknown>).manager_employee_id),
+    },
+    newValue: patch,
+  })
   return { ok: true }
 }
 

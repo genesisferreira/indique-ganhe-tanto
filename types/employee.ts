@@ -13,6 +13,15 @@ export const EMPLOYEE_STATUSES: readonly EmployeeStatus[] = [
   "dismissed",
 ] as const
 
+export const CREATABLE_EMPLOYEE_STATUSES = [
+  "active",
+  "paused",
+  "vacation",
+  "away",
+] as const satisfies readonly EmployeeStatus[]
+
+export type CreatableEmployeeStatus = (typeof CREATABLE_EMPLOYEE_STATUSES)[number]
+
 export const INITIAL_SECTOR_CODES = [
   "commercial",
   "collections",
@@ -56,6 +65,9 @@ export type Employee = {
   hiredAt: string | null
   dismissedAt: string | null
   notes: string | null
+  jobTitle: string | null
+  birthDate: string | null
+  managerEmployeeId: string | null
   createdAt: string
   updatedAt: string
 }

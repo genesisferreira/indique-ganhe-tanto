@@ -36,6 +36,6 @@ export async function POST(request: Request) {
     ok: true,
     employeeId: result.employeeId,
     created: result.created,
-    authCreationImplemented: false,
+    authCreationImplemented: true,
   })
 }

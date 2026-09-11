@@ -14,8 +14,8 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     items,
-    authCreationImplemented: false,
+    authCreationImplemented: true,
     authCreationNote:
-      "A criação de conta Auth não faz parte desta sprint. Vincule um usuário já existente.",
+      "Para criar conta nova, use o fluxo principal Criar novo funcionário. Esta busca só vincula perfil existente.",
   })
 }

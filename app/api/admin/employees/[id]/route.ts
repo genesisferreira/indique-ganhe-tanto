@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { jsonError } from "@/lib/collections/http"
 import { authorizeEmployeeAdminRequest } from "@/lib/employees/admin-auth"
-import { getAdminEmployee, updateEmployeeStatus } from "@/lib/employees/admin.service"
+import { getAdminEmployee, updateEmployeeHrFields, updateEmployeeStatus } from "@/lib/employees/admin.service"
 import { stripEmployeeAdminBrowserActor } from "@/lib/employees/admin-policy"
 
 export const runtime = "nodejs"
@@ -34,6 +34,23 @@ export async function PATCH(
     actorProfileId: auth.profileId,
   })
   if (!result.ok) return jsonError(400, result.message)
+  if (
+    body.jobTitle !== undefined ||
+    body.job_title !== undefined ||
+    body.birthDate !== undefined ||
+    body.birth_date !== undefined ||
+    body.managerEmployeeId !== undefined ||
+    body.manager_employee_id !== undefined
+  ) {
+    const hr = await updateEmployeeHrFields({
+      employeeId: id,
+      jobTitle: body.jobTitle ?? body.job_title,
+      birthDate: body.birthDate ?? body.birth_date,
+      managerEmployeeId: body.managerEmployeeId ?? body.manager_employee_id,
+      actorProfileId: auth.profileId,
+    })
+    if (!hr.ok) return jsonError(400, hr.message)
+  }
   const employee = await getAdminEmployee(id)
   return NextResponse.json({ ok: true, employee })
 }

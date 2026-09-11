@@ -1,9 +1,14 @@
 import type { UserRole } from "@/types/user"
-import { EMPLOYEE_STATUSES, type EmployeeStatus } from "@/types/employee"
+import {
+  CREATABLE_EMPLOYEE_STATUSES,
+  EMPLOYEE_STATUSES,
+  type CreatableEmployeeStatus,
+  type EmployeeStatus,
+} from "@/types/employee"
 import { isEmployeeStatus } from "@/lib/employees/foundation"
 import { isAdminMasterRole } from "@/lib/auth/sector-membership"
 
-export { EMPLOYEE_STATUSES, isEmployeeStatus }
+export { CREATABLE_EMPLOYEE_STATUSES, EMPLOYEE_STATUSES, isEmployeeStatus }
 
 export const EMPLOYEE_STATUS_LABELS: Record<EmployeeStatus, string> = {
   active: "Ativo",
@@ -185,6 +190,39 @@ export function commercialMembershipDoesNotBypassLegacy(input: {
 export function parseRequestedEmployeeStatus(value: unknown): EmployeeStatus | null {
   const raw = String(value ?? "").trim()
   return isEmployeeStatus(raw) ? raw : null
+}
+
+export function parseCreatableEmployeeStatus(
+  value: unknown
+): CreatableEmployeeStatus | null {
+  const parsed = parseRequestedEmployeeStatus(value)
+  if (!parsed) return null
+  return (CREATABLE_EMPLOYEE_STATUSES as readonly string[]).includes(parsed)
+    ? (parsed as CreatableEmployeeStatus)
+    : null
+}
+
+export function presentEmployeeAccountAccess(input: {
+  isActive: boolean | null | undefined
+  mustChangePassword: boolean | null | undefined
+}): { label: string; loginPath: "/login" } {
+  if (input.isActive === false) {
+    return { label: "Inativa", loginPath: "/login" }
+  }
+  if (input.mustChangePassword === true) {
+    return { label: "Primeiro acesso pendente", loginPath: "/login" }
+  }
+  return { label: "Ativa", loginPath: "/login" }
+}
+
+export function wouldCreateDirectManagerCycle(input: {
+  employeeId: string
+  managerEmployeeId: string | null
+  managerOfManagerId: string | null
+}): boolean {
+  if (!input.managerEmployeeId) return false
+  if (input.managerEmployeeId === input.employeeId) return true
+  return input.managerOfManagerId === input.employeeId
 }
 
 export function matchesEmployeeSearch(input: {
