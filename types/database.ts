@@ -134,6 +134,7 @@ export interface Database {
       user_role:
         | "indicador"
         | "comercial"
+        | "funcionario"
         | "admin_consulta"
         | "admin_financeiro"
         | "admin_master"

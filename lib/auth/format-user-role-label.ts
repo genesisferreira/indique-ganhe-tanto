@@ -7,6 +7,8 @@ export function formatUserRoleLabel(role: UserRole): string {
       return "Indicador"
     case "comercial":
       return "Comercial"
+    case "funcionario":
+      return "Funcionário"
     case "admin_consulta":
       return "Administrador (consulta)"
     case "admin_financeiro":

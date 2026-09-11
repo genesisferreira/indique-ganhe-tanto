@@ -17,6 +17,7 @@ begin
     create type public.user_role as enum (
       'indicador',
       'comercial',
+      'funcionario',
       'admin_consulta',
       'admin_financeiro',
       'admin_master'
