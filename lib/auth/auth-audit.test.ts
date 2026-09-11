@@ -58,6 +58,7 @@ describe("evaluateRouteAccessForRole — /comercial/nova-indicacao", () => {
       ["admin_consulta", false],
       ["comercial", true],
       ["admin_master", true],
+      ["funcionario", false],
     ]
     for (const [role, expected] of matrix) {
       assert.equal(
@@ -75,6 +76,11 @@ describe("evaluateRouteAccessForRole — /cobranca e /retencao", () => {
     assert.equal(evaluateRouteAccessForRole("/retencao", "indicador").allowed, false)
     assert.equal(evaluateRouteAccessForRole("/cobranca", "comercial").allowed, true)
     assert.equal(evaluateRouteAccessForRole("/retencao", "admin_master").allowed, true)
+    assert.equal(
+      evaluateRouteAccessForRole("/cobranca", "funcionario").allowed,
+      true
+    )
+    assert.equal(evaluateRouteAccessForRole("/admin", "funcionario").allowed, false)
     assert.equal(evaluateRouteAccessForRole("/cobranca", "admin_consulta").allowed, true)
   })
 })

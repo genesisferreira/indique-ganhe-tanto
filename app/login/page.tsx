@@ -41,12 +41,14 @@ function LoginForm() {
 
   const resolvePostLoginPath = (
     role: UserRole | null,
-    mustChangePassword = false
+    mustChangePassword = false,
+    isActive: boolean | null | undefined = true
   ): string => {
     return resolvePostAuthPath({
       role,
       mustChangePassword,
       redirectParam,
+      isActive,
     })
   }
 
@@ -63,7 +65,11 @@ function LoginForm() {
       if (role) {
         if (!cancelled) {
           router.replace(
-            resolvePostLoginPath(role, auth.profile?.mustChangePassword === true)
+            resolvePostLoginPath(
+              role,
+              auth.profile?.mustChangePassword === true,
+              auth.profile?.isActive
+            )
           )
         }
         return
@@ -80,7 +86,11 @@ function LoginForm() {
       if (cancelled || !basics?.role) return
 
       router.replace(
-        resolvePostLoginPath(basics.role, basics.mustChangePassword === true)
+        resolvePostLoginPath(
+          basics.role,
+          basics.mustChangePassword === true,
+          basics.isActive
+        )
       )
     })()
 
@@ -118,7 +128,7 @@ function LoginForm() {
       const basics = await getAuthProfileBasicsFromSupabase()
       const role = (basics?.role ?? null) as UserRole | null
       router.replace(
-        resolvePostLoginPath(role, basics?.mustChangePassword === true)
+        resolvePostLoginPath(role, basics?.mustChangePassword === true, basics?.isActive)
       )
       router.refresh()
     } catch (err) {

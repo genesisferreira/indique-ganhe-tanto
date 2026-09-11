@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import { Toaster } from "sonner"
+import type { DashboardVariant } from "@/lib/auth/dashboard-variant"
 
 type AppToasterProps = {
-  variant?: "indicador" | "comercial" | "admin"
+  variant?: DashboardVariant
 }
 
 /**

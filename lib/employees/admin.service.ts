@@ -11,6 +11,11 @@ import {
   matchesEmployeeSearch,
   parseRequestedEmployeeStatus,
 } from "@/lib/employees/admin-policy"
+import {
+  disableAuthUserLogin,
+  enableAuthUserLogin,
+  shouldInactivateProfileOnEmployeeStatus,
+} from "@/lib/auth/account-lifecycle"
 import type { EmployeeStatus } from "@/types/employee"
 
 function db() {
@@ -493,7 +498,7 @@ export async function updateEmployeeStatus(input: {
   const client = db()
   const { data: current } = await client
     .from("employees" as never)
-    .select("id, status, notes")
+    .select("id, status, notes, profile_id")
     .eq("id", input.employeeId)
     .maybeSingle()
   if (!current?.id) return { ok: false, message: "Funcionário não encontrado." }
@@ -509,12 +514,28 @@ export async function updateEmployeeStatus(input: {
     .eq("id", input.employeeId)
   if (error) return { ok: false, message: error.message }
 
-  if (String((current as Record<string, unknown>).status) !== status) {
+  const previousStatus = String((current as Record<string, unknown>).status)
+  const profileId = asString((current as Record<string, unknown>).profile_id)
+  if (profileId && shouldInactivateProfileOnEmployeeStatus(status)) {
+    await client
+      .from("profiles")
+      .update({ is_active: false } as never)
+      .eq("id", profileId)
+    await disableAuthUserLogin(createServiceRoleClient(), profileId)
+  } else if (profileId && previousStatus === "dismissed" && status !== "dismissed") {
+    await client
+      .from("profiles")
+      .update({ is_active: true } as never)
+      .eq("id", profileId)
+    await enableAuthUserLogin(createServiceRoleClient(), profileId)
+  }
+
+  if (previousStatus !== status) {
     await recordAdminEvent({
       employeeId: input.employeeId,
       eventType: status === "dismissed" ? "employee_dismissed" : "status_changed",
       actorProfileId: input.actorProfileId,
-      oldValue: { status: (current as Record<string, unknown>).status },
+      oldValue: { status: previousStatus },
       newValue: { status },
     })
   }
@@ -679,10 +700,11 @@ export async function listMyActiveSectorCodes(profileId: string): Promise<string
   const client = db()
   const { data: employee } = await client
     .from("employees" as never)
-    .select("id")
+    .select("id, status")
     .eq("profile_id", profileId)
     .maybeSingle()
   if (!employee?.id) return []
+  if (asString((employee as Record<string, unknown>).status) !== "active") return []
 
   const { data: memberships } = await client
     .from("employee_sector_memberships" as never)

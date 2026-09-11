@@ -208,11 +208,22 @@ export const ADMIN_FINANCE_ACTION_HREFS = new Set([
 
 export function shouldShowSidebarHref(input: {
   href: string
-  variant: "indicador" | "comercial" | "admin"
+  variant: "indicador" | "comercial" | "admin" | "funcionario"
   role: UserRole | null
   membershipCodes: readonly string[]
 }): boolean {
   if (input.variant === "indicador") return true
+
+  if (input.variant === "funcionario") {
+    if (input.href === "/funcionario" || input.href === "/notificacoes") return true
+    if (input.href === "/cobranca") {
+      return input.membershipCodes.includes("collections")
+    }
+    if (input.href === "/retencao") {
+      return input.membershipCodes.includes("retention")
+    }
+    return false
+  }
 
   if (input.href === "/cobranca") {
     if (input.variant === "admin") {
@@ -314,10 +325,29 @@ export function adminNavGroupSpecs(): AdminNavGroupSpec[] {
   ]
 }
 
+export function funcionarioNavGroupSpecs(): AdminNavGroupSpec[] {
+  return [
+    {
+      title: "Visão geral",
+      items: [
+        { label: "Início", href: "/funcionario" },
+        { label: "Notificações", href: "/notificacoes" },
+      ],
+    },
+    {
+      title: "Operação",
+      items: [
+        { label: "Cobrança", href: "/cobranca" },
+        { label: "Retenção", href: "/retencao" },
+      ],
+    },
+  ]
+}
+
 export function filterNavGroups<T extends { href: string }>(
   groups: Array<{ title: string; items: T[] }>,
   input: {
-    variant: "indicador" | "comercial" | "admin"
+    variant: "indicador" | "comercial" | "admin" | "funcionario"
     role: UserRole | null
     membershipCodes: readonly string[]
   }

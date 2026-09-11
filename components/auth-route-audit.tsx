@@ -9,9 +9,10 @@ import {
 } from "@/lib/auth/auth-audit"
 import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
 import type { UserRole } from "@/types/user"
+import type { DashboardVariant } from "@/lib/auth/dashboard-variant"
 
 type AuthRouteAuditProps = {
-  variant: "indicador" | "comercial" | "admin"
+  variant: DashboardVariant
   /** Quando true, não consulta perfil nem loga (ex.: layout ainda sem sessão). */
   disabled?: boolean
 }

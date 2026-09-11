@@ -58,6 +58,7 @@ import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { useAuth } from "@/components/auth/auth-provider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import type { UserRole } from "@/types/user"
+import type { DashboardVariant } from "@/lib/auth/dashboard-variant"
 import { shouldShowSidebarHref } from "@/lib/employees/admin-policy"
 import { CollapsibleNavGroups } from "@/components/layout/collapsible-nav-groups"
 import {
@@ -108,6 +109,23 @@ const indicadorNav: NavGroup[] = [
     items: [
       { label: "Minha Chave Pix", href: "/indicador/chave-pix", icon: Key },
       { label: "Meu Perfil", href: "/indicador/perfil", icon: User },
+    ],
+  },
+]
+
+const funcionarioNav: NavGroup[] = [
+  {
+    title: "Visão geral",
+    items: [
+      { label: "Início", href: "/funcionario", icon: Home },
+      { label: "Notificações", href: "/notificacoes", icon: Bell },
+    ],
+  },
+  {
+    title: "Operação",
+    items: [
+      { label: "Cobrança", href: "/cobranca", icon: PhoneCall },
+      { label: "Retenção", href: "/retencao", icon: Handshake },
     ],
   },
 ]
@@ -216,7 +234,7 @@ const adminNav: NavGroup[] = [
 ]
 
 interface SidebarProps {
-  variant: "indicador" | "comercial" | "admin"
+  variant: DashboardVariant
   userName: string
   userRole: string
   /** Role do perfil para ocultar itens sensíveis (ex.: admin consulta). */
@@ -417,9 +435,11 @@ export function Sidebar({
     const base =
       variant === "indicador"
         ? indicadorNav
-        : variant === "comercial"
-          ? filterComercialAssistedNav(comercialNav, policyRole)
-          : adminNav
+        : variant === "funcionario"
+          ? funcionarioNav
+          : variant === "comercial"
+            ? filterComercialAssistedNav(comercialNav, policyRole)
+            : adminNav
     return base
       .map((group) => ({
         ...group,

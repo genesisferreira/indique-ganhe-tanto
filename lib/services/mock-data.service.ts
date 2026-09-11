@@ -201,7 +201,7 @@ export type SidebarBadgeCountsMock = {
  * Contadores da sidebar derivados apenas do snapshot mock (quando `DATA_PROVIDER` / `NEXT_PUBLIC_DATA_PROVIDER` = mock).
  */
 export function getSidebarBadgeCountsFromMock(
-  variant: "indicador" | "comercial" | "admin"
+  variant: "indicador" | "comercial" | "admin" | "funcionario"
 ): SidebarBadgeCountsMock {
   const s = createSnapshot()
   const pipelineLeadStatuses = new Set(["novo", "em_atendimento", "em_negociacao"])

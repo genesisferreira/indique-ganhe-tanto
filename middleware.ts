@@ -4,6 +4,8 @@ import {
   getDashboardHomeForRole,
   isAllowedDuringMustChangePassword,
   isFirstAccessPath,
+  isInactiveAccountPath,
+  isProfileInactive,
   logAuthAudit,
 } from "@/lib/auth/auth-audit"
 import { FIRST_ACCESS_PATH } from "@/lib/commercial-assisted/constants"
@@ -14,6 +16,7 @@ import type { UserRole } from "@/types/user"
 const protectedPrefixes = [
   "/indicador",
   "/comercial",
+  "/funcionario",
   "/cobranca",
   "/retencao",
   "/admin",
@@ -26,6 +29,8 @@ const publicRoutes = [
   "/login",
   "/cadastro",
   "/recuperar-senha",
+  "/atualizar-senha",
+  "/conta-inativa",
   "/pre-cadastro",
   "/pre-cadastro-rede-neutra",
   "/auth/logout",
@@ -90,7 +95,7 @@ export async function middleware(request: NextRequest) {
 
   const { data: profileRow, error: profileError } = await supabase
     .from("profiles")
-    .select("role, must_change_password")
+    .select("role, must_change_password, is_active")
     .eq("id", user.id)
     .maybeSingle()
 
@@ -98,9 +103,16 @@ export async function middleware(request: NextRequest) {
   const mustChangePassword =
     (profileRow as { must_change_password?: boolean | null } | null)
       ?.must_change_password === true
+  const isActive =
+    (profileRow as { is_active?: boolean | null } | null)?.is_active
 
   if (profileError || !role) {
     return redirectToLogin(request, pathname)
+  }
+
+  if (isProfileInactive(isActive) && !isInactiveAccountPath(pathname)) {
+    const redirectUrl = new URL("/conta-inativa", request.url)
+    return applyNoStoreHeaders(NextResponse.redirect(redirectUrl))
   }
 
   if (mustChangePassword && !isAllowedDuringMustChangePassword(pathname)) {

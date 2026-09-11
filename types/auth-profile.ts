@@ -12,4 +12,6 @@ export type AuthProfileBasics = {
   createdAt: string | null
   /** Se true, redirecionar para /primeiro-acesso antes do dashboard. */
   mustChangePassword?: boolean
+  /** Conta inativa não deve operar áreas privadas. */
+  isActive?: boolean
 }

@@ -7,10 +7,11 @@
 import { Sidebar } from "./sidebar"
 import { AuthRouteAudit } from "@/components/auth-route-audit"
 import type { UserRole } from "@/types/user"
+import type { DashboardVariant } from "@/lib/auth/dashboard-variant"
 
 interface DashboardLayoutProps {
   children: React.ReactNode
-  variant: "indicador" | "comercial" | "admin"
+  variant: DashboardVariant
   userName: string
   userRole: string
   /** Role real do perfil (filtros de menu); opcional em layouts legados. */

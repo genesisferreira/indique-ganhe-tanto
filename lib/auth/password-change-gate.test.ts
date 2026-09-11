@@ -12,6 +12,7 @@ import {
 import {
   isAllowedDuringMustChangePassword,
   resolvePostAuthPath,
+  evaluateRouteAccessForRole,
 } from "./auth-audit"
 
 describe("password-change-gate", () => {
@@ -157,5 +158,17 @@ describe("password-change-gate", () => {
       }),
       null
     )
+  })
+
+  it("15) funcionario com must_change_password vai a /primeiro-acesso", () => {
+    assert.equal(
+      resolvePostAuthPath({
+        role: "funcionario",
+        mustChangePassword: true,
+        isActive: true,
+      }),
+      "/primeiro-acesso"
+    )
+    assert.equal(evaluateRouteAccessForRole("/primeiro-acesso", "funcionario").allowed, true)
   })
 })

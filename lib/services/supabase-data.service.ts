@@ -5546,7 +5546,7 @@ export async function getAuthProfileBasicsFromSupabase(): Promise<AuthProfileBas
     const { data: row, error } = await db
       .from("profiles")
       .select(
-        "id, full_name, email, phone, role, avatar_url, created_at, must_change_password"
+        "id, full_name, email, phone, role, avatar_url, created_at, must_change_password, is_active"
       )
       .eq("id", user.id)
       .maybeSingle()
@@ -5560,6 +5560,7 @@ export async function getAuthProfileBasicsFromSupabase(): Promise<AuthProfileBas
       avatar_url: string | null
       created_at: string
       must_change_password?: boolean | null
+      is_active?: boolean | null
     }
     const profile: AuthProfileBasics = {
       id: r.id,
@@ -5570,6 +5571,7 @@ export async function getAuthProfileBasicsFromSupabase(): Promise<AuthProfileBas
       avatarUrl: r.avatar_url ?? null,
       createdAt: r.created_at ?? null,
       mustChangePassword: r.must_change_password === true,
+      isActive: r.is_active !== false,
     }
     if (isDev()) {
       console.log("[auth-profile:debug]", {

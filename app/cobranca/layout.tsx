@@ -1,17 +1,10 @@
 import { redirect } from "next/navigation"
 import { AuthenticatedDashboardShell } from "@/components/layout/authenticated-dashboard-shell"
 import { authorizeOperationalRequest } from "@/lib/collections/actor"
+import { operationalShellVariantForRole } from "@/lib/auth/dashboard-variant"
 import { COLLECTION_SECTOR_CODE } from "@/types/collections"
-import type { UserRole } from "@/types/user"
 
 export const dynamic = "force-dynamic"
-
-function shellVariantForRole(role: UserRole): "comercial" | "admin" {
-  if (role === "admin_consulta" || role === "admin_financeiro" || role === "admin_master") {
-    return "admin"
-  }
-  return "comercial"
-}
 
 export default async function CobrancaLayout({
   children,
@@ -27,7 +20,7 @@ export default async function CobrancaLayout({
     redirect("/")
   }
   return (
-    <AuthenticatedDashboardShell variant={shellVariantForRole(auth.role)}>
+    <AuthenticatedDashboardShell variant={operationalShellVariantForRole(auth.role)}>
       {children}
     </AuthenticatedDashboardShell>
   )

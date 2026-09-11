@@ -225,7 +225,7 @@ describe("R) legacy Commercial continua funcionando", () => {
     const src = readSrc("lib/employees/admin.service.ts")
     assert.match(src, /commercial_lead_settings/)
     assert.equal(/from\("commercial_lead_settings"[\s\S]{0,80}\.insert\(/.test(src), false)
-    assert.equal(/from\("profiles"\)[\s\S]{0,200}\.update\(/.test(src), false)
+    assert.equal(/from\("profiles"\)[\s\S]{0,280}role:/.test(src), false)
     assert.equal(src.includes("createUser"), false)
     assert.equal(src.includes("syncCollectionsFromControllr"), false)
   })
@@ -463,8 +463,8 @@ describe("3.1D-B B) commercial é identificado como legado na apresentação", (
 describe("3.1D-B C–E) marcar commercial não cria legado 2.1B", () => {
   it("C) não altera profiles.role", () => {
     const src = readSrc("lib/employees/admin.service.ts")
-    assert.equal(/from\("profiles"\)[\s\S]{0,240}\.update\(/.test(src), false)
     assert.equal(src.includes('role: "comercial"'), false)
+    assert.equal(/update\(\{[\s\S]{0,120}role:/.test(src), false)
   })
   it("D) não cria commercial_lead_settings", () => {
     const src = readSrc("lib/employees/admin.service.ts")
@@ -490,6 +490,15 @@ describe("3.1D-B F) motor Comercial 2.1B não é alterado", () => {
     assert.equal(
       isCommercialEmployeeAssignmentEligible({
         profileRole: "indicador",
+        profileIsActive: true,
+        employeeStatus: "active",
+        hasActiveCommercialMembership: true,
+      }),
+      false
+    )
+    assert.equal(
+      isCommercialEmployeeAssignmentEligible({
+        profileRole: "funcionario",
         profileIsActive: true,
         employeeStatus: "active",
         hasActiveCommercialMembership: true,

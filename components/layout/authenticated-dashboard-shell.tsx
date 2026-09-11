@@ -10,16 +10,16 @@ import { mockDataService } from "@/lib/services/mock-data.service"
 import type { AuthProfileBasics } from "@/types/auth-profile"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { formatUserRoleLabel } from "@/lib/auth/format-user-role-label"
+import type { DashboardVariant } from "@/lib/auth/dashboard-variant"
 import {
   evaluateRouteAccessForRole,
   getDashboardHomeForRole,
   isAllowedDuringMustChangePassword,
+  isProfileInactive,
   isRoleAllowedOnDashboardVariant,
 } from "@/lib/auth/auth-audit"
 import { FIRST_ACCESS_PATH } from "@/lib/commercial-assisted/constants"
 import type { UserRole } from "@/types/user"
-
-type DashboardVariant = "indicador" | "comercial" | "admin"
 
 export type AuthenticatedDashboardShellProps = {
   variant: DashboardVariant
@@ -66,6 +66,20 @@ export function AuthenticatedDashboardShell({
             avatarUrl: null,
             createdAt: null,
           })
+        } else if (variant === "funcionario") {
+          setUserName("Funcionário")
+          setUserRoleLabel(formatUserRoleLabel("funcionario"))
+          setPolicyRole("funcionario")
+          setSessionProfile({
+            id: "mock-funcionario",
+            fullName: "Funcionário",
+            email: "funcionario@mock.local",
+            phone: "—",
+            role: "funcionario",
+            avatarUrl: null,
+            createdAt: null,
+            isActive: true,
+          })
         } else if (variant === "comercial") {
           setUserName(snap.currentComercial.nome)
           setUserRoleLabel(formatUserRoleLabel("comercial"))
@@ -111,6 +125,11 @@ export function AuthenticatedDashboardShell({
         setUserRoleLabel(formatUserRoleLabel(lockedProfile.role))
         setPolicyRole(lockedProfile.role)
         setSessionProfile(lockedProfile)
+        if (isProfileInactive(lockedProfile.isActive)) {
+          setRedirecting(true)
+          router.replace("/conta-inativa")
+          return
+        }
         if (lockedProfile.mustChangePassword) {
           if (!isAllowedDuringMustChangePassword(pathname)) {
             setRedirecting(true)
@@ -151,6 +170,12 @@ export function AuthenticatedDashboardShell({
         setRedirecting(true)
         const dest = `/login?redirect=${encodeURIComponent(pathname)}`
         router.replace(dest)
+        return
+      }
+
+      if (isProfileInactive(auth.profile.isActive)) {
+        setRedirecting(true)
+        router.replace("/conta-inativa")
         return
       }
 

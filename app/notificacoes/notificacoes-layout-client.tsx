@@ -8,11 +8,10 @@ import { mockDataService } from "@/lib/services/mock-data.service"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import type { AuthProfileBasics } from "@/types/auth-profile"
 import type { UserRole } from "@/types/user"
+import { dashboardVariantForRole, type DashboardVariant } from "@/lib/auth/dashboard-variant"
 
-function roleToVariant(role: UserRole): "indicador" | "comercial" | "admin" {
-  if (role === "indicador") return "indicador"
-  if (role === "comercial") return "comercial"
-  return "admin"
+function roleToVariant(role: UserRole): DashboardVariant {
+  return dashboardVariantForRole(role)
 }
 
 export function NotificacoesLayoutClient({
@@ -24,7 +23,7 @@ export function NotificacoesLayoutClient({
   const pathname = usePathname()
   const [phase, setPhase] = useState<"loading" | "ready" | "redirect">("loading")
   const [shell, setShell] = useState<{
-    variant: "indicador" | "comercial" | "admin"
+    variant: DashboardVariant
     profile: AuthProfileBasics
   } | null>(null)
 

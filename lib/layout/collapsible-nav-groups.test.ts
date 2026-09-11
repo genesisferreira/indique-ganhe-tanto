@@ -406,6 +406,20 @@ describe("sidebar fail-closed de memberships", () => {
   })
 })
 
+describe("sidebar funcionario — só memberships", () => {
+  it("sem memberships não mostra Operação", () => {
+    const groups = filterNavGroups(
+      [
+        { title: "Visão geral", items: [{ href: "/funcionario" }] },
+        { title: "Operação", items: [{ href: "/cobranca" }, { href: "/retencao" }] },
+      ],
+      { variant: "funcionario", role: "funcionario", membershipCodes: [] }
+    )
+    assert.equal(groups.some((group) => group.title === "Operação"), false)
+    assert.equal(groups.some((group) => group.title === "Visão geral"), true)
+  })
+})
+
 describe("sidebar nenhum módulo inexistente no catálogo admin", () => {
   it("não inclui Vendas Internas, Pós-venda, Upgrade, Técnico, Comissões, Financeiro de Funcionários", () => {
     const hrefs = adminGroups.flatMap((group) => group.items.map((item) => item.href)).join(" ")
