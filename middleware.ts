@@ -14,6 +14,8 @@ import type { UserRole } from "@/types/user"
 const protectedPrefixes = [
   "/indicador",
   "/comercial",
+  "/cobranca",
+  "/retencao",
   "/admin",
   "/notificacoes",
   "/primeiro-acesso",

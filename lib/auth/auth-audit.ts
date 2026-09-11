@@ -147,6 +147,24 @@ export function evaluateRouteAccessForRole(
       reason: `/comercial exige comercial ou admin financeiro/master; obtido: ${role}`,
     }
   }
+  if (pathname.startsWith("/cobranca") || pathname.startsWith("/retencao")) {
+    if (
+      role === "comercial" ||
+      role === "admin_consulta" ||
+      role === "admin_financeiro" ||
+      role === "admin_master"
+    ) {
+      return {
+        allowed: true,
+        reason:
+          `${pathname.startsWith("/cobranca") ? "/cobranca" : "/retencao"} + role operacional/admin (membership checada no servidor)`,
+      }
+    }
+    return {
+      allowed: false,
+      reason: `${pathname} exige comercial ou admin; obtido: ${role}`,
+    }
+  }
   if (pathname.startsWith("/admin")) {
     if (
       role === "admin_consulta" ||

@@ -68,3 +68,13 @@ describe("evaluateRouteAccessForRole — /comercial/nova-indicacao", () => {
     }
   })
 })
+
+describe("evaluateRouteAccessForRole — /cobranca e /retencao", () => {
+  it("indicador bloqueado; comercial e admins permitidos no prefixo (membership no servidor)", () => {
+    assert.equal(evaluateRouteAccessForRole("/cobranca", "indicador").allowed, false)
+    assert.equal(evaluateRouteAccessForRole("/retencao", "indicador").allowed, false)
+    assert.equal(evaluateRouteAccessForRole("/cobranca", "comercial").allowed, true)
+    assert.equal(evaluateRouteAccessForRole("/retencao", "admin_master").allowed, true)
+    assert.equal(evaluateRouteAccessForRole("/cobranca", "admin_consulta").allowed, true)
+  })
+})

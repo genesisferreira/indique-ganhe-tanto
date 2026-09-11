@@ -30,6 +30,8 @@ import {
   Bell,
   CircleHelp,
   Cable,
+  PhoneCall,
+  Handshake,
 } from "lucide-react"
 import { TantoBrand } from "@/components/branding/tanto-brand"
 import { Button } from "@/components/ui/button"
@@ -116,6 +118,8 @@ const comercialNav: NavGroup[] = [
       { label: "Meus Leads", href: "/comercial/leads", icon: Users },
       { label: "Pipeline", href: "/comercial/pipeline", icon: LayoutGrid },
       { label: "Retornos Agendados", href: "/comercial/retornos", icon: Clock },
+      { label: "Cobrança", href: "/cobranca", icon: PhoneCall },
+      { label: "Retenção", href: "/retencao", icon: Handshake },
     ],
   },
   {
@@ -143,6 +147,8 @@ const adminNav: NavGroup[] = [
       { label: "Indicações", href: "/admin/indicacoes", icon: Users },
       { label: "Pipeline", href: "/admin/pipeline", icon: LayoutGrid },
       { label: "Indicadores", href: "/admin/indicadores", icon: UserPlus },
+      { label: "Cobrança", href: "/cobranca", icon: PhoneCall },
+      { label: "Retenção", href: "/retencao", icon: Handshake },
     ],
   },
   {
