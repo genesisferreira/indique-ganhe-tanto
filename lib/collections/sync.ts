@@ -18,6 +18,7 @@ import {
   type ExistingCollectionCase,
 } from "@/lib/collections/sync-decision"
 import { sanitizeCustomerDocument, sanitizeCustomerName } from "@/lib/collections/sanitize"
+import { loadCollectionOperationalSettings } from "@/lib/operational/settings.service"
 import type { CollectionCaseStatus } from "@/types/collections"
 
 const LOG_TAG = "[collections:sync]"
@@ -73,6 +74,7 @@ export async function syncCollectionsFromControllr(input: {
     return { ...result, ok: false, message: login.error }
   }
 
+  const settings = await loadCollectionOperationalSettings()
   const db = getOpsDb()
   const contractsRes = await awaitQuery<ContractRow>(
     db
@@ -151,6 +153,8 @@ export async function syncCollectionsFromControllr(input: {
         invoice: syncInvoice,
         existing,
         now: input.now,
+        minimumDaysOverdue: settings.minimumDaysOverdue,
+        collectionsEnabled: settings.isEnabled,
       })
       const writeModel = buildCollectionCaseWriteModel({
         invoice: syncInvoice,

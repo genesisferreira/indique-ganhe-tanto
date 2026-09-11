@@ -153,6 +153,15 @@ describe("patch collections retention foundation", () => {
     assert.equal(/cobranca/.test(vercel), false)
     assert.equal(/retencao/.test(vercel), false)
   })
+
+  it("3.1C settings, history append-only, seed 5 dias", () => {
+    assert.match(norm, /create table if not exists public\.operational_sector_settings/)
+    assert.match(norm, /create table if not exists public\.operational_attendances/)
+    assert.match(norm, /create table if not exists public\.customer_operational_history/)
+    assert.match(norm, /customer_operational_history is append-only/)
+    assert.match(patch, /minimum_days_overdue', 5/)
+    assert.match(norm, /include_cancelled_customers', false/)
+  })
 })
 
 describe("3.1B mutações exigem ownership ativo", () => {
@@ -180,6 +189,18 @@ describe("3.1B mutações exigem ownership ativo", () => {
     const src = readFileSync(join(repoRoot, "lib/collections/escalate.ts"), "utf8")
     assert.equal(src.includes("parsed.ok || isIdempotentEscalation"), false)
     assert.match(src, /ok:\s*parsed\.ok === true/)
+  })
+
+  it("UI Cobrança não expõe escalada automática", () => {
+    const src = readFileSync(join(repoRoot, "app/cobranca/[id]/page.tsx"), "utf8")
+    assert.equal(src.includes("Escalar retenção"), false)
+    assert.equal(src.includes("/escalate"), false)
+  })
+
+  it("write Controllr history permanece desligado", () => {
+    const src = readFileSync(join(repoRoot, "lib/controllr/customer-history.ts"), "utf8")
+    assert.match(src, /CONTROLLR_HISTORY_WRITE_ENABLED/)
+    assert.equal(src.includes("brbyteAdminPostForm"), false)
   })
 })
 

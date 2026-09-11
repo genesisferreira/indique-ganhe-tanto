@@ -28,5 +28,19 @@ export async function GET(
     }
   }
 
-  return NextResponse.json({ ok: true, ...detail })
+  let operationalHistory: unknown[] = []
+  let controllrHistoryAvailable = false
+  if (auth.role !== "admin_financeiro" && detail.case.clientPk) {
+    const { loadMergedCustomerTimeline } = await import("@/lib/operational/history.service")
+    const timeline = await loadMergedCustomerTimeline({ clientPk: detail.case.clientPk })
+    operationalHistory = timeline.items
+    controllrHistoryAvailable = timeline.controllrHistoryAvailable
+  }
+
+  return NextResponse.json({
+    ok: true,
+    ...detail,
+    operationalHistory,
+    controllrHistoryAvailable,
+  })
 }

@@ -169,3 +169,23 @@ export type RetentionCaseListItem = RetentionCase & {
   assigneeName: string | null
   lastContactAt: string | null
 }
+
+export type OperationalAttendance = {
+  id: string
+  sectorCode: string
+  clientPk: string | null
+  contractPk: string | null
+  documentMasked: string | null
+  customerNameSnapshot: string | null
+  employeeId: string
+  actorProfileId: string
+  reason: string | null
+  actionTaken: string | null
+  notes: string | null
+  customerRemains: boolean | null
+  outcome: string | null
+  status: "open" | "completed"
+  startedAt: string
+  completedAt: string | null
+}
+

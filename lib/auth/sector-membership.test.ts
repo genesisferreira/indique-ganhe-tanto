@@ -86,6 +86,8 @@ describe("R) browser não controla actor", () => {
       actorProfileId: "hack2",
       userId: "hack3",
       employeeId: "hack4",
+      source: "controllr",
+      sector_code: "collections",
       channel: "phone",
       outcome: "contacted",
     })
@@ -93,6 +95,8 @@ describe("R) browser não controla actor", () => {
     assert.equal("actorProfileId" in rest, false)
     assert.equal("userId" in rest, false)
     assert.equal("employeeId" in rest, false)
+    assert.equal("source" in rest, false)
+    assert.equal("sector_code" in rest, false)
     assert.equal(rest.channel, "phone")
   })
 })

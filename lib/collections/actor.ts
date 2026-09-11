@@ -9,6 +9,10 @@ import {
   type OperationalSectorCode,
   type SectorMembershipAuthResult,
 } from "@/lib/auth/sector-membership"
+import {
+  authorizeOperationalAdminSettings,
+  authorizeRetentionCustomerAccess,
+} from "@/lib/auth/operational-admin"
 import { findActiveAssignment } from "@/lib/collections/cases.service"
 import type { UserRole } from "@/types/user"
 
@@ -160,3 +164,46 @@ export async function authorizeOperationalCaseWrite(input: {
 
   return auth
 }
+
+export async function authorizeOperationalAdminSettingsRequest(action: "read" | "write") {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user?.id) {
+    return {
+      ok: false as const,
+      status: 401 as const,
+      message: "Sessão não encontrada. Faça login novamente.",
+    }
+  }
+  const context = await loadOperationalActorContext(user.id)
+  if (!context) {
+    return { ok: false as const, status: 403 as const, message: "Perfil não autorizado." }
+  }
+  const auth = authorizeOperationalAdminSettings({
+    userId: context.userId,
+    profileId: context.profileId,
+    role: context.role,
+    action,
+  })
+  if (!auth.ok) return auth
+  return { ...auth, context }
+}
+
+export async function authorizeRetentionCustomerRequest(action: "read" | "write") {
+  const auth = await authorizeOperationalRequest({
+    sectorCode: "retention",
+    action: action === "write" ? "write" : "read",
+  })
+  if (!auth.ok) return auth
+  const extra = authorizeRetentionCustomerAccess({
+    role: auth.role,
+    membershipActive: auth.context?.membershipActive ?? auth.membershipActive,
+    employeeStatus: auth.context?.employeeStatus ?? null,
+    action,
+  })
+  if (!extra.ok) return extra
+  return auth
+}
+

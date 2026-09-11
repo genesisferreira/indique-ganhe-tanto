@@ -19,6 +19,7 @@ import {
 } from "@/lib/assignments/sector-rpc.service"
 import { asNumber, asRecord, asString, awaitQuery, getOpsDb } from "@/lib/collections/db"
 import { sanitizeContactNotes } from "@/lib/collections/sanitize"
+import { appendCustomerOperationalHistory } from "@/lib/operational/history.service"
 
 type CollectionCaseRow = {
   id: string
@@ -343,6 +344,7 @@ export async function getCollectionCaseDetail(caseId: string): Promise<{
 export async function registerCollectionContact(input: {
   caseId: string
   actorProfileId: string
+  employeeId?: string | null
   channel: ContactChannel
   outcome: ContactOutcome
   notes?: string | null
@@ -350,7 +352,7 @@ export async function registerCollectionContact(input: {
   const db = getOpsDb()
   const { data: current } = await db
     .from("collection_cases")
-    .select("id, status")
+    .select("id, status, client_pk, contract_pk, customer_name, customer_document")
     .eq("id", input.caseId)
     .maybeSingle()
   if (!current?.id) return { ok: false, message: "Caso não encontrado." }
@@ -392,12 +394,28 @@ export async function registerCollectionContact(input: {
     newValue: { status: nextStatus, channel: input.channel, outcome: input.outcome },
   })
 
+  await appendCustomerOperationalHistory({
+    clientPk: asString(current.client_pk),
+    contractPk: asString(current.contract_pk),
+    customerNameSnapshot: asString(current.customer_name),
+    sectorCode: COLLECTION_SECTOR_CODE,
+    employeeId: input.employeeId ?? null,
+    actorProfileId: input.actorProfileId,
+    eventType:
+      input.outcome === "promised_payment" ? "collection_promise_to_pay" : "collection_contact",
+    action: input.channel,
+    result: input.outcome,
+    notes: sanitizeContactNotes(input.notes),
+    metadata: { collection_case_id: input.caseId },
+  })
+
   return { ok: true }
 }
 
 export async function updateCollectionStatus(input: {
   caseId: string
   actorProfileId: string
+  employeeId?: string | null
   status: CollectionCaseStatus
 }): Promise<{ ok: true; status: CollectionCaseStatus } | { ok: false; message: string }> {
   const allowed: CollectionCaseStatus[] = [
@@ -413,7 +431,7 @@ export async function updateCollectionStatus(input: {
   const db = getOpsDb()
   const { data: current } = await db
     .from("collection_cases")
-    .select("id, status")
+    .select("id, status, client_pk, contract_pk, customer_name")
     .eq("id", input.caseId)
     .maybeSingle()
   if (!current?.id) return { ok: false, message: "Caso não encontrado." }
@@ -445,6 +463,22 @@ export async function updateCollectionStatus(input: {
     oldValue: { status: current.status },
     newValue: { status: input.status },
   })
+
+  if (input.status === "closed" || input.status === "promise_to_pay") {
+    await appendCustomerOperationalHistory({
+      clientPk: asString(current.client_pk),
+      contractPk: asString(current.contract_pk),
+      customerNameSnapshot: asString(current.customer_name),
+      sectorCode: COLLECTION_SECTOR_CODE,
+      employeeId: input.employeeId ?? null,
+      actorProfileId: input.actorProfileId,
+      eventType:
+        input.status === "closed" ? "collection_closed" : "collection_promise_to_pay",
+      result: input.status,
+      metadata: { collection_case_id: input.caseId },
+    })
+  }
+
   return { ok: true, status: input.status }
 }
 
@@ -456,7 +490,7 @@ export async function closeCollectionCasePaid(input: {
   const db = getOpsDb()
   const { data: current } = await db
     .from("collection_cases")
-    .select("id, status")
+    .select("id, status, client_pk, contract_pk, customer_name")
     .eq("id", input.caseId)
     .maybeSingle()
   if (!current?.id) return { ok: false, message: "Caso não encontrado." }
@@ -489,6 +523,16 @@ export async function closeCollectionCasePaid(input: {
     actorProfileId: input.actorProfileId,
     oldValue: { status: current.status },
     newValue: { status: "paid" },
+  })
+  await appendCustomerOperationalHistory({
+    clientPk: asString(current.client_pk),
+    contractPk: asString(current.contract_pk),
+    customerNameSnapshot: asString(current.customer_name),
+    sectorCode: COLLECTION_SECTOR_CODE,
+    actorProfileId: input.actorProfileId,
+    eventType: "collection_payment_detected",
+    result: "paid",
+    metadata: { collection_case_id: input.caseId, source: "controllr_sync" },
   })
   return { ok: true, alreadyPaid: false }
 }

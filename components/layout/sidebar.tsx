@@ -184,6 +184,7 @@ const adminNav: NavGroup[] = [
       { label: "Relatórios", href: "/admin/relatorios", icon: BarChart3 },
       { label: "Auditoria", href: "/admin/auditoria", icon: FileText },
       { label: "Configurações", href: "/admin/configuracoes", icon: Settings },
+      { label: "Cobrança (regras)", href: "/admin/configuracoes/cobranca", icon: PhoneCall },
     ],
   },
 ]

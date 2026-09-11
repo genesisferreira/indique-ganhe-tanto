@@ -41,6 +41,43 @@ describe("B) 5 dias → elegível", () => {
   })
 })
 
+describe("limiar configurável 7 dias", () => {
+  it("6 não elegível, 7 elegível", () => {
+    assert.equal(isCollectionOverdueEligible(6, 7), false)
+    assert.equal(isCollectionOverdueEligible(7, 7), true)
+    assert.equal(
+      shouldOpenCollectionCase({
+        daysOverdue: 6,
+        isPaid: false,
+        invoicePk: "inv-1",
+        minimumDaysOverdue: 7,
+      }),
+      false
+    )
+    assert.equal(
+      shouldOpenCollectionCase({
+        daysOverdue: 7,
+        isPaid: false,
+        invoicePk: "inv-1",
+        minimumDaysOverdue: 7,
+      }),
+      true
+    )
+  })
+
+  it("fila desligada não abre", () => {
+    assert.equal(
+      shouldOpenCollectionCase({
+        daysOverdue: 20,
+        isPaid: false,
+        invoicePk: "inv-1",
+        collectionsEnabled: false,
+      }),
+      false
+    )
+  })
+})
+
 describe("C) paga → não abre", () => {
   it("invoice_msg paid + date_credit", () => {
     assert.equal(

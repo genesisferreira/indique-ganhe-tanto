@@ -31,6 +31,7 @@ export async function POST(
   const result = await updateCollectionStatus({
     caseId: id,
     actorProfileId: auth.profileId,
+    employeeId: auth.context?.employeeId ?? auth.employeeId,
     status: status as (typeof COLLECTION_STATUSES)[number],
   })
   if (!result.ok) return jsonError(400, result.message)

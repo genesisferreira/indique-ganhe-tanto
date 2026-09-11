@@ -1,13 +1,15 @@
--- Sprint 3.1 — Cobrança + Retenção operacional sobre o motor genérico 2.2
+-- Sprint 3.1 / 3.1C — Cobrança + Retenção + histórico operacional unificado
 --
--- Cria: collection_cases, retention_cases, *_case_events, operational_case_contact_attempts
--- RPC: escalate_collection_to_retention (service_role)
+-- Cria: collection_cases, retention_cases, *_case_events, operational_case_contact_attempts,
+--       operational_sector_settings, operational_settings_events,
+--       operational_attendances, customer_operational_history
+-- RPC: escalate_collection_to_retention (service_role) — infraestrutura 3.1B, não exposta na UI 3.1C
 --
 -- Cron futuro: NÃO ativar nesta sprint. Sync = POST /api/admin/collections/sync (Admin Master).
+-- Sem escrita no Controllr. Sem DML de clientes. Sem inferência de cancelamento ERP.
 --
 -- NÃO altera: rewards, wallet, Comercial legado, SLA Comercial, Auth users,
 -- BRByte flags, planos Controllr, vercel cron.
--- NÃO executa sync/migração de dados reais.
 -- Idempotente: CREATE IF NOT EXISTS, DROP TRIGGER IF EXISTS, CREATE OR REPLACE.
 -- Membership NÃO autoriza /admin. Admin Master NÃO entra no round-robin
 -- só por ser admin (o motor 2.2 já exige employee+membership ativa).
@@ -271,6 +273,215 @@ create index if not exists operational_case_contact_attempts_actor_idx
   on public.operational_case_contact_attempts (actor_profile_id, created_at desc);
 
 -- ============================================================
+-- Configurações operacionais por setor (JSONB validado no servidor)
+-- ============================================================
+create table if not exists public.operational_sector_settings (
+  id uuid primary key default gen_random_uuid(),
+  sector_code text not null,
+  is_enabled boolean not null default true,
+  settings jsonb not null default '{}'::jsonb,
+  updated_by_profile_id uuid references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now()),
+  constraint operational_sector_settings_code_chk check (
+    sector_code in (
+      'collections',
+      'retention',
+      'post_sale',
+      'upgrade',
+      'technician',
+      'commercial',
+      'external_sales'
+    )
+  ),
+  constraint operational_sector_settings_code_key unique (sector_code)
+);
+
+comment on table public.operational_sector_settings is
+  'Configuração operacional por setor. Schema JSONB validado server-side. Sem DML de clientes.';
+
+create table if not exists public.operational_settings_events (
+  id uuid primary key default gen_random_uuid(),
+  sector_code text not null,
+  actor_profile_id uuid references public.profiles(id) on delete restrict,
+  old_value jsonb,
+  new_value jsonb,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+comment on table public.operational_settings_events is
+  'Auditoria append-only de alterações em operational_sector_settings.';
+
+create index if not exists operational_settings_events_sector_idx
+  on public.operational_settings_events (sector_code, created_at desc);
+
+create or replace function public.trg_operational_settings_events_append_only()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  raise exception 'operational_settings_events is append-only'
+    using errcode = 'P0001';
+end;
+$$;
+
+drop trigger if exists trg_operational_settings_events_append_only
+  on public.operational_settings_events;
+create trigger trg_operational_settings_events_append_only
+before update or delete on public.operational_settings_events
+for each row execute function public.trg_operational_settings_events_append_only();
+
+insert into public.operational_sector_settings (sector_code, is_enabled, settings)
+values (
+  'collections',
+  true,
+  jsonb_build_object(
+    'minimum_days_overdue', 5,
+    'include_cancelled_customers', false
+  )
+)
+on conflict (sector_code) do nothing;
+
+insert into public.operational_sector_settings (sector_code, is_enabled, settings)
+values (
+  'retention',
+  true,
+  jsonb_build_object('search_by_document', true)
+)
+on conflict (sector_code) do nothing;
+
+-- ============================================================
+-- Atendimentos operacionais (Retenção 3.1C: busca + relatório, sem assignment)
+-- ============================================================
+create table if not exists public.operational_attendances (
+  id uuid primary key default gen_random_uuid(),
+  sector_code text not null,
+  client_pk text,
+  contract_pk text,
+  document_normalized text not null,
+  customer_name_snapshot text,
+  employee_id uuid not null references public.employees(id) on delete restrict,
+  actor_profile_id uuid not null references public.profiles(id) on delete restrict,
+  reason text,
+  action_taken text,
+  notes text,
+  customer_remains boolean,
+  outcome text,
+  status text not null default 'open',
+  started_at timestamptz not null default timezone('utc', now()),
+  completed_at timestamptz,
+  erp_snapshot jsonb not null default '{}'::jsonb,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now()),
+  constraint operational_attendances_sector_chk check (
+    sector_code in (
+      'collections',
+      'retention',
+      'post_sale',
+      'upgrade',
+      'technician',
+      'commercial',
+      'external_sales'
+    )
+  ),
+  constraint operational_attendances_status_chk check (status in ('open', 'completed')),
+  constraint operational_attendances_document_chk check (char_length(document_normalized) >= 11)
+);
+
+comment on table public.operational_attendances is
+  'Atendimento operacional iniciado pelo employee. Sem sector_work_assignment. Actor/employee só do servidor.';
+
+create index if not exists operational_attendances_document_idx
+  on public.operational_attendances (document_normalized, started_at desc);
+
+create index if not exists operational_attendances_client_idx
+  on public.operational_attendances (client_pk, started_at desc);
+
+create index if not exists operational_attendances_employee_idx
+  on public.operational_attendances (employee_id, status, started_at desc);
+
+create index if not exists operational_attendances_sector_idx
+  on public.operational_attendances (sector_code, started_at desc);
+
+-- ============================================================
+-- Histórico operacional unificado do cliente (append-only, timeline humana)
+-- ============================================================
+create table if not exists public.customer_operational_history (
+  id uuid primary key default gen_random_uuid(),
+  client_pk text,
+  contract_pk text,
+  document_reference text,
+  customer_name_snapshot text,
+  sector_code text not null,
+  employee_id uuid references public.employees(id) on delete restrict,
+  actor_profile_id uuid references public.profiles(id) on delete restrict,
+  source text not null,
+  external_history_id text,
+  event_type text not null,
+  action text,
+  result text,
+  notes text,
+  customer_remains boolean,
+  occurred_at timestamptz not null default timezone('utc', now()),
+  external_created_at timestamptz,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now()),
+  constraint customer_operational_history_sector_chk check (
+    sector_code in (
+      'collections',
+      'retention',
+      'post_sale',
+      'upgrade',
+      'technician',
+      'commercial',
+      'external_sales'
+    )
+  ),
+  constraint customer_operational_history_source_chk check (source in ('crm', 'controllr'))
+);
+
+comment on table public.customer_operational_history is
+  'Timeline humana do cliente. Distinta de sector_assignment_events e collection_case_events. Append-only. source=controllr reservado; escrita ERP desligada na 3.1C.';
+
+create unique index if not exists customer_operational_history_external_uidx
+  on public.customer_operational_history (source, external_history_id)
+  where external_history_id is not null;
+
+create index if not exists customer_operational_history_client_idx
+  on public.customer_operational_history (client_pk, occurred_at desc);
+
+create index if not exists customer_operational_history_contract_idx
+  on public.customer_operational_history (contract_pk, occurred_at desc);
+
+create index if not exists customer_operational_history_document_idx
+  on public.customer_operational_history (document_reference, occurred_at desc);
+
+create index if not exists customer_operational_history_sector_idx
+  on public.customer_operational_history (sector_code, occurred_at desc);
+
+create index if not exists customer_operational_history_occurred_idx
+  on public.customer_operational_history (occurred_at desc);
+
+create or replace function public.trg_customer_operational_history_append_only()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  raise exception 'customer_operational_history is append-only'
+    using errcode = 'P0001';
+end;
+$$;
+
+drop trigger if exists trg_customer_operational_history_append_only
+  on public.customer_operational_history;
+create trigger trg_customer_operational_history_append_only
+before update or delete on public.customer_operational_history
+for each row execute function public.trg_customer_operational_history_append_only();
+
+-- ============================================================
 -- RLS: leitura filtrada; escrita só service_role
 -- ============================================================
 alter table public.collection_cases enable row level security;
@@ -417,6 +628,136 @@ grant all on table public.retention_cases to service_role;
 grant all on table public.collection_case_events to service_role;
 grant all on table public.retention_case_events to service_role;
 grant all on table public.operational_case_contact_attempts to service_role;
+
+alter table public.operational_sector_settings enable row level security;
+alter table public.operational_settings_events enable row level security;
+alter table public.operational_attendances enable row level security;
+alter table public.customer_operational_history enable row level security;
+
+drop policy if exists operational_sector_settings_select_policy
+  on public.operational_sector_settings;
+create policy operational_sector_settings_select_policy
+on public.operational_sector_settings
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+      and p.role in ('admin_master', 'admin_consulta')
+  )
+);
+
+drop policy if exists operational_settings_events_select_policy
+  on public.operational_settings_events;
+create policy operational_settings_events_select_policy
+on public.operational_settings_events
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+      and p.role in ('admin_master', 'admin_consulta')
+  )
+);
+
+drop policy if exists operational_attendances_select_policy
+  on public.operational_attendances;
+create policy operational_attendances_select_policy
+on public.operational_attendances
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+      and p.role in ('admin_master', 'admin_consulta')
+  )
+  or exists (
+    select 1
+    from public.employees e
+    join public.employee_sector_memberships m
+      on m.employee_id = e.id
+     and m.is_active = true
+    join public.sectors s
+      on s.id = m.sector_id
+     and s.code = operational_attendances.sector_code
+    where e.profile_id = auth.uid()
+      and e.status = 'active'
+  )
+);
+
+drop policy if exists customer_operational_history_select_policy
+  on public.customer_operational_history;
+create policy customer_operational_history_select_policy
+on public.customer_operational_history
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+      and p.role in ('admin_master', 'admin_consulta')
+  )
+  or exists (
+    select 1
+    from public.employees e
+    join public.employee_sector_memberships m
+      on m.employee_id = e.id
+     and m.is_active = true
+    join public.sectors s
+      on s.id = m.sector_id
+     and s.code = customer_operational_history.sector_code
+    where e.profile_id = auth.uid()
+      and e.status = 'active'
+  )
+  or exists (
+    select 1
+    from public.collection_cases c
+    join public.sector_work_assignments a
+      on a.work_id = c.id
+     and a.work_type = 'collection_case'
+     and a.status = 'active'
+    join public.employees e
+      on e.id = a.employee_id
+    where e.profile_id = auth.uid()
+      and c.client_pk is not null
+      and c.client_pk = customer_operational_history.client_pk
+  )
+);
+
+revoke all on table public.operational_sector_settings from public;
+revoke all on table public.operational_sector_settings from anon;
+revoke all on table public.operational_settings_events from public;
+revoke all on table public.operational_settings_events from anon;
+revoke all on table public.operational_attendances from public;
+revoke all on table public.operational_attendances from anon;
+revoke all on table public.customer_operational_history from public;
+revoke all on table public.customer_operational_history from anon;
+
+revoke insert, update, delete, truncate on table public.operational_sector_settings from authenticated;
+revoke insert, update, delete, truncate on table public.operational_settings_events from authenticated;
+revoke insert, update, delete, truncate on table public.operational_attendances from authenticated;
+revoke insert, update, delete, truncate on table public.customer_operational_history from authenticated;
+
+grant select on table public.operational_sector_settings to authenticated;
+grant select on table public.operational_settings_events to authenticated;
+grant select on table public.operational_attendances to authenticated;
+grant select on table public.customer_operational_history to authenticated;
+
+grant all on table public.operational_sector_settings to service_role;
+grant all on table public.operational_settings_events to service_role;
+grant all on table public.operational_attendances to service_role;
+grant all on table public.customer_operational_history to service_role;
+
+revoke all on function public.trg_operational_settings_events_append_only() from public;
+revoke all on function public.trg_operational_settings_events_append_only() from anon;
+revoke all on function public.trg_operational_settings_events_append_only() from authenticated;
+
+revoke all on function public.trg_customer_operational_history_append_only() from public;
+revoke all on function public.trg_customer_operational_history_append_only() from anon;
+revoke all on function public.trg_customer_operational_history_append_only() from authenticated;
 
 revoke all on function public.trg_collection_case_events_append_only() from public;
 revoke all on function public.trg_collection_case_events_append_only() from anon;
@@ -706,7 +1047,7 @@ end;
 $$;
 
 comment on function public.escalate_collection_to_retention(uuid, uuid, text) is
-  'Escala Cobrança → Retenção. Assign retention (assigned/already_assigned) ANTES de mutar/release Cobrança. Falha dá rollback (P0002). actor é auditoria, não autorização. Sprint 3.1B.';
+  'Escala Cobrança → Retenção. Assign retention (assigned/already_assigned) ANTES de mutar/release Cobrança. Falha dá rollback (P0002). actor é auditoria, não autorização. Sprint 3.1B. UI 3.1C não expõe escalada automática.';
 
 revoke all on function public.escalate_collection_to_retention(uuid, uuid, text) from public;
 revoke all on function public.escalate_collection_to_retention(uuid, uuid, text) from anon;

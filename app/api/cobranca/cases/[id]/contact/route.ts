@@ -25,6 +25,7 @@ export async function POST(
   const result = await registerCollectionContact({
     caseId: id,
     actorProfileId: auth.profileId,
+    employeeId: auth.context?.employeeId ?? auth.employeeId,
     channel: payload.channel,
     outcome: payload.outcome,
     notes: payload.notes,

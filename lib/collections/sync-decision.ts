@@ -40,6 +40,8 @@ export function decideCollectionSyncAction(input: {
   invoice: CollectionSyncInvoice
   existing: ExistingCollectionCase | null
   now?: Date
+  minimumDaysOverdue?: number
+  collectionsEnabled?: boolean
 }): CollectionSyncDecision {
   if (!collectionCaseIdentityKey({ invoicePk: input.invoice.invoicePk })) {
     return { action: "skip", reason: "no_invoice_pk" }
@@ -52,6 +54,8 @@ export function decideCollectionSyncAction(input: {
     daysOverdue,
     isPaid: input.invoice.isPaid,
     invoicePk: input.invoice.invoicePk,
+    minimumDaysOverdue: input.minimumDaysOverdue,
+    collectionsEnabled: input.collectionsEnabled,
   })
 
   if (input.invoice.isPaid) {

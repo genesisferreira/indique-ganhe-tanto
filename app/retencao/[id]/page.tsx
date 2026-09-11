@@ -14,185 +14,169 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type {
-  ContactChannel,
-  ContactOutcome,
-  OperationalContactAttempt,
-  RetentionCase,
-  RetentionCaseEvent,
-} from "@/types/collections"
+import type { OperationalAttendance } from "@/types/collections"
+import type { OperationalHistoryItem } from "@/lib/operational/history"
 
-const STATUS_LABEL: Record<string, string> = {
-  open: "Aberto",
-  in_contact: "Em contato",
-  offer_made: "Oferta feita",
-  retained: "Retido",
-  not_retained: "Não retido",
-  cancelled: "Cancelado",
-  closed: "Encerrado",
+const SECTOR_LABEL: Record<string, string> = {
+  collections: "Cobrança",
+  retention: "Retenção",
+  post_sale: "Pós-venda",
+  upgrade: "Upgrade",
+  technician: "Técnico",
+  commercial: "Comercial",
+  external_sales: "Vendas externas",
 }
 
-export default function RetencaoDetailPage({
+export default function RetencaoAttendancePage({
   params,
 }: {
   params: Promise<{ id: string }>
 }) {
   const { id } = use(params)
-  const [item, setItem] = useState<RetentionCase | null>(null)
-  const [events, setEvents] = useState<RetentionCaseEvent[]>([])
-  const [attempts, setAttempts] = useState<OperationalContactAttempt[]>([])
-  const [channel, setChannel] = useState<ContactChannel>("phone")
-  const [outcome, setOutcome] = useState<ContactOutcome>("contacted")
+  const [attendance, setAttendance] = useState<OperationalAttendance | null>(null)
+  const [history, setHistory] = useState<OperationalHistoryItem[]>([])
+  const [actionTaken, setActionTaken] = useState("")
   const [notes, setNotes] = useState("")
-  const [toEmployeeId, setToEmployeeId] = useState("")
+  const [customerRemains, setCustomerRemains] = useState<"sim" | "nao" | "">("")
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/retencao/cases/${id}`, { cache: "no-store" })
+    const res = await fetch(`/api/retencao/attendances/${id}`, { cache: "no-store" })
     const json = await res.json().catch(() => null)
     if (!res.ok || !json?.ok) {
-      toast.error(json?.message || "Caso não encontrado.")
+      toast.error(json?.message || "Atendimento não encontrado.")
       return
     }
-    setItem(json.case)
-    setEvents(json.events ?? [])
-    setAttempts(json.attempts ?? [])
+    setAttendance(json.attendance)
+    setHistory(json.operationalHistory ?? [])
+    setActionTaken(json.attendance.actionTaken ?? "")
+    setNotes(json.attendance.notes ?? "")
+    if (json.attendance.customerRemains === true) setCustomerRemains("sim")
+    if (json.attendance.customerRemains === false) setCustomerRemains("nao")
   }, [id])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  async function post(path: string, body?: unknown) {
+  async function complete() {
     setBusy(true)
-    const res = await fetch(path, {
+    const res = await fetch(`/api/retencao/attendances/${id}/complete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body ?? {}),
+      body: JSON.stringify({
+        actionTaken,
+        notes,
+        customerRemains:
+          customerRemains === "sim" ? true : customerRemains === "nao" ? false : null,
+      }),
     })
     const json = await res.json().catch(() => null)
     setBusy(false)
     if (!res.ok || json?.ok === false) {
-      toast.error(json?.message || "Não foi possível concluir a ação.")
+      toast.error(json?.message || "Não foi possível concluir.")
       return
     }
-    toast.success("Atualizado.")
+    toast.success("Atendimento concluído.")
     await load()
   }
 
-  if (!item) return <p className="text-muted-foreground">Carregando caso…</p>
-  const locked = ["retained", "not_retained", "cancelled", "closed"].includes(item.status)
+  if (!attendance) {
+    return <p className="text-muted-foreground">Carregando atendimento…</p>
+  }
+
+  const locked = attendance.status === "completed"
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Caso de retenção"
-        description={`Origem: ${item.source}${item.linkedCollectionCaseId ? " · vinculado à cobrança" : ""}`}
+        title={attendance.customerNameSnapshot || "Atendimento de retenção"}
+        description={`${attendance.documentMasked || "Documento mascarado"} · ${attendance.status}`}
       >
         <Button asChild variant="outline">
           <Link href="/retencao">Voltar</Link>
         </Button>
       </PageHeader>
 
-      <div className="rounded-lg border p-4 space-y-2 text-sm">
-        <p><span className="text-muted-foreground">Cliente PK:</span> {item.clientPk || "—"}</p>
-        <p><span className="text-muted-foreground">Contrato PK:</span> {item.contractPk || "—"}</p>
-        <p><span className="text-muted-foreground">Motivo:</span> {item.reason || "—"}</p>
-        <p><span className="text-muted-foreground">Status:</span> {STATUS_LABEL[item.status] ?? item.status}</p>
-        {item.linkedCollectionCaseId ? (
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-lg border p-4 space-y-2 text-sm">
+          <p><span className="text-muted-foreground">Cliente PK:</span> {attendance.clientPk || "—"}</p>
+          <p><span className="text-muted-foreground">Contrato PK:</span> {attendance.contractPk || "—"}</p>
+          <p><span className="text-muted-foreground">Motivo inicial:</span> {attendance.reason || "—"}</p>
           <p>
-            <Link className="underline" href={`/cobranca/${item.linkedCollectionCaseId}`}>
-              Ver caso de cobrança
-            </Link>
+            <span className="text-muted-foreground">Cliente permanece:</span>{" "}
+            {attendance.customerRemains == null ? "—" : attendance.customerRemains ? "Sim" : "Não"}
           </p>
-        ) : null}
-      </div>
-
-      <div className="rounded-lg border p-4 space-y-3">
-        <h2 className="font-semibold">Registrar contato</h2>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <Label>Canal</Label>
-            <Select value={channel} onValueChange={(v) => setChannel(v as ContactChannel)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="phone">Telefone</SelectItem>
-                <SelectItem value="whatsapp">WhatsApp</SelectItem>
-                <SelectItem value="email">E-mail</SelectItem>
-                <SelectItem value="other">Outro</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Resultado</Label>
-            <Select value={outcome} onValueChange={(v) => setOutcome(v as ContactOutcome)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="contacted">Contato feito</SelectItem>
-                <SelectItem value="no_answer">Sem resposta</SelectItem>
-                <SelectItem value="callback">Retornar</SelectItem>
-                <SelectItem value="refused">Recusou</SelectItem>
-                <SelectItem value="other">Outro</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
         </div>
-        <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} />
-        <Button
-          disabled={busy || locked}
-          onClick={() => void post(`/api/retencao/cases/${id}/contact`, { channel, outcome, notes })}
-        >
-          Registrar tentativa
-        </Button>
-      </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={busy || locked} variant="secondary" onClick={() => void post(`/api/retencao/cases/${id}/status`, { status: "offer_made" })}>
-          Oferta feita
-        </Button>
-        <Button disabled={busy || locked} onClick={() => void post(`/api/retencao/cases/${id}/status`, { status: "retained" })}>
-          Retido
-        </Button>
-        <Button disabled={busy || locked} variant="secondary" onClick={() => void post(`/api/retencao/cases/${id}/status`, { status: "not_retained" })}>
-          Não retido
-        </Button>
-        <Button disabled={busy || locked} variant="outline" onClick={() => void post(`/api/retencao/cases/${id}/close`)}>
-          Encerrar
-        </Button>
-        <div className="flex gap-2">
-          <input
-            className="h-9 rounded-md border px-3 text-sm"
-            placeholder="employee_id destino"
-            value={toEmployeeId}
-            onChange={(e) => setToEmployeeId(e.target.value)}
-          />
+        <div className="rounded-lg border p-4 space-y-3">
+          <h2 className="font-semibold">Relatório</h2>
+          <div>
+            <Label>O que foi feito?</Label>
+            <Textarea
+              value={actionTaken}
+              onChange={(e) => setActionTaken(e.target.value)}
+              disabled={locked || busy}
+              maxLength={500}
+            />
+          </div>
+          <div>
+            <Label>Observações</Label>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              disabled={locked || busy}
+              maxLength={500}
+            />
+          </div>
+          <div>
+            <Label>Cliente permanecerá?</Label>
+            <Select
+              value={customerRemains}
+              onValueChange={(v) => setCustomerRemains(v as "sim" | "nao")}
+              disabled={locked || busy}
+            >
+              <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="sim">Sim</SelectItem>
+                <SelectItem value="nao">Não</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <Button
-            variant="outline"
-            disabled={busy || locked || !toEmployeeId.trim()}
-            onClick={() => void post(`/api/retencao/cases/${id}/transfer`, { toEmployeeId })}
+            disabled={locked || busy || !actionTaken.trim() || !customerRemains}
+            onClick={() => void complete()}
           >
-            Transferir
+            Concluir atendimento
           </Button>
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-lg border p-4">
-          <h2 className="mb-3 font-semibold">Tentativas</h2>
-          <ul className="space-y-2 text-sm">
-            {attempts.length === 0 ? <li className="text-muted-foreground">Nenhuma.</li> : attempts.map((a) => (
-              <li key={a.id}>{new Date(a.createdAt).toLocaleString("pt-BR")} · {a.channel} · {a.outcome}</li>
-            ))}
-          </ul>
-        </div>
-        <div className="rounded-lg border p-4">
-          <h2 className="mb-3 font-semibold">Histórico</h2>
-          <ul className="space-y-2 text-sm">
-            {events.length === 0 ? <li className="text-muted-foreground">Nenhum.</li> : events.map((e) => (
-              <li key={e.id}>{new Date(e.createdAt).toLocaleString("pt-BR")} · {e.eventType}</li>
-            ))}
-          </ul>
-        </div>
+      <div className="rounded-lg border p-4">
+        <h2 className="mb-3 font-semibold">Histórico do cliente</h2>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Timeline do CRM. Histórico do Controllr ainda não tem endpoint confirmado neste
+          repositório (somente leitura futura; escrita ERP desligada).
+        </p>
+        <ul className="space-y-2 text-sm">
+          {history.length === 0 ? (
+            <li className="text-muted-foreground">Nenhum evento operacional.</li>
+          ) : (
+            history.map((item) => (
+              <li key={item.id}>
+                {new Date(item.occurredAt).toLocaleString("pt-BR")} ·{" "}
+                {item.source === "controllr" ? "Controllr" : "CRM"} ·{" "}
+                {SECTOR_LABEL[item.sectorCode] ?? item.sectorCode} · {item.eventType}
+                {item.customerRemains == null
+                  ? ""
+                  : item.customerRemains
+                    ? " · permanece"
+                    : " · não permanece"}
+                {item.notes ? ` — ${item.notes}` : ""}
+              </li>
+            ))
+          )}
+        </ul>
       </div>
     </div>
   )

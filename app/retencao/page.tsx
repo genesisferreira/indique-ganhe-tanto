@@ -6,143 +6,183 @@ import { toast } from "sonner"
 import { PageHeader } from "@/components/ui/page-header"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
-import type { RetentionCaseListItem } from "@/types/collections"
+import { Label } from "@/components/ui/label"
+import type { OperationalAttendance } from "@/types/collections"
 
-const STATUS_LABEL: Record<string, string> = {
-  open: "Aberto",
-  in_contact: "Em contato",
-  offer_made: "Oferta feita",
-  retained: "Retido",
-  not_retained: "Não retido",
-  cancelled: "Cancelado",
-  closed: "Encerrado",
+type SearchResult = {
+  found: boolean
+  documentMasked: string | null
+  customerName: string | null
+  clientPk: string | null
+  contractPk: string | null
+  phone: string | null
+  interestStatus: string | null
+  sources: string[]
+  collectionCases: Array<{
+    id: string
+    invoicePk: string | null
+    daysOverdue: number
+    status: string
+    outstandingAmount: number | null
+  }>
+  openAttendanceId: string | null
+  cancelledStatusAvailable: false
+  controllrHistoryAvailable: false
 }
 
 export default function RetencaoPage() {
-  const [items, setItems] = useState<RetentionCaseListItem[]>([])
-  const [dashboard, setDashboard] = useState({
-    mine: 0,
-    open: 0,
-    offerMade: 0,
-    retained: 0,
-    notRetained: 0,
-  })
-  const [reason, setReason] = useState("")
-  const [clientPk, setClientPk] = useState("")
+  const [document, setDocument] = useState("")
   const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<SearchResult | null>(null)
+  const [mine, setMine] = useState<OperationalAttendance[]>([])
+  const [reason, setReason] = useState("")
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/retencao/cases", { cache: "no-store" })
+  const loadMine = useCallback(async () => {
+    const res = await fetch("/api/retencao/attendances", { cache: "no-store" })
     const json = await res.json().catch(() => null)
-    if (!res.ok || !json?.ok) {
-      toast.error(json?.message || "Não foi possível carregar a Retenção.")
-      return
-    }
-    setItems(json.items ?? [])
-    setDashboard(json.dashboard)
+    if (res.ok && json?.ok) setMine(json.items ?? [])
   }, [])
 
   useEffect(() => {
-    void load()
-  }, [load])
+    void loadMine()
+  }, [loadMine])
 
-  async function createManual() {
+  async function search() {
     setBusy(true)
-    const res = await fetch("/api/retencao/cases", {
+    const res = await fetch("/api/retencao/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason, clientPk }),
+      body: JSON.stringify({ document }),
     })
     const json = await res.json().catch(() => null)
     setBusy(false)
     if (!res.ok || !json?.ok) {
-      toast.error(json?.message || "Não foi possível criar o caso.")
+      toast.error(json?.message || "Não foi possível buscar.")
       return
     }
-    toast.success("Caso criado.")
-    setReason("")
-    setClientPk("")
-    await load()
+    setResult(json as SearchResult)
+    if (!json.found) toast.message("Nenhum cliente encontrado com esse documento.")
+  }
+
+  async function startAttendance() {
+    if (!result?.found) return
+    setBusy(true)
+    const res = await fetch("/api/retencao/attendances", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        document,
+        clientPk: result.clientPk,
+        contractPk: result.contractPk,
+        customerName: result.customerName,
+        reason,
+      }),
+    })
+    const json = await res.json().catch(() => null)
+    setBusy(false)
+    if (!res.ok || !json?.ok) {
+      toast.error(json?.message || "Não foi possível iniciar o atendimento.")
+      return
+    }
+    window.location.href = `/retencao/${json.attendance.id}`
   }
 
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
         title="Retenção"
-        description="Clientes com risco de cancelamento ou inadimplência relevante."
+        description="Busque o cliente por CPF/CNPJ, consulte os dados disponíveis e registre o atendimento."
       />
 
-      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        {[
-          ["Meus casos", dashboard.mine],
-          ["Abertos", dashboard.open],
-          ["Oferta feita", dashboard.offerMade],
-          ["Retidos", dashboard.retained],
-          ["Não retidos", dashboard.notRetained],
-        ].map(([label, value]) => (
-          <div key={String(label)} className="rounded-lg border bg-card p-4">
-            <p className="text-sm text-muted-foreground">{label}</p>
-            <p className="mt-1 text-2xl font-semibold">{value}</p>
-          </div>
-        ))}
+      <div className="rounded-lg border p-4 space-y-3">
+        <Label htmlFor="doc">CPF ou CNPJ</Label>
+        <div className="flex flex-wrap gap-2">
+          <Input
+            id="doc"
+            value={document}
+            onChange={(e) => setDocument(e.target.value)}
+            placeholder="Somente números ou com máscara"
+          />
+          <Button disabled={busy || !document.trim()} onClick={() => void search()}>
+            Buscar cliente
+          </Button>
+        </div>
       </div>
 
-      <div className="mb-6 rounded-lg border p-4 space-y-3">
-        <h2 className="font-semibold">Marcar risco manualmente</h2>
-        <Input
-          placeholder="client_pk (opcional)"
-          value={clientPk}
-          onChange={(e) => setClientPk(e.target.value)}
-        />
-        <Textarea
-          placeholder="Motivo de risco"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          maxLength={500}
-        />
-        <Button disabled={busy} onClick={() => void createManual()}>
-          Criar caso
-        </Button>
-      </div>
+      {result ? (
+        <div className="rounded-lg border p-4 space-y-3 text-sm">
+          {!result.found ? (
+            <p className="text-muted-foreground">Nenhum registro comprovado para este documento.</p>
+          ) : (
+            <>
+              <h2 className="font-semibold text-base">
+                {result.customerName || "Cliente localizado"}
+              </h2>
+              <p><span className="text-muted-foreground">Documento:</span> {result.documentMasked || "—"}</p>
+              <p><span className="text-muted-foreground">Cliente PK:</span> {result.clientPk || "—"}</p>
+              <p><span className="text-muted-foreground">Contrato PK:</span> {result.contractPk || "—"}</p>
+              {result.phone ? (
+                <p><span className="text-muted-foreground">Telefone:</span> {result.phone}</p>
+              ) : null}
+              {result.interestStatus ? (
+                <p>
+                  <span className="text-muted-foreground">Status do Interessado (Controllr):</span>{" "}
+                  {result.interestStatus}
+                </p>
+              ) : null}
+              <p className="text-muted-foreground">
+                Cancelamento ERP: não confirmado neste repositório. Histórico Controllr: consulta
+                ainda não disponível.
+              </p>
+              {result.collectionCases.length > 0 ? (
+                <div>
+                  <p className="font-medium mb-1">Faturas em Cobrança (CRM)</p>
+                  <ul className="space-y-1">
+                    {result.collectionCases.map((c) => (
+                      <li key={c.id}>
+                        {c.invoicePk || "fatura"} · {c.daysOverdue} dias · {c.status}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              <Input
+                placeholder="Motivo inicial (opcional)"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+              {result.openAttendanceId ? (
+                <Button asChild>
+                  <Link href={`/retencao/${result.openAttendanceId}`}>Abrir atendimento em andamento</Link>
+                </Button>
+              ) : (
+                <Button disabled={busy} onClick={() => void startAttendance()}>
+                  Iniciar atendimento
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+      ) : null}
 
-      <div className="overflow-x-auto rounded-lg border">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-left">
-            <tr>
-              <th className="px-3 py-2">Cliente</th>
-              <th className="px-3 py-2">Origem</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Motivo</th>
-              <th className="px-3 py-2">Responsável</th>
-              <th className="px-3 py-2"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 ? (
-              <tr>
-                <td className="px-3 py-6 text-muted-foreground" colSpan={6}>
-                  Nenhum caso de retenção.
-                </td>
-              </tr>
-            ) : (
-              items.map((item) => (
-                <tr key={item.id} className="border-t">
-                  <td className="px-3 py-2">{item.clientPk || "—"}</td>
-                  <td className="px-3 py-2">{item.source}</td>
-                  <td className="px-3 py-2">{STATUS_LABEL[item.status] ?? item.status}</td>
-                  <td className="px-3 py-2">{item.reason || "—"}</td>
-                  <td className="px-3 py-2">{item.assigneeName || "—"}</td>
-                  <td className="px-3 py-2">
-                    <Button asChild size="sm" variant="outline">
-                      <Link href={`/retencao/${item.id}`}>Abrir</Link>
-                    </Button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+      <div className="rounded-lg border p-4">
+        <h2 className="mb-3 font-semibold">Meus atendimentos</h2>
+        <ul className="space-y-2 text-sm">
+          {mine.length === 0 ? (
+            <li className="text-muted-foreground">Nenhum atendimento recente.</li>
+          ) : (
+            mine.map((item) => (
+              <li key={item.id} className="flex items-center justify-between gap-2">
+                <span>
+                  {item.customerNameSnapshot || item.documentMasked || item.id} · {item.status}
+                </span>
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/retencao/${item.id}`}>Abrir</Link>
+                </Button>
+              </li>
+            ))
+          )}
+        </ul>
       </div>
     </div>
   )

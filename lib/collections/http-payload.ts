@@ -15,5 +15,8 @@ export function stripBrowserActor(body: unknown): Record<string, unknown> {
   delete rest.employee_id
   delete rest.employeeId
   delete rest.role
+  delete rest.source
+  delete rest.sector_code
+  delete rest.sectorCode
   return rest
 }

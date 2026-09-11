@@ -49,9 +49,19 @@ export default function CobrancaDetailPage({
   const [channel, setChannel] = useState<ContactChannel>("phone")
   const [outcome, setOutcome] = useState<ContactOutcome>("contacted")
   const [notes, setNotes] = useState("")
-  const [reason, setReason] = useState("")
   const [toEmployeeId, setToEmployeeId] = useState("")
   const [busy, setBusy] = useState(false)
+  const [operationalHistory, setOperationalHistory] = useState<
+    Array<{
+      id: string
+      source: string
+      sectorCode: string
+      eventType: string
+      notes: string | null
+      occurredAt: string
+      customerRemains: boolean | null
+    }>
+  >([])
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/cobranca/cases/${id}`, { cache: "no-store" })
@@ -63,6 +73,7 @@ export default function CobrancaDetailPage({
     setItem(json.case)
     setEvents(json.events ?? [])
     setAttempts(json.attempts ?? [])
+    setOperationalHistory(json.operationalHistory ?? [])
   }, [id])
 
   useEffect(() => {
@@ -177,21 +188,6 @@ export default function CobrancaDetailPage({
         <div className="flex gap-2">
           <input
             className="h-9 rounded-md border px-3 text-sm"
-            placeholder="Motivo da escalada"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          />
-          <Button
-            variant="destructive"
-            disabled={busy || locked}
-            onClick={() => void post(`/api/cobranca/cases/${id}/escalate`, { reason })}
-          >
-            Escalar retenção
-          </Button>
-        </div>
-        <div className="flex gap-2">
-          <input
-            className="h-9 rounded-md border px-3 text-sm"
             placeholder="employee_id destino"
             value={toEmployeeId}
             onChange={(e) => setToEmployeeId(e.target.value)}
@@ -221,7 +217,7 @@ export default function CobrancaDetailPage({
           </ul>
         </div>
         <div className="rounded-lg border p-4">
-          <h2 className="mb-3 font-semibold">Histórico</h2>
+          <h2 className="mb-3 font-semibold">Eventos do caso</h2>
           <ul className="space-y-2 text-sm">
             {events.length === 0 ? <li className="text-muted-foreground">Nenhum.</li> : events.map((e) => (
               <li key={e.id}>
@@ -230,6 +226,28 @@ export default function CobrancaDetailPage({
             ))}
           </ul>
         </div>
+      </div>
+
+      <div className="rounded-lg border p-4">
+        <h2 className="mb-3 font-semibold">Histórico do cliente</h2>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Timeline operacional (CRM). Assignment/transfer não entram aqui. Histórico Controllr ainda
+          sem endpoint confirmado.
+        </p>
+        <ul className="space-y-2 text-sm">
+          {operationalHistory.length === 0 ? (
+            <li className="text-muted-foreground">Nenhum evento operacional.</li>
+          ) : (
+            operationalHistory.map((item) => (
+              <li key={item.id}>
+                {new Date(item.occurredAt).toLocaleString("pt-BR")} ·{" "}
+                {item.source === "controllr" ? "Controllr" : "CRM"} · {item.sectorCode} ·{" "}
+                {item.eventType}
+                {item.notes ? ` — ${item.notes}` : ""}
+              </li>
+            ))
+          )}
+        </ul>
       </div>
     </div>
   )

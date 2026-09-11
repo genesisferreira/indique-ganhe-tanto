@@ -39,9 +39,16 @@ export function computeDaysOverdue(input: {
   return diffDays
 }
 
-export function isCollectionOverdueEligible(daysOverdue: number | null | undefined): boolean {
+export function isCollectionOverdueEligible(
+  daysOverdue: number | null | undefined,
+  minimumDaysOverdue: number = COLLECTION_OVERDUE_THRESHOLD_DAYS
+): boolean {
   if (daysOverdue == null || !Number.isFinite(daysOverdue)) return false
-  return daysOverdue >= COLLECTION_OVERDUE_THRESHOLD_DAYS
+  const min =
+    Number.isInteger(minimumDaysOverdue) && minimumDaysOverdue >= 1
+      ? minimumDaysOverdue
+      : COLLECTION_OVERDUE_THRESHOLD_DAYS
+  return daysOverdue >= min
 }
 
 export function collectionCaseIdentityKey(input: {
@@ -57,10 +64,13 @@ export function shouldOpenCollectionCase(input: {
   daysOverdue: number | null | undefined
   isPaid: boolean
   invoicePk?: string | null
+  minimumDaysOverdue?: number
+  collectionsEnabled?: boolean
 }): boolean {
+  if (input.collectionsEnabled === false) return false
   if (!collectionCaseIdentityKey({ invoicePk: input.invoicePk })) return false
   if (input.isPaid) return false
-  return isCollectionOverdueEligible(input.daysOverdue)
+  return isCollectionOverdueEligible(input.daysOverdue, input.minimumDaysOverdue)
 }
 
 export function isCollectionStatusOpen(
