@@ -19,6 +19,7 @@ import {
 import {
   EMPLOYEE_STATUS_LABELS,
   EMPLOYEE_STATUSES,
+  presentSectorMembershipLabel,
 } from "@/lib/employees/admin-policy"
 import type { EmployeeStatus } from "@/types/employee"
 
@@ -130,7 +131,7 @@ export default function AdminFuncionariosPage() {
                   <SelectItem value="all">Todos os setores</SelectItem>
                   {sectors.map((item) => (
                     <SelectItem key={item.code} value={item.code}>
-                      {item.name}
+                      {presentSectorMembershipLabel({ code: item.code, name: item.name })}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -178,7 +179,10 @@ export default function AdminFuncionariosPage() {
                     <div className="flex flex-wrap gap-1">
                       {active.map((sector) => (
                         <Badge key={sector.code} variant="outline">
-                          {sector.name}
+                          {presentSectorMembershipLabel({
+                            code: sector.code,
+                            name: sector.name,
+                          })}
                         </Badge>
                       ))}
                     </div>

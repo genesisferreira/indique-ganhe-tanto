@@ -20,6 +20,9 @@ import {
 import {
   EMPLOYEE_STATUS_LABELS,
   EMPLOYEE_STATUSES,
+  LEGACY_COMMERCIAL_MEMBERSHIP_WARNING,
+  isLegacyCommercialSector,
+  presentSectorMembershipLabel,
 } from "@/lib/employees/admin-policy"
 import type { EmployeeStatus } from "@/types/employee"
 
@@ -220,10 +223,15 @@ export default function FuncionarioDetailPage({
           {sectors.map((sector) => {
             const membership = membershipByCode.get(sector.code)
             const checked = membership?.isActive === true
+            const legacyCommercial = isLegacyCommercialSector(sector.code)
             return (
               <label
                 key={sector.code}
-                className="flex items-start justify-between gap-4 rounded-lg border p-3"
+                className={
+                  legacyCommercial
+                    ? "flex items-start justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3"
+                    : "flex items-start justify-between gap-4 rounded-lg border p-3"
+                }
               >
                 <div className="flex items-start gap-3">
                   <Checkbox
@@ -232,15 +240,35 @@ export default function FuncionarioDetailPage({
                     onCheckedChange={(value) => void toggleSector(sector.code, value === true)}
                   />
                   <div>
-                    <p className="font-medium">{sector.name}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {checked ? "Membership ativa" : membership ? "Inativa (histórico preservado)" : "Sem vínculo"}
+                    <p className="font-medium">
+                      {presentSectorMembershipLabel({ code: sector.code, name: sector.name })}
                     </p>
+                    <p className="text-sm text-muted-foreground">
+                      {legacyCommercial
+                        ? checked
+                          ? "Membership registrada — não habilita sozinha a fila Comercial"
+                          : membership
+                            ? "Inativa (histórico preservado)"
+                            : "Sem vínculo de membership"
+                        : checked
+                          ? "Membership ativa"
+                          : membership
+                            ? "Inativa (histórico preservado)"
+                            : "Sem vínculo"}
+                    </p>
+                    {legacyCommercial ? (
+                      <p className="mt-2 text-sm text-amber-800 dark:text-amber-200">
+                        {LEGACY_COMMERCIAL_MEMBERSHIP_WARNING}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
-                <Badge variant={checked ? "default" : "secondary"}>
-                  {checked ? "Ativo" : "Inativo"}
-                </Badge>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  {legacyCommercial ? <Badge variant="outline">Legado</Badge> : null}
+                  <Badge variant={checked ? "default" : "secondary"}>
+                    {checked ? "Ativo" : "Inativo"}
+                  </Badge>
+                </div>
               </label>
             )
           })}
@@ -262,13 +290,24 @@ export default function FuncionarioDetailPage({
               .filter((item) => item.isActive)
               .map((item) => (
                 <div key={item.id} className="rounded-lg border p-3">
-                  <p className="font-medium">{item.sectorName}</p>
+                  <p className="font-medium">
+                    {presentSectorMembershipLabel({
+                      code: item.sectorCode,
+                      name: item.sectorName,
+                    })}
+                  </p>
                   <p className="text-muted-foreground">
-                    Recebe trabalhos:{" "}
-                    {item.receivingAssignments == null ? "—" : item.receivingAssignments ? "sim" : "não"}
-                    {" · "}
-                    Disponível na fila:{" "}
-                    {item.isAvailable == null ? "—" : item.isAvailable ? "sim" : "não"}
+                    {isLegacyCommercialSector(item.sectorCode)
+                      ? "A fila Comercial 2.1B não é controlada por esta membership."
+                      : `Recebe trabalhos: ${
+                          item.receivingAssignments == null
+                            ? "—"
+                            : item.receivingAssignments
+                              ? "sim"
+                              : "não"
+                        } · Disponível na fila: ${
+                          item.isAvailable == null ? "—" : item.isAvailable ? "sim" : "não"
+                        }`}
                     {" · "}
                     Itens ativos: {item.activeAssignments}
                   </p>

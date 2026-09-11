@@ -137,6 +137,34 @@ export function canDeactivateMembership(activeAssignmentCount: number):
   return { ok: true }
 }
 
+export const LEGACY_COMMERCIAL_SECTOR_CODE = "commercial"
+
+export const LEGACY_COMMERCIAL_MEMBERSHIP_LABEL = "Comercial — legado"
+
+export const LEGACY_COMMERCIAL_MEMBERSHIP_WARNING =
+  "O vínculo com este setor não habilita sozinho a distribuição de leads do Comercial. A operação atual também depende do perfil Comercial e das configurações de disponibilidade/distribuição."
+
+export function isLegacyCommercialSector(code: string | null | undefined): boolean {
+  return String(code ?? "").trim().toLowerCase() === LEGACY_COMMERCIAL_SECTOR_CODE
+}
+
+export function presentSectorMembershipLabel(input: {
+  code: string
+  name?: string | null
+}): string {
+  if (isLegacyCommercialSector(input.code)) return LEGACY_COMMERCIAL_MEMBERSHIP_LABEL
+  const name = (input.name ?? "").trim()
+  return name || input.code
+}
+
+export const ADMIN_SECTORS_VISIBLE_COLUMNS = [
+  { key: "nome", header: "Nome" },
+  { key: "codigo", header: "Código" },
+  { key: "descricao", header: "Descrição" },
+  { key: "situacao", header: "Situação" },
+  { key: "membros_ativos", header: "Membros ativos" },
+] as const
+
 export function commercialMembershipDoesNotBypassLegacy(input: {
   profileRole: string | null | undefined
   hasCommercialLeadSettings: boolean
@@ -150,9 +178,7 @@ export function commercialMembershipDoesNotBypassLegacy(input: {
   return {
     bypassesLegacy: false,
     commercialDistributionReady: ready,
-    message: ready
-      ? "Membership Comercial registrada. A distribuição de leads continua exigindo role comercial e as configurações legadas de fila."
-      : "Membership Comercial não substitui o role legado, commercial_lead_settings nem commercial_availability. A fila comercial 2.1B permanece inalterada.",
+    message: LEGACY_COMMERCIAL_MEMBERSHIP_WARNING,
   }
 }
 
