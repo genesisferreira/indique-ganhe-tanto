@@ -12,11 +12,11 @@ function read(rel: string) {
 describe("3.1E-B wiring create route", () => {
   const src = read("app/api/admin/employees/create/route.ts")
 
-  it("createUser só via auth.admin no cliente privilegiado", () => {
-    assert.match(src, /getPrivileged\(\)\.auth\.admin\.createUser/)
+  it("createUser só via helper compartilhado no cliente privilegiado", () => {
+    assert.match(src, /createConfirmedAuthUserWithPassword/)
+    assert.match(src, /getPrivileged\(\)/)
     assert.equal(src.includes("createBrowserClient"), false)
     assert.match(src, /authorizeEmployeeAdminRequest\("write"\)/)
-    assert.match(src, /email_confirm: true/)
     assert.match(src, /role: "funcionario"/)
     assert.equal(src.includes("NEXT_PUBLIC_SUPABASE_SERVICE"), false)
   })

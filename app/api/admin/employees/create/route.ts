@@ -13,6 +13,7 @@ import {
 } from "@/lib/employees/create-employee-account"
 import { logEmployeeAccountDbError } from "@/lib/employees/employee-account-db-log"
 import { isUniqueViolationError } from "@/lib/commercial-assisted/idempotency"
+import { createConfirmedAuthUserWithPassword } from "@/lib/auth/create-confirmed-auth-user"
 import { createClient } from "@/lib/supabase/server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 
@@ -235,31 +236,23 @@ export async function POST(request: Request) {
         return null
       },
       createAuthUser: async ({ email, password, metadata }) => {
-        const { data, error } = await getPrivileged().auth.admin.createUser({
+        const created = await createConfirmedAuthUserWithPassword(getPrivileged(), {
           email,
           password,
-          email_confirm: true,
-          user_metadata: metadata,
+          userMetadata: metadata,
         })
-        if (error || !data.user?.id) {
-          const msg = (error?.message ?? "").toLowerCase()
-          if (
-            msg.includes("already") ||
-            msg.includes("registered") ||
-            msg.includes("exists")
-          ) {
+        if (!created.ok) {
+          if (created.code === "email_exists") {
             return { ok: false as const, code: "email_exists" as const }
           }
           logEmployeeAccountDbError({
             stage: "auth_create_user",
             operation: "createUser",
-            error: error
-              ? { message: error.message, code: (error as { code?: string }).code }
-              : { message: "create_failed" },
+            error: { message: created.message ?? "create_failed" },
           })
           return { ok: false as const, code: "create_failed" as const }
         }
-        return { ok: true as const, userId: data.user.id }
+        return { ok: true as const, userId: created.userId }
       },
       deleteAuthUser: async (userId) => {
         const { error } = await getPrivileged().auth.admin.deleteUser(userId)

@@ -314,6 +314,7 @@ describe("3.1E-B createEmployeeAccount", () => {
     assert.equal(deps.employees.size, 1)
     assert.deepEqual(deps.memberships, ["s-col", "s-ret"])
     assert.equal(result.temporaryPassword, "TempPass!2345678")
+    assert.deepEqual(deps.passwordsSeen, ["TempPass!2345678"])
   })
 
   it("I) e-mail duplicado bloqueado", async () => {
@@ -488,7 +489,7 @@ describe("3.1E-B A-AB arquitetura", () => {
   })
 
   it("Auth só server-side; service não expõe createUser", () => {
-    assert.match(routeSrc, /getPrivileged\(\)\.auth\.admin\.createUser/)
+    assert.match(routeSrc, /createConfirmedAuthUserWithPassword/)
     assert.equal(serviceSrc.includes("auth.admin.createUser"), false)
     assert.equal(novoSrc.includes("createUser"), false)
   })

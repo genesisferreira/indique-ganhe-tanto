@@ -57,8 +57,9 @@ describe("assisted-indicators route wiring (hotfix service-role)", () => {
     assert.equal(actorBlock.includes("getPrivileged"), false)
   })
 
-  it("createUser só via auth.admin no cliente privilegiado", () => {
-    assert.match(routeSrc, /getPrivileged\(\)\.auth\.admin\.createUser/)
+  it("createUser só via helper compartilhado no cliente privilegiado", () => {
+    assert.match(routeSrc, /createConfirmedAuthUserWithPassword/)
+    assert.match(routeSrc, /getPrivileged\(\)/)
   })
 
   it("profiles/pix privilegiados usam service role; audit permanece na sessão", () => {

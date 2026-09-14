@@ -286,6 +286,7 @@ describe("createAssistedIndicator service", () => {
     if (!result.ok) return
     assert.equal(result.replayed, false)
     assert.equal(result.temporaryPassword, "TempPass!2345678")
+    assert.deepEqual(deps.passwordsSeen, ["TempPass!2345678"])
     assert.equal(result.mustChangePassword, true)
     const profile = deps.profiles.get(result.indicator.id)!
     assert.equal(profile.role, "indicador")

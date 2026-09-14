@@ -20,6 +20,7 @@ import {
 } from "@/lib/auth/demo-login"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { performClientLogout } from "@/lib/auth/logout"
+import { normalizeLoginEmail } from "@/lib/auth/temporary-access-delivery"
 import { getSupabaseAuthNetworkHint, getSupabaseClient } from "@/lib/supabase/client"
 import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
 import type { UserRole } from "@/types/user"
@@ -115,7 +116,7 @@ function LoginForm() {
 
       const supabase = getSupabaseClient()
       const { error: signInError } = await supabase.auth.signInWithPassword({
-        email,
+        email: normalizeLoginEmail(email),
         password,
       })
 

@@ -24,6 +24,8 @@ import {
   presentSectorMembershipLabel,
 } from "@/lib/employees/admin-policy"
 import type { EmployeeStatus } from "@/types/employee"
+import { buildTemporaryAccessClipboardText } from "@/lib/auth/temporary-access-delivery"
+import { Copy, Eye, EyeOff } from "lucide-react"
 
 type ProfileHit = {
   id: string
@@ -64,6 +66,7 @@ export default function NovoFuncionarioPage() {
     login: string
     temporaryPassword: string | null
   } | null>(null)
+  const [showTempPassword, setShowTempPassword] = useState(true)
 
   const [query, setQuery] = useState("")
   const [hits, setHits] = useState<ProfileHit[]>([])
@@ -136,6 +139,20 @@ export default function NovoFuncionarioPage() {
     toast.success("Funcionário criado.")
   }
 
+  async function copyTemporaryAccess() {
+    if (!created?.temporaryPassword) return
+    const text = buildTemporaryAccessClipboardText({
+      email: created.login,
+      temporaryPassword: created.temporaryPassword,
+    })
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success("Dados de acesso copiados.")
+    } catch {
+      toast.error("Não foi possível copiar. Selecione a senha e copie manualmente.")
+    }
+  }
+
   async function search() {
     setBusy(true)
     const res = await fetch(
@@ -191,16 +208,47 @@ export default function NovoFuncionarioPage() {
               Mostre esta senha uma vez ao colaborador. Ela não fica salva no cadastro.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <p><span className="text-muted-foreground">Login:</span> {created.login}</p>
-            <p>
-              <span className="text-muted-foreground">Senha temporária:</span>{" "}
-              {created.temporaryPassword ?? "Já emitida nesta chave. Não é reexibida."}
+          <CardContent className="space-y-4 text-sm">
+            <div>
+              <p className="text-muted-foreground">Login</p>
+              <p className="font-medium break-all">{created.login}</p>
+            </div>
+            {created.temporaryPassword ? (
+              <div>
+                <p className="text-muted-foreground">Senha temporária</p>
+                <p className="font-medium flex items-center gap-2">
+                  <span className="font-mono tracking-wide break-all">
+                    {showTempPassword ? created.temporaryPassword : "••••••••••••••••"}
+                  </span>
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label={showTempPassword ? "Ocultar senha" : "Mostrar senha"}
+                    onClick={() => setShowTempPassword((value) => !value)}
+                  >
+                    {showTempPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </p>
+              </div>
+            ) : (
+              <p className="text-muted-foreground">
+                Já emitida nesta chave. Não é reexibida.
+              </p>
+            )}
+            <p className="text-muted-foreground">
+              No primeiro acesso o funcionário troca a senha em /primeiro-acesso.
             </p>
-            <p className="text-muted-foreground">No primeiro acesso o funcionário troca a senha em /primeiro-acesso.</p>
-            <Button onClick={() => router.push(`/admin/funcionarios/${created.employeeId}`)}>
-              Ver funcionário
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {created.temporaryPassword ? (
+                <Button type="button" variant="outline" onClick={() => void copyTemporaryAccess()}>
+                  <Copy className="h-4 w-4 mr-2" />
+                  Copiar login e senha
+                </Button>
+              ) : null}
+              <Button onClick={() => router.push(`/admin/funcionarios/${created.employeeId}`)}>
+                Ver funcionário
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

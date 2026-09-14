@@ -9,8 +9,7 @@ import {
 import { INDICATOR_PIX_KEY_TYPES } from "@/lib/auth/indicator-signup"
 import type { TipoChavePix } from "@/types/profile"
 
-export const ASSISTED_INDICATOR_LOGIN_URL =
-  "https://crm.tantotelecom.com.br/login" as const
+import { buildTemporaryAccessClipboardText, CRM_LOGIN_URL } from "@/lib/auth/temporary-access-delivery"
 
 export const ASSISTED_INDICATOR_PIX_TYPE_OPTIONS: Array<{
   value: TipoChavePix
@@ -110,23 +109,14 @@ export function mapAssistedIndicatorCreateApiError(
   }
 }
 
+export const ASSISTED_INDICATOR_LOGIN_URL = CRM_LOGIN_URL
+
 export function buildAssistedIndicatorAccessClipboardText(input: {
   email: string
   temporaryPassword: string
   loginUrl?: string
 }): string {
-  const url = input.loginUrl ?? ASSISTED_INDICATOR_LOGIN_URL
-  return [
-    "Acesso ao Indique e Ganhe — Tanto Telecom",
-    "",
-    `Login: ${input.email.trim()}`,
-    `Senha temporária: ${input.temporaryPassword}`,
-    "",
-    "Acesse:",
-    url,
-    "",
-    "No primeiro acesso, você deverá criar uma nova senha.",
-  ].join("\n")
+  return buildTemporaryAccessClipboardText(input)
 }
 
 export function clipboardTextContainsSecretsOnly(input: {
