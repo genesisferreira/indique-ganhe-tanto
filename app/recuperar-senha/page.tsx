@@ -10,6 +10,7 @@ import { TantoBrand } from "@/components/branding/tanto-brand"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import {
   buildPasswordRecoveryRedirectTo,
+  normalizeRecoveryEmail,
   passwordResetPublicMessage,
 } from "@/lib/auth/password-reset"
 
@@ -20,13 +21,16 @@ export default function RecuperarSenhaPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const form = e.currentTarget as HTMLFormElement
-    const email = String(new FormData(form).get("email") ?? "").trim()
+    const email = normalizeRecoveryEmail(String(new FormData(form).get("email") ?? ""))
     setIsLoading(true)
     try {
       const supabase = getSupabaseClient()
-      await supabase.auth.resetPasswordForEmail(email, {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: buildPasswordRecoveryRedirectTo(window.location.origin),
       })
+      if (error) {
+        // Mantém resposta pública neutra; não enumera conta.
+      }
     } catch {
       // Resposta sempre neutra — não revelar existência do e-mail.
     } finally {

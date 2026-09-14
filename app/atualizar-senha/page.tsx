@@ -1,48 +1,159 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { getSupabaseClient } from "@/lib/supabase/client"
-import { getAuthProfileBasicsFromSupabase } from "@/lib/services/supabase-data.service"
-import { getDashboardHomeForRole } from "@/lib/auth/auth-audit"
+import { performClientLogout } from "@/lib/auth/logout"
+import {
+  RECOVERY_INVALID_LINK_BODY,
+  RECOVERY_INVALID_LINK_TITLE,
+  detectRecoveryUrlError,
+  gatePasswordUpdateForm,
+  passwordsMatchForUpdate,
+} from "@/lib/auth/password-reset"
+
+type View = "loading" | "blocked" | "ready" | "success"
 
 export default function AtualizarSenhaPage() {
-  const router = useRouter()
+  const [view, setView] = useState<View>("loading")
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
 
+  useEffect(() => {
+    let cancelled = false
+    const urlError = detectRecoveryUrlError({
+      search: window.location.search,
+      hash: window.location.hash,
+    })
+
+    if (urlError) {
+      setView("blocked")
+      return
+    }
+
+    const supabase = getSupabaseClient()
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (cancelled) return
+      if (
+        session?.user?.id &&
+        (event === "PASSWORD_RECOVERY" ||
+          event === "SIGNED_IN" ||
+          event === "INITIAL_SESSION")
+      ) {
+        setView("ready")
+      }
+    })
+
+    void (async () => {
+      const { data } = await supabase.auth.getUser()
+      if (cancelled) return
+      const gate = gatePasswordUpdateForm({
+        urlError: null,
+        hasAuthenticatedUser: Boolean(data.user?.id),
+      })
+      setView((current) => {
+        if (current === "ready" || current === "success") return current
+        return gate.showForm ? "ready" : "blocked"
+      })
+    })()
+
+    return () => {
+      cancelled = true
+      subscription.unsubscribe()
+    }
+  }, [])
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError("")
-    if (password.length < 8) {
-      setError("A senha deve ter pelo menos 8 caracteres.")
-      return
-    }
-    if (password !== confirm) {
-      setError("As senhas não coincidem.")
+    const match = passwordsMatchForUpdate(password, confirm)
+    if (!match.ok) {
+      setError(match.message)
       return
     }
     setBusy(true)
     try {
       const supabase = getSupabaseClient()
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (!user) {
+        setView("blocked")
+        return
+      }
       const { error: updateError } = await supabase.auth.updateUser({ password })
       if (updateError) {
         setError("Não foi possível atualizar a senha. Solicite um novo link.")
         return
       }
-      const basics = await getAuthProfileBasicsFromSupabase()
-      router.replace(basics?.role ? getDashboardHomeForRole(basics.role) : "/login")
+      const res = await fetch("/api/auth/complete-first-password-change", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+      const json = (await res.json().catch(() => null)) as { ok?: boolean } | null
+      if (!res.ok || !json?.ok) {
+        setError(
+          "Senha atualizada no acesso, mas não foi possível liberar o primeiro acesso. Entre e conclua /primeiro-acesso se solicitado."
+        )
+        return
+      }
+      await performClientLogout()
+      setView("success")
     } catch {
       setError("Não foi possível atualizar a senha. Tente novamente.")
     } finally {
       setBusy(false)
     }
+  }
+
+  if (view === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-8">
+        <p className="text-sm text-muted-foreground">Verificando o link de recuperação…</p>
+      </div>
+    )
+  }
+
+  if (view === "blocked") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-8">
+        <div className="w-full max-w-md space-y-6">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">{RECOVERY_INVALID_LINK_TITLE}</h1>
+            <p className="text-sm text-muted-foreground mt-2">{RECOVERY_INVALID_LINK_BODY}</p>
+          </div>
+          <Button asChild className="w-full">
+            <Link href="/recuperar-senha">Solicitar novo link</Link>
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (view === "success") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-8">
+        <div className="w-full max-w-md space-y-6">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Senha atualizada</h1>
+            <p className="text-sm text-muted-foreground mt-2">
+              Entre com o e-mail e a nova senha para continuar.
+            </p>
+          </div>
+          <Button asChild className="w-full">
+            <Link href="/login">Ir para o login</Link>
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   return (

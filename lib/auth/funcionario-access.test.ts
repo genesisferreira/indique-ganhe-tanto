@@ -308,7 +308,7 @@ describe("3.1E-A Q) primeiro-acesso aceita funcionario", () => {
 
 describe("3.1E-A R) password reset não revela e-mail", () => {
   it("mensagem neutra e next sanitizado", () => {
-    assert.match(passwordResetPublicMessage(), /Se o e-mail estiver cadastrado/i)
+    assert.match(passwordResetPublicMessage(), /Se existir uma conta/i)
     assert.equal(sanitizePasswordRecoveryNextPath("https://evil.example"), "/atualizar-senha")
     assert.equal(sanitizePasswordRecoveryNextPath("/login"), "/atualizar-senha")
     assert.equal(sanitizePasswordRecoveryNextPath("/atualizar-senha"), "/atualizar-senha")
@@ -316,7 +316,7 @@ describe("3.1E-A R) password reset não revela e-mail", () => {
     assert.match(page, /resetPasswordForEmail/)
     assert.equal(page.includes("service_role"), false)
     assert.equal(page.includes("createServiceRoleClient"), false)
-    assert.match(page, /passwordResetPublicMessage|Se o e-mail estiver cadastrado/)
+    assert.match(page, /passwordResetPublicMessage|Se existir uma conta/)
   })
 })
 
