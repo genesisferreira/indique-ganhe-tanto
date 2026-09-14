@@ -33,9 +33,9 @@ describe("3.1E-R2 recovery token_hash architecture", () => {
   })
 
   it("O) double submit protegido no frontend", () => {
-    assert.match(landing, /submitLockRef/)
+    assert.match(landing, /createRecoveryConfirmSingleFlight/)
     assert.match(landing, /disabled=\{busy\}/)
-    assert.match(landing, /if \(submitLockRef\.current \|\| busy\) return/)
+    assert.match(landing, /submitRecoveryConfirmation/)
   })
 
   it("POST confirm usa verifyOtp recovery e não mistura PKCE", () => {
@@ -44,8 +44,9 @@ describe("3.1E-R2 recovery token_hash architecture", () => {
     assert.match(confirm, /verifyOtp/)
     assert.match(confirm, /type: "recovery"|type: 'recovery'/)
     assert.equal(confirm.includes("exchangeCodeForSession"), false)
-    assert.match(confirm, /attachAuthCookiesToResponse/)
-    assert.match(confirm, /303/)
+    assert.match(confirm, /executeRecoveryConfirm/)
+    assert.equal(confirm.includes("NextResponse.redirect"), false)
+    assert.equal(confirm.includes("303"), false)
   })
 
   it("Q) /auth/callback PKCE permanece intacto", () => {
@@ -62,9 +63,11 @@ describe("3.1E-R2 recovery token_hash architecture", () => {
   })
 
   it("M) URL final de sucesso não inclui token", () => {
-    assert.match(confirm, /result\.path/)
+    assert.match(landing, /recoverySuccessDestination/)
     assert.equal(confirm.includes("token_hash="), false)
     assert.equal(confirm.includes("searchParams.set(\"token_hash\""), false)
+    assert.equal(landing.includes("redirect: \"manual\""), false)
+    assert.match(landing, /window\.location\.assign/)
   })
 
   it("N) token não é logado", () => {

@@ -1,23 +1,14 @@
 import { createServerClient } from "@supabase/ssr"
-import { type NextRequest, NextResponse } from "next/server"
+import { type NextRequest } from "next/server"
 import {
-  attachAuthCookiesToResponse,
   collectAuthCookiesFromSetAll,
   type AuthCookieToSet,
 } from "@/lib/auth/auth-route-cookies"
-import { applyNoStoreHeaders } from "@/lib/auth/cache-control"
-import { resolvePasswordRecoveryVerifyOtp } from "@/lib/auth/password-recovery-verify"
-import { parseRecoveryConfirmBody } from "@/lib/auth/recovery-token-fragment"
+import { executeRecoveryConfirm } from "@/lib/auth/password-recovery-confirm"
 import { applyDevSupabaseTlsWorkaround } from "@/lib/supabase/dev-tls"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
-
-function redirectTo(request: NextRequest, path: string) {
-  return applyNoStoreHeaders(
-    NextResponse.redirect(new URL(path, request.url), 303)
-  )
-}
 
 export async function POST(request: NextRequest) {
   let body: unknown = null
@@ -27,11 +18,11 @@ export async function POST(request: NextRequest) {
     body = null
   }
 
-  const parsed = parseRecoveryConfirmBody(body)
   const cookiesToSet: AuthCookieToSet[] = []
 
-  const result = await resolvePasswordRecoveryVerifyOtp({
-    parsed,
+  return executeRecoveryConfirm({
+    body,
+    cookiesToSet,
     verifyOtp: async ({ token_hash }) => {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? ""
       const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ?? ""
@@ -45,14 +36,11 @@ export async function POST(request: NextRequest) {
           getAll() {
             return request.cookies.getAll()
           },
-          setAll(incoming) {
+          setAll(incoming, _headers) {
             incoming.forEach(({ name, value }) => {
               request.cookies.set(name, value)
             })
-            collectAuthCookiesFromSetAll(
-              cookiesToSet,
-              incoming as AuthCookieToSet[]
-            )
+            collectAuthCookiesFromSetAll(cookiesToSet, incoming)
           },
         },
       })
@@ -64,10 +52,4 @@ export async function POST(request: NextRequest) {
       return { error: error ? { message: "verify_failed" } : null }
     },
   })
-
-  const response = redirectTo(request, result.path)
-  if (result.ok) {
-    attachAuthCookiesToResponse(response, cookiesToSet)
-  }
-  return response
 }

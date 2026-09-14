@@ -1,24 +1,14 @@
+import type { CookieOptions } from "@supabase/ssr"
+
 export type AuthCookieToSet = {
   name: string
   value: string
-  options?: {
-    domain?: string
-    expires?: Date
-    httpOnly?: boolean
-    maxAge?: number
-    path?: string
-    sameSite?: "lax" | "strict" | "none"
-    secure?: boolean
-  }
+  options: CookieOptions
 }
 
 export type CookieWritableResponse = {
   cookies: {
-    set: (
-      name: string,
-      value: string,
-      options?: AuthCookieToSet["options"]
-    ) => unknown
+    set: (name: string, value: string, options?: CookieOptions) => unknown
   }
 }
 

@@ -82,6 +82,27 @@ describe("recovery token fragment", () => {
     assert.equal(isPlausibleRecoveryTokenHash(VALID_HASH), true)
   })
 
+  it("fixture hex de 56 caracteres chega inalterada", () => {
+    const hex56 = `${"0123456789abcdef".repeat(3)}01234567`
+    assert.equal(hex56.length, 56)
+    const parsed = parseRecoveryFragment(
+      `#token_hash=${hex56}&type=recovery&next=/atualizar-senha`
+    )
+    assert.equal(parsed.ok, true)
+    if (parsed.ok) assert.equal(parsed.tokenHash, hex56)
+  })
+
+  it("caractere + não é aceito como token válido", () => {
+    const withPlus = `aaaa+${"b".repeat(20)}`
+    assert.equal(
+      parseRecoveryFragment(
+        `#token_hash=${withPlus}&type=recovery&next=/atualizar-senha`
+      ).ok,
+      false
+    )
+    assert.equal(isPlausibleRecoveryTokenHash("aaaa bbbbbbbbbbbbbbbb"), false)
+  })
+
   it("body POST válido e inválido", () => {
     assert.equal(
       parseRecoveryConfirmBody({

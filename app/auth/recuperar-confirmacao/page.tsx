@@ -5,13 +5,18 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { TantoBrand } from "@/components/branding/tanto-brand"
 import {
+  createRecoveryConfirmSingleFlight,
+  RECOVERY_CONFIRM_PROTOCOL_FAILURE_BODY,
+  recoverySuccessDestination,
+  submitRecoveryConfirmation,
+} from "@/lib/auth/recovery-confirm-client"
+import {
   RECOVERY_CONFIRMATION_PATH,
   RECOVERY_INVALID_LINK_TITLE,
-  RECOVERY_VERIFY_PATH,
 } from "@/lib/auth/password-reset"
 import { parseRecoveryFragment } from "@/lib/auth/recovery-token-fragment"
 
-type View = "loading" | "ready" | "invalid" | "failed"
+type View = "loading" | "ready" | "invalid" | "failed" | "protocol"
 
 const INVALID_LINK_BODY = "Solicite um novo link para redefinir sua senha."
 const POST_FAILED_BODY =
@@ -21,7 +26,7 @@ export default function RecuperarConfirmacaoPage() {
   const [view, setView] = useState<View>("loading")
   const [busy, setBusy] = useState(false)
   const tokenHashRef = useRef<string | null>(null)
-  const submitLockRef = useRef(false)
+  const runExclusiveRef = useRef(createRecoveryConfirmSingleFlight())
 
   useLayoutEffect(() => {
     const parsed = parseRecoveryFragment(window.location.hash)
@@ -35,37 +40,29 @@ export default function RecuperarConfirmacaoPage() {
   }, [])
 
   async function handleContinue() {
-    if (submitLockRef.current || busy) return
     const tokenHash = tokenHashRef.current
     if (!tokenHash) {
       setView("invalid")
       return
     }
-    submitLockRef.current = true
-    setBusy(true)
-    try {
-      const response = await fetch(RECOVERY_VERIFY_PATH, {
-        method: "POST",
-        credentials: "same-origin",
-        redirect: "manual",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token_hash: tokenHash,
-          type: "recovery",
-          next: "/atualizar-senha",
-        }),
+
+    await runExclusiveRef.current(async () => {
+      setBusy(true)
+      const result = await submitRecoveryConfirmation({
+        tokenHash,
+        fetchImpl: fetch,
       })
-      const location = response.headers.get("Location")
-      if (location) {
-        window.location.assign(location)
+      if (result.kind === "success") {
+        window.location.assign(recoverySuccessDestination())
         return
       }
-      setView("failed")
-    } catch {
-      setView("failed")
-    }
-    submitLockRef.current = false
-    setBusy(false)
+      if (result.kind === "invalid_or_expired") {
+        setView("failed")
+      } else {
+        setView("protocol")
+      }
+      setBusy(false)
+    })
   }
 
   if (view === "loading") {
@@ -76,7 +73,13 @@ export default function RecuperarConfirmacaoPage() {
     )
   }
 
-  if (view === "invalid" || view === "failed") {
+  if (view === "invalid" || view === "failed" || view === "protocol") {
+    const body =
+      view === "protocol"
+        ? RECOVERY_CONFIRM_PROTOCOL_FAILURE_BODY
+        : view === "failed"
+          ? POST_FAILED_BODY
+          : INVALID_LINK_BODY
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-8">
         <div className="w-full max-w-md space-y-6">
@@ -86,9 +89,7 @@ export default function RecuperarConfirmacaoPage() {
               <h1 className="text-2xl font-bold text-foreground">
                 {RECOVERY_INVALID_LINK_TITLE}
               </h1>
-              <p className="text-sm text-muted-foreground mt-2">
-                {view === "failed" ? POST_FAILED_BODY : INVALID_LINK_BODY}
-              </p>
+              <p className="text-sm text-muted-foreground mt-2">{body}</p>
             </div>
           </div>
           <Button asChild className="w-full">
