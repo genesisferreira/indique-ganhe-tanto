@@ -67,7 +67,13 @@ describe("3.1E-R2 recovery token_hash architecture", () => {
     assert.equal(confirm.includes("token_hash="), false)
     assert.equal(confirm.includes("searchParams.set(\"token_hash\""), false)
     assert.equal(landing.includes("redirect: \"manual\""), false)
+    assert.match(landing, /fetch\.bind\(globalThis\)/)
+    assert.equal(landing.includes("fetchImpl: fetch,"), false)
     assert.match(landing, /window\.location\.assign/)
+    assert.match(landing, /async function handleContinue/)
+    const fetchBindIndex = landing.indexOf("fetch.bind(globalThis)")
+    const handleIndex = landing.indexOf("async function handleContinue")
+    assert.equal(fetchBindIndex > handleIndex, true)
   })
 
   it("N) token não é logado", () => {

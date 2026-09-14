@@ -50,7 +50,7 @@ export default function RecuperarConfirmacaoPage() {
       setBusy(true)
       const result = await submitRecoveryConfirmation({
         tokenHash,
-        fetchImpl: fetch,
+        fetchImpl: fetch.bind(globalThis),
       })
       if (result.kind === "success") {
         window.location.assign(recoverySuccessDestination())

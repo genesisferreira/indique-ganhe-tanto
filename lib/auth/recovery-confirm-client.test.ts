@@ -98,6 +98,35 @@ describe("recovery confirm client", () => {
     )
   })
 
+  it("fetch nativo precisa de bind; mocks de função ocultam Illegal invocation", async () => {
+    function windowBrandedFetch(
+      this: unknown,
+      _input: RequestInfo | URL,
+      _init?: RequestInit
+    ): Promise<Response> {
+      if (this !== globalThis) {
+        return Promise.reject(
+          new TypeError(
+            "Failed to execute 'fetch' on 'Window': Illegal invocation"
+          )
+        )
+      }
+      return Promise.resolve(jsonResponse({ ok: true }))
+    }
+
+    const unbound = await submitRecoveryConfirmation({
+      tokenHash: "a".repeat(32),
+      fetchImpl: windowBrandedFetch,
+    })
+    assert.equal(unbound.kind, "protocol_failure")
+
+    const bound = await submitRecoveryConfirmation({
+      tokenHash: "a".repeat(32),
+      fetchImpl: windowBrandedFetch.bind(globalThis),
+    })
+    assert.equal(bound.kind, "success")
+  })
+
   it("fetch usa POST JSON same-origin e não envia Location", async () => {
     let method = ""
     let redirect: RequestRedirect | undefined
@@ -115,5 +144,69 @@ describe("recovery confirm client", () => {
     assert.equal(method, "POST")
     assert.equal(redirect, "error")
     assert.equal(credentials, "same-origin")
+  })
+
+  it("interceptação do POST não chama rede: sucesso, invalid, falha e um POST", async () => {
+    let posts = 0
+    function interceptingFetch(
+      this: unknown,
+      _input: RequestInfo | URL,
+      init?: RequestInit
+    ): Promise<Response> {
+      if (this !== globalThis) {
+        return Promise.reject(
+          new TypeError(
+            "Failed to execute 'fetch' on 'Window': Illegal invocation"
+          )
+        )
+      }
+      posts += 1
+      assert.equal(init?.method, "POST")
+      const url = String(_input)
+      assert.equal(url.includes("supabase"), false)
+      return Promise.resolve(jsonResponse({ ok: true }))
+    }
+
+    const bound = interceptingFetch.bind(globalThis)
+    posts = 0
+    const success = await submitRecoveryConfirmation({
+      tokenHash: "a".repeat(32),
+      fetchImpl: bound,
+    })
+    assert.equal(success.kind, "success")
+    assert.equal(posts, 1)
+
+    function interceptFalse(
+      this: unknown,
+      _input: RequestInfo | URL
+    ): Promise<Response> {
+      if (this !== globalThis) {
+        return Promise.reject(new TypeError("Illegal invocation"))
+      }
+      posts += 1
+      return Promise.resolve(jsonResponse({ ok: false }))
+    }
+    posts = 0
+    const invalid = await submitRecoveryConfirmation({
+      tokenHash: "a".repeat(32),
+      fetchImpl: interceptFalse.bind(globalThis),
+    })
+    assert.equal(invalid.kind, "invalid_or_expired")
+    assert.equal(posts, 1)
+
+    function interceptNetwork(this: unknown): Promise<Response> {
+      if (this !== globalThis) {
+        return Promise.reject(new TypeError("Illegal invocation"))
+      }
+      posts += 1
+      return Promise.reject(new TypeError("Failed to fetch"))
+    }
+    posts = 0
+    const network = await submitRecoveryConfirmation({
+      tokenHash: "a".repeat(32),
+      fetchImpl: interceptNetwork.bind(globalThis),
+    })
+    assert.equal(network.kind, "protocol_failure")
+    assert.equal(posts, 1)
   })
 })
