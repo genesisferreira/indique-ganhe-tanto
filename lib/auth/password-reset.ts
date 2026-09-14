@@ -27,9 +27,13 @@ export function isSafeSameOriginPath(path: string): boolean {
   )
 }
 
+export const RECOVERY_CONFIRMATION_PATH = "/auth/recuperar-confirmacao"
+export const RECOVERY_VERIFY_PATH = "/auth/confirm"
+export const RECOVERY_OTP_TYPE = "recovery"
+
 export function buildPasswordRecoveryRedirectTo(origin: string): string {
   const base = origin.replace(/\/$/, "")
-  return `${base}/auth/callback?next=${encodeURIComponent(PASSWORD_UPDATE_PATH)}`
+  return `${base}${RECOVERY_CONFIRMATION_PATH}`
 }
 
 export function buildPasswordRecoveryFailurePath(): string {

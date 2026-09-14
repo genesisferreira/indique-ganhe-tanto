@@ -30,10 +30,10 @@ describe("password-reset helpers", () => {
     assert.equal(sanitizePasswordRecoveryNextPath(null), "/atualizar-senha")
   })
 
-  it("redirectTo usa callback same-origin", () => {
+  it("redirectTo aponta para landing same-origin sem consumir OTP", () => {
     assert.equal(
       buildPasswordRecoveryRedirectTo("https://crm.example.com"),
-      "https://crm.example.com/auth/callback?next=%2Fatualizar-senha"
+      "https://crm.example.com/auth/recuperar-confirmacao"
     )
   })
 

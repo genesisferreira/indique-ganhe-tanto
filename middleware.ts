@@ -58,7 +58,11 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (isPublicPath(pathname)) {
-    return NextResponse.next()
+    const response = NextResponse.next()
+    if (pathname.startsWith("/auth/")) {
+      return applyNoStoreHeaders(response)
+    }
+    return response
   }
 
   const protectedRoute = isProtectedPath(pathname)
