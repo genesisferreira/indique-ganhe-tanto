@@ -223,6 +223,13 @@ describe("3.1E-G sync varre a base Controllr", () => {
     assert.match(src, /decideInvoiceListPageAdvance/)
   })
 
+  it("desenho em lotes não é runner de sync", () => {
+    const src = readFileSync(join(repoRoot, "lib/collections/batch-sync-design.ts"), "utf8")
+    assert.equal(src.includes("brbyteAdminPostForm"), false)
+    assert.equal(src.includes("assignSectorWorkItem"), false)
+    assert.match(src, /COLLECTION_BATCH_LOCK_KEY/)
+  })
+
   it("varredura parcial não reconcilia casos ausentes da lista", () => {
     const src = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
     assert.match(src, /for \(const row of globalList.rows\)/)
