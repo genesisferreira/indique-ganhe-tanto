@@ -9,20 +9,34 @@ export const dynamic = "force-dynamic"
 export const maxDuration = 20
 
 /**
- * Probe Admin Master: GET dispara UM POST de listagem no Controllr
- * (`/invoice_ctl/invoice/list`). Não é Sync. Não grava casos. Não chama assignment.
+ * Probe Admin Master: só POST aciona UM POST de listagem no Controllr
+ * (`/invoice_ctl/invoice/list`). GET não chama o ERP. Não é Sync.
+ * Não grava casos. Não chama assignment.
  */
-export async function GET(request: Request) {
+export async function GET() {
+  return jsonError(405, "Use POST para acionar o probe de listagem.")
+}
+
+export async function POST(request: Request) {
   const auth = await authorizeOperationalRequest({
     sectorCode: COLLECTION_SECTOR_CODE,
     action: "sync",
   })
   if (!auth.ok) return jsonError(auth.status, auth.message)
 
-  const url = new URL(request.url)
-  const result = await runInvoiceListProbe({
-    formatIndex: url.searchParams.get("format"),
-    timeoutMs: url.searchParams.get("timeoutMs"),
-  })
+  let formatIndex: unknown
+  let timeoutMs: unknown
+  try {
+    const body = (await request.json()) as Record<string, unknown> | null
+    if (body && typeof body === "object") {
+      formatIndex = body.format
+      timeoutMs = body.timeoutMs
+    }
+  } catch {
+    formatIndex = undefined
+    timeoutMs = undefined
+  }
+
+  const result = await runInvoiceListProbe({ formatIndex, timeoutMs })
   return NextResponse.json(result, { status: result.ok ? 200 : 502 })
 }

@@ -76,5 +76,24 @@ describe("invoice list probe", () => {
     assert.equal(blob.includes("Maria"), false)
     assert.equal(blob.includes("12345678901"), false)
     assert.equal(blob.includes("inv-1"), false)
+    assert.equal("password" in result, false)
+    assert.equal("cookie" in result, false)
+    assert.equal("results" in result, false)
+  })
+
+  it("erro de login não devolve credencial", () => {
+    const result = summarizeInvoiceListProbeResult({
+      formatIndex: 0,
+      timeoutMs: 8000,
+      durationMs: 40,
+      httpStatus: 401,
+      json: { password: "secret-token", cookie: "sid=abc" },
+      transportMessage: "Credenciais operacionais recusadas",
+    })
+    const blob = JSON.stringify(result)
+    assert.equal(result.ok, false)
+    assert.equal(blob.includes("secret-token"), false)
+    assert.equal(blob.includes("sid=abc"), false)
+    assert.equal(blob.includes("password"), false)
   })
 })
