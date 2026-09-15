@@ -61,10 +61,12 @@ export default function CobrancaPage() {
     setSyncing(false)
     if (!res.ok || !json?.ok) {
       toast.error(json?.message || "Falha no sync Controllr.")
+      await load()
       return
     }
     toast.success(
-      `Sync: ${json.created ?? 0} criados, ${json.updated ?? 0} atualizados, ${json.closedPaid ?? 0} pagos.`
+      json.message ||
+        `Sync: ${json.created ?? 0} criados, ${json.updated ?? 0} atualizados, ${json.assigned ?? 0} atribuídos, ${json.closedPaid ?? 0} pagos.`
     )
     await load()
   }
@@ -114,7 +116,9 @@ export default function CobrancaPage() {
             {items.length === 0 && !loading ? (
               <tr>
                 <td className="px-3 py-6 text-muted-foreground" colSpan={7}>
-                  Nenhum caso de cobrança.
+                  {kind === "admin_master" || kind === "admin_read"
+                    ? "Nenhum caso sincronizado. Use Sync Controllr para buscar faturas inadimplentes da base."
+                    : "Nenhum caso na sua carteira. O Controllr alimenta a fila pelo Sync (Admin Master) e o motor distribui entre funcionários ativos de Cobrança."}
                 </td>
               </tr>
             ) : (

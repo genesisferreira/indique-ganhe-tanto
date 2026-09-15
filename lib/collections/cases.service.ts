@@ -216,7 +216,7 @@ export async function listCollectionCases(input: {
           "id, client_pk, contract_pk, invoice_pk, customer_name, customer_document, days_overdue, overdue_since, outstanding_amount, status, sector_assignment_id, erp_snapshot, metadata, created_at, updated_at, closed_at"
         )
         .order("updated_at", { ascending: false })
-        .limit(200)
+        .limit(2000)
     )
     rows = res.data ?? []
   } else if (input.employeeId) {

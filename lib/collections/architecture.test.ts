@@ -204,6 +204,26 @@ describe("3.1B mutações exigem ownership ativo", () => {
   })
 })
 
+describe("3.1E-G sync varre a base Controllr", () => {
+  it("lista global de faturas e não depende só de 200 referrals", () => {
+    const src = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
+    assert.match(src, /listAllOpenInvoices/)
+    assert.match(src, /ensureCollectionAssignment/)
+    assert.match(src, /minimumDaysOverdue/)
+    assert.equal(src.includes(".limit(200)"), false)
+    assert.match(src, /resolveCollectionsInvoiceSource/)
+    assert.match(src, /fullBaseCoverage/)
+  })
+
+  it("invoice/list pagina sem contract_pk obrigatório", () => {
+    const src = readFileSync(join(repoRoot, "lib/brbyte/invoice-list.ts"), "utf8")
+    assert.match(src, /export async function listAllOpenInvoices/)
+    assert.match(src, /invoiceListPageQueryForms/)
+    assert.match(src, /COLLECTION_INVOICE_LIST_MAX_PAGES/)
+    assert.match(src, /decideInvoiceListPageAdvance/)
+  })
+})
+
 describe("código 3.1 sem service_role no browser", () => {
   it("libs novas não expõem service role", () => {
     const dirs = [

@@ -111,6 +111,32 @@ export function extractInvoiceListRows(payload: unknown): BrbyteInvoiceListRow[]
   return collectResultRows(payload).map(parseInvoiceListRow)
 }
 
+export function extractInvoiceListTotal(
+  payload: unknown,
+  pageRowCount: number
+): number | null {
+  const root = asRecord(payload)
+  if (!root) return null
+  const candidates = [
+    root.recordsTotal,
+    root.recordsFiltered,
+    root.total,
+    root.count,
+    asRecord(root.data)?.recordsTotal,
+    asRecord(root.data)?.total,
+  ]
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      return Math.floor(value)
+    }
+    if (typeof value === "string" && value.trim()) {
+      const n = Number(value)
+      if (Number.isFinite(n) && n >= 0) return Math.floor(n)
+    }
+  }
+  return pageRowCount > 0 ? null : 0
+}
+
 function resolveFirstInfoRow(payload: unknown): Record<string, unknown> | null {
   const rows = collectResultRows(payload)
   if (rows.length > 0) return rows[0]
