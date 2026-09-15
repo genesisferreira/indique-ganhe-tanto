@@ -12,11 +12,11 @@ export const INVOICE_LIST_PROBE_FORMAT_IDS = ["devtools_where_json"] as const
 export type InvoiceListProbeFormatId =
   (typeof INVOICE_LIST_PROBE_FORMAT_IDS)[number]
 
-/** Wiki BrByte REST-HTTP: oper 5 =, 4 >=, 3 <=. AND junta regras. */
+/** Wiki BrByte REST-HTTP: oper 5 =, 7 IS, 4 >=, 3 <=. AND junta regras. */
 export const INVOICE_LIST_PROBE_WHERE_FILTERS = [
   { field: "client_status", oper: 5, value: 0 },
   { field: "AND" },
-  { field: "invoice_deleted", oper: 5, value: false },
+  { field: "invoice_deleted", oper: 7, value: false },
   { field: "AND" },
   { field: "invoice_date_due", oper: 4, value: "2026-09-01 00:00:00" },
   { field: "AND" },

@@ -64,6 +64,7 @@ describe("invoice-list-probe wiring", () => {
   it("form-urlencoded do probe tem where JSON e uma tentativa", () => {
     const result = read("lib/brbyte/invoice-list-probe-result.ts")
     assert.match(result, /"client_status"/)
+    assert.match(result, /field: "invoice_deleted", oper: 7, value: false/)
     assert.match(result, /oper: 5/)
     assert.match(result, /oper: 4/)
     assert.match(result, /oper: 3/)

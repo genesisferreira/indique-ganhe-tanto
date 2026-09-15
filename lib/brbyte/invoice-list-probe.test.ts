@@ -40,13 +40,20 @@ describe("invoice list probe", () => {
     assert.deepEqual(parsed, [
       { field: "client_status", oper: 5, value: 0 },
       { field: "AND" },
-      { field: "invoice_deleted", oper: 5, value: false },
+      { field: "invoice_deleted", oper: 7, value: false },
       { field: "AND" },
       { field: "invoice_date_due", oper: 4, value: "2026-09-01 00:00:00" },
       { field: "AND" },
       { field: "invoice_date_due", oper: 3, value: "2026-09-30 23:59:59" },
     ])
-    assert.equal(INVOICE_LIST_PROBE_PAGE_SIZE, 1)
+    const deleted = parsed.find(
+      (rule) =>
+        rule &&
+        typeof rule === "object" &&
+        (rule as { field?: string }).field === "invoice_deleted"
+    ) as { field: string; oper: number; value: boolean }
+    assert.equal(deleted.oper, 7)
+    assert.equal(deleted.value, false)
     assert.equal(INVOICE_LIST_PROBE_ATTEMPTS, 1)
     assert.equal(invoiceListFormsIncludeContractPk([fields]), false)
     assert.equal(selected.fields.limit, "1")
