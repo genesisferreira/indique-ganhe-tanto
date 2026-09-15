@@ -24,19 +24,16 @@ export async function POST(request: Request) {
   })
   if (!auth.ok) return jsonError(auth.status, auth.message)
 
-  let formatIndex: unknown
   let timeoutMs: unknown
   try {
     const body = (await request.json()) as Record<string, unknown> | null
     if (body && typeof body === "object") {
-      formatIndex = body.format
       timeoutMs = body.timeoutMs
     }
   } catch {
-    formatIndex = undefined
     timeoutMs = undefined
   }
 
-  const result = await runInvoiceListProbe({ formatIndex, timeoutMs })
+  const result = await runInvoiceListProbe({ timeoutMs })
   return NextResponse.json(result, { status: result.ok ? 200 : 502 })
 }

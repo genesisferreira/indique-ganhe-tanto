@@ -3,8 +3,9 @@ import { describe, it } from "node:test"
 import {
   INVOICE_LIST_PROBE_ATTEMPTS,
   INVOICE_LIST_PROBE_PAGE_SIZE,
+  INVOICE_LIST_PROBE_WHERE_FILTERS,
+  buildInvoiceListProbeFormFields,
   clampInvoiceListProbeTimeoutMs,
-  parseInvoiceListProbeFormatIndex,
   selectInvoiceListProbeForm,
   summarizeInvoiceListProbeResult,
 } from "@/lib/brbyte/invoice-list-probe-result"
@@ -18,23 +19,46 @@ describe("invoice list probe", () => {
     assert.equal(clampInvoiceListProbeTimeoutMs("nope"), 8000)
   })
 
-  it("um formato por execução, página 1, sem contract_pk", () => {
-    assert.equal(parseInvoiceListProbeFormatIndex(2), 2)
-    assert.equal(parseInvoiceListProbeFormatIndex(9), 0)
-    const selected = selectInvoiceListProbeForm(0)
-    assert.equal(selected.fields.length, "1")
-    assert.equal(selected.fields.start, "0")
+  it("form-urlencoded replica o DevTools com where JSON, limit=1 e sem contract_pk", () => {
+    const selected = selectInvoiceListProbeForm()
+    const fields = buildInvoiceListProbeFormFields()
+    assert.deepEqual(Object.keys(fields), [
+      "where",
+      "page",
+      "start",
+      "limit",
+      "sort",
+      "dir",
+    ])
+    assert.equal(fields.page, "1")
+    assert.equal(fields.start, "0")
+    assert.equal(fields.limit, "1")
+    assert.equal(fields.sort, "client_complete_name")
+    assert.equal(fields.dir, "ASC")
+    assert.equal(fields.where, JSON.stringify(INVOICE_LIST_PROBE_WHERE_FILTERS))
+    const parsed = JSON.parse(fields.where) as unknown[]
+    assert.deepEqual(parsed, [
+      { field: "client_status", oper: 5, value: 0 },
+      { field: "AND" },
+      { field: "invoice_deleted", oper: 5, value: false },
+      { field: "AND" },
+      { field: "invoice_date_due", oper: 4, value: "2026-09-01 00:00:00" },
+      { field: "AND" },
+      { field: "invoice_date_due", oper: 3, value: "2026-09-30 23:59:59" },
+    ])
     assert.equal(INVOICE_LIST_PROBE_PAGE_SIZE, 1)
     assert.equal(INVOICE_LIST_PROBE_ATTEMPTS, 1)
-    assert.equal(
-      invoiceListFormsIncludeContractPk([selected.fields]),
-      false
-    )
+    assert.equal(invoiceListFormsIncludeContractPk([fields]), false)
+    assert.equal(selected.fields.limit, "1")
+    assert.equal(selected.formId, "devtools_where_json")
+  })
+
+  it("uma tentativa e ausência de escrita no runner", () => {
+    assert.equal(INVOICE_LIST_PROBE_ATTEMPTS, 1)
   })
 
   it("abort local não inventa HTTP do ERP", () => {
     const result = summarizeInvoiceListProbeResult({
-      formatIndex: 0,
       timeoutMs: 8000,
       durationMs: 8012,
       httpStatus: null,
@@ -49,15 +73,14 @@ describe("invoice list probe", () => {
     assert.equal(result.attempts, 1)
   })
 
-  it("shape válido devolve só contagens, sem linhas", () => {
+  it("shape válido devolve só contagens filtradas, sem linhas", () => {
     const result = summarizeInvoiceListProbeResult({
-      formatIndex: 1,
       timeoutMs: 8000,
       durationMs: 420,
       httpStatus: 200,
       json: {
         success: true,
-        recordsTotal: 17,
+        total: 3188,
         results: [
           {
             invoice_pk: "inv-1",
@@ -70,8 +93,9 @@ describe("invoice list probe", () => {
     assert.equal(result.ok, true)
     assert.equal(result.shapeValid, true)
     assert.equal(result.pageCount, 1)
-    assert.equal(result.reportedTotal, 17)
-    assert.equal(result.formId, "where_offset_limit")
+    assert.equal(result.reportedTotal, 3188)
+    assert.equal(result.fullBaseCoverageClaimed, false)
+    assert.match(result.contractNotes.join(" "), /recorte filtrado/)
     const blob = JSON.stringify(result)
     assert.equal(blob.includes("Maria"), false)
     assert.equal(blob.includes("12345678901"), false)
@@ -83,7 +107,6 @@ describe("invoice list probe", () => {
 
   it("erro de login não devolve credencial", () => {
     const result = summarizeInvoiceListProbeResult({
-      formatIndex: 0,
       timeoutMs: 8000,
       durationMs: 40,
       httpStatus: 401,

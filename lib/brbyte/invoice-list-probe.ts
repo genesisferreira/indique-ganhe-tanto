@@ -5,7 +5,6 @@ import { getBrbyteOperationalConfig } from "@/lib/brbyte/config"
 import {
   INVOICE_LIST_PROBE_ATTEMPTS,
   clampInvoiceListProbeTimeoutMs,
-  parseInvoiceListProbeFormatIndex,
   selectInvoiceListProbeForm,
   summarizeInvoiceListProbeResult,
   type InvoiceListProbeResult,
@@ -20,18 +19,15 @@ const LOG_TAG = "[collections:invoice-list-probe]"
  * RPCs. O ERP não documenta no repositório que o POST é side-effect free.
  */
 export async function runInvoiceListProbe(input: {
-  formatIndex?: unknown
   timeoutMs?: unknown
 }): Promise<InvoiceListProbeResult> {
-  const formatIndex = parseInvoiceListProbeFormatIndex(input.formatIndex)
   const timeoutMs = clampInvoiceListProbeTimeoutMs(input.timeoutMs)
-  const selected = selectInvoiceListProbeForm(formatIndex)
+  const selected = selectInvoiceListProbeForm()
   const started = Date.now()
 
   const config = getBrbyteOperationalConfig()
   if (!config) {
     return summarizeInvoiceListProbeResult({
-      formatIndex,
       timeoutMs,
       durationMs: Date.now() - started,
       httpStatus: null,
@@ -43,7 +39,6 @@ export async function runInvoiceListProbe(input: {
   const login = await brbyteAdminLogin({ ...config, timeoutMs })
   if ("error" in login) {
     return summarizeInvoiceListProbeResult({
-      formatIndex,
       timeoutMs,
       durationMs: Date.now() - started,
       httpStatus: login.httpStatus,
@@ -61,7 +56,6 @@ export async function runInvoiceListProbe(input: {
   )
 
   const result = summarizeInvoiceListProbeResult({
-    formatIndex,
     timeoutMs,
     durationMs: Date.now() - started,
     httpStatus: post.status,

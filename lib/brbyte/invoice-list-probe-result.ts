@@ -1,8 +1,5 @@
 import { classifyControllrHttpStatus } from "@/lib/brbyte/http-error-diagnostics"
-import {
-  invoiceListFormsIncludeContractPk,
-  invoiceListPageQueryForms,
-} from "@/lib/brbyte/invoice-list-pagination"
+import { invoiceListFormsIncludeContractPk } from "@/lib/brbyte/invoice-list-pagination"
 
 export const INVOICE_LIST_PROBE_PAGE_SIZE = 1
 export const INVOICE_LIST_PROBE_ATTEMPTS = 1
@@ -10,19 +7,27 @@ export const INVOICE_LIST_PROBE_TIMEOUT_MIN_MS = 3_000
 export const INVOICE_LIST_PROBE_TIMEOUT_MAX_MS = 12_000
 export const INVOICE_LIST_PROBE_TIMEOUT_DEFAULT_MS = 8_000
 
-export const INVOICE_LIST_PROBE_FORMAT_IDS = [
-  "where_start_length",
-  "where_offset_limit",
-  "flat_start_length",
-] as const
+export const INVOICE_LIST_PROBE_FORMAT_IDS = ["devtools_where_json"] as const
 
 export type InvoiceListProbeFormatId =
   (typeof INVOICE_LIST_PROBE_FORMAT_IDS)[number]
 
+/** Wiki BrByte REST-HTTP: oper 5 =, 4 >=, 3 <=. AND junta regras. */
+export const INVOICE_LIST_PROBE_WHERE_FILTERS = [
+  { field: "client_status", oper: 5, value: 0 },
+  { field: "AND" },
+  { field: "invoice_deleted", oper: 5, value: false },
+  { field: "AND" },
+  { field: "invoice_date_due", oper: 4, value: "2026-09-01 00:00:00" },
+  { field: "AND" },
+  { field: "invoice_date_due", oper: 3, value: "2026-09-30 23:59:59" },
+] as const
+
 export const INVOICE_LIST_PROBE_CONTRACT_NOTES = [
-  "PAGE_SIZE=1 e start/length|offset/limit não têm contrato ERP comprovado neste repositório.",
-  "Listagem sem contract_pk não foi observada com HTTP de resposta em produção.",
-  "Este probe não declara cobertura da base completa.",
+  "Formato observado no DevTools: where JSON + page/start/limit/sort/dir, sem contract_pk.",
+  "reportedTotal é o total do recorte filtrado, não a base global (3188 no print era filtrado, limit=15).",
+  "operadores field/oper/value vêm da wiki BrByte REST-HTTP, não de um HAR versionado neste repositório.",
+  "Este probe não declara cobertura da base completa nem percorre outras páginas.",
 ] as const
 
 export type InvoiceListProbeResult = {
@@ -53,29 +58,38 @@ export function clampInvoiceListProbeTimeoutMs(raw: unknown): number {
   )
 }
 
-export function parseInvoiceListProbeFormatIndex(raw: unknown): number {
-  const n = typeof raw === "number" ? raw : Number(raw)
-  if (!Number.isFinite(n)) return 0
-  const index = Math.floor(n)
-  if (index < 0 || index >= INVOICE_LIST_PROBE_FORMAT_IDS.length) return 0
-  return index
+export function parseInvoiceListProbeFormatIndex(_raw?: unknown): number {
+  return 0
 }
 
-export function selectInvoiceListProbeForm(formatIndex: number): {
+export function buildInvoiceListProbeWhereJson(): string {
+  return JSON.stringify(INVOICE_LIST_PROBE_WHERE_FILTERS)
+}
+
+export function buildInvoiceListProbeFormFields(): Record<string, string> {
+  return {
+    where: buildInvoiceListProbeWhereJson(),
+    page: "1",
+    start: "0",
+    limit: String(INVOICE_LIST_PROBE_PAGE_SIZE),
+    sort: "client_complete_name",
+    dir: "ASC",
+  }
+}
+
+export function selectInvoiceListProbeForm(_formatIndex?: unknown): {
   formId: InvoiceListProbeFormatId
   formatIndex: number
   fields: Record<string, string>
   fieldKeys: string[]
 } {
-  const index = parseInvoiceListProbeFormatIndex(formatIndex)
-  const forms = invoiceListPageQueryForms(0, INVOICE_LIST_PROBE_PAGE_SIZE)
-  if (invoiceListFormsIncludeContractPk(forms)) {
+  const fields = buildInvoiceListProbeFormFields()
+  if (invoiceListFormsIncludeContractPk([fields])) {
     throw new Error("Probe recusou formulário com contract_pk.")
   }
-  const fields = forms[index] ?? forms[0]!
   return {
-    formId: INVOICE_LIST_PROBE_FORMAT_IDS[index] ?? INVOICE_LIST_PROBE_FORMAT_IDS[0],
-    formatIndex: index,
+    formId: INVOICE_LIST_PROBE_FORMAT_IDS[0],
+    formatIndex: 0,
     fields,
     fieldKeys: Object.keys(fields),
   }
@@ -105,12 +119,12 @@ function probeListReportedTotal(payload: unknown, pageCount: number): number | n
   const root = asRecord(payload)
   if (!root) return null
   const candidates = [
+    root.total,
     root.recordsTotal,
     root.recordsFiltered,
-    root.total,
     root.count,
-    asRecord(root.data)?.recordsTotal,
     asRecord(root.data)?.total,
+    asRecord(root.data)?.recordsTotal,
   ]
   for (const value of candidates) {
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
@@ -129,14 +143,14 @@ function probeListShapeValid(payload: unknown, httpStatus: number | null): boole
 }
 
 export function summarizeInvoiceListProbeResult(input: {
-  formatIndex: number
+  formatIndex?: unknown
   timeoutMs: number
   durationMs: number
   httpStatus: number | null
   json: unknown
   transportMessage?: string
 }): InvoiceListProbeResult {
-  const selected = selectInvoiceListProbeForm(input.formatIndex)
+  const selected = selectInvoiceListProbeForm()
   const aborted = isAbortMessage(input.transportMessage)
   const shapeValid = probeListShapeValid(input.json, input.httpStatus)
   let pageCount: number | null = null

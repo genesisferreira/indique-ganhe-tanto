@@ -54,6 +54,22 @@ describe("invoice-list-probe wiring", () => {
       read("lib/brbyte/invoice-list-probe-result.ts"),
       /export const INVOICE_LIST_PROBE_ATTEMPTS = 1/
     )
+    const result = read("lib/brbyte/invoice-list-probe-result.ts")
+    assert.match(result, /limit: String\(INVOICE_LIST_PROBE_PAGE_SIZE\)/)
+    assert.match(result, /client_complete_name/)
+    assert.equal(runner.includes("listAllOpenInvoices"), false)
+    assert.equal(runner.includes("syncCollectionsFromControllr"), false)
+  })
+
+  it("form-urlencoded do probe tem where JSON e uma tentativa", () => {
+    const result = read("lib/brbyte/invoice-list-probe-result.ts")
+    assert.match(result, /"client_status"/)
+    assert.match(result, /oper: 5/)
+    assert.match(result, /oper: 4/)
+    assert.match(result, /oper: 3/)
+    assert.match(result, /page: "1"/)
+    assert.match(result, /start: "0"/)
+    assert.match(result, /dir: "ASC"/)
   })
 
   it("POST sem Admin Master é bloqueado", () => {
