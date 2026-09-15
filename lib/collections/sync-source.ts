@@ -36,6 +36,14 @@ export function resolveCollectionsInvoiceSource(input: {
   return { use: "fallback_error", fullBaseCoverage: false, degraded: true }
 }
 
+export function collectionScanMayMutateCase(input: {
+  invoicePk: string
+  scannedInvoicePks: ReadonlySet<string>
+}): boolean {
+  const pk = input.invoicePk.trim()
+  return Boolean(pk) && input.scannedInvoicePks.has(pk)
+}
+
 export function collectionsFallbackCoverageMessage(input: {
   fallbackContractsScanned: number
   fallbackLimit: number

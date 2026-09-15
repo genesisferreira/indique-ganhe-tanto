@@ -171,6 +171,17 @@ export async function listAllOpenInvoices(input: {
           "Paginação da listagem global repetiu a mesma página. Varredura interrompida para evitar loop.",
       }
     }
+    if (advance.reason === "incomplete") {
+      return {
+        ok: false,
+        incomplete: true,
+        rows: collected,
+        scannedPages: page + 1,
+        truncated: false,
+        message:
+          "Listagem global incompleta: a página não confirma o fim da lista. Não cobre a base completa.",
+      }
+    }
     if (advance.reason === "truncated") {
       return {
         ok: false,

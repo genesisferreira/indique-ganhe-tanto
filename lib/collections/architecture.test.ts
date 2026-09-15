@@ -222,6 +222,15 @@ describe("3.1E-G sync varre a base Controllr", () => {
     assert.match(src, /COLLECTION_INVOICE_LIST_MAX_PAGES/)
     assert.match(src, /decideInvoiceListPageAdvance/)
   })
+
+  it("varredura parcial não reconcilia casos ausentes da lista", () => {
+    const src = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
+    assert.match(src, /for \(const row of globalList.rows\)/)
+    assert.equal(/existingByInvoice\.values\(/.test(src), false)
+    assert.equal(/existingByInvoice\.forEach/.test(src), false)
+    assert.match(src, /scannedPages/)
+    assert.match(src, /Cobertura total da base: não/)
+  })
 })
 
 describe("código 3.1 sem service_role no browser", () => {

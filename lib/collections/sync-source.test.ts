@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
+  collectionScanMayMutateCase,
   collectionsFallbackCoverageMessage,
   resolveCollectionsInvoiceSource,
 } from "@/lib/collections/sync-source"
@@ -47,6 +48,24 @@ describe("fonte da listagem de cobrança", () => {
     assert.equal(decision.use, "global")
     assert.equal(decision.fullBaseCoverage, false)
     assert.equal(decision.degraded, true)
+  })
+
+  it("fatura ausente da varredura não pode ser fechada por omissão", () => {
+    const scanned = new Set(["inv-seen"])
+    assert.equal(
+      collectionScanMayMutateCase({
+        invoicePk: "inv-unseen",
+        scannedInvoicePks: scanned,
+      }),
+      false
+    )
+    assert.equal(
+      collectionScanMayMutateCase({
+        invoicePk: "inv-seen",
+        scannedInvoicePks: scanned,
+      }),
+      true
+    )
   })
 
   it("mensagem de fallback não declara cobertura da base completa", () => {

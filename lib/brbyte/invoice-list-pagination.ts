@@ -41,6 +41,7 @@ export type InvoiceListPageAdvanceReason =
   | "continue"
   | "complete"
   | "truncated"
+  | "incomplete"
   | "repeat"
   | "page_error"
 
@@ -73,7 +74,14 @@ export function decideInvoiceListPageAdvance(input: {
     uniqueNewPks.push(pk)
   }
 
-  if (input.pageInvoicePks.filter((pk) => String(pk ?? "").trim()).length === 0) {
+  const pageItemCount = input.pageInvoicePks.filter((pk) =>
+    String(pk ?? "").trim()
+  ).length
+
+  if (pageItemCount === 0) {
+    if (input.reportedTotal != null && input.reportedTotal > input.collectedCount) {
+      return { reason: "incomplete", uniqueNewPks: [] }
+    }
     return { reason: "complete", uniqueNewPks: [] }
   }
 
@@ -82,10 +90,13 @@ export function decideInvoiceListPageAdvance(input: {
   }
 
   const nextCount = input.collectedCount + uniqueNewPks.length
-  if (uniqueNewPks.length < input.pageSize) {
+  if (input.reportedTotal != null && nextCount >= input.reportedTotal) {
     return { reason: "complete", uniqueNewPks }
   }
-  if (input.reportedTotal != null && nextCount >= input.reportedTotal) {
+  if (uniqueNewPks.length < input.pageSize) {
+    if (input.reportedTotal != null && nextCount < input.reportedTotal) {
+      return { reason: "incomplete", uniqueNewPks }
+    }
     return { reason: "complete", uniqueNewPks }
   }
   if (input.pageIndex >= input.maxPages - 1) {
@@ -155,12 +166,12 @@ export function collectInvoiceListPages<T extends { invoicePk: string | null }>(
         scannedPages,
       }
     }
-    if (advance.reason === "truncated") {
+    if (advance.reason === "truncated" || advance.reason === "incomplete") {
       return {
         ok: false,
         incomplete: true,
-        truncated: true,
-        reason: "truncated",
+        truncated: advance.reason === "truncated",
+        reason: advance.reason,
         rows: collected,
         scannedPages,
       }

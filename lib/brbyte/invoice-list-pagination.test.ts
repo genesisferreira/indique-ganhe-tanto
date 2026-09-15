@@ -81,6 +81,45 @@ describe("paginação da listagem global", () => {
     assert.equal(collected.reason, "repeat")
     assert.equal(collected.rows.length, 100)
   })
+
+  it("página vazia com total restante não confirma o fim da lista", () => {
+    const collected = collectInvoiceListPages(
+      [{ ok: true, rows: [], total: 500 }],
+      100,
+      100
+    )
+    assert.equal(collected.ok, false)
+    assert.equal(collected.reason, "incomplete")
+    assert.equal(collected.incomplete, true)
+    assert.equal(collected.rows.length, 0)
+  })
+
+  it("página curta com total restante não marca cobertura completa", () => {
+    const collected = collectInvoiceListPages(
+      [{ ok: true, rows: rows(1, 50), total: 250 }],
+      100,
+      100
+    )
+    assert.equal(collected.ok, false)
+    assert.equal(collected.reason, "incomplete")
+    assert.equal(collected.rows.length, 50)
+    assert.equal(collected.truncated, false)
+  })
+
+  it("100 páginas de 100 itens truncam em 10.000 sem complete", () => {
+    const pages = Array.from({ length: 100 }, (_, i) => ({
+      ok: true,
+      rows: rows(i * 100 + 1, 100),
+      total: 20000,
+    }))
+    const collected = collectInvoiceListPages(pages, 100, 100)
+    assert.equal(collected.ok, false)
+    assert.equal(collected.truncated, true)
+    assert.equal(collected.incomplete, true)
+    assert.equal(collected.reason, "truncated")
+    assert.equal(collected.rows.length, 10000)
+    assert.equal(collected.scannedPages, 100)
+  })
 })
 
 describe("decideInvoiceListPageAdvance", () => {
@@ -94,6 +133,20 @@ describe("decideInvoiceListPageAdvance", () => {
       seenInvoicePks: new Set(),
       collectedCount: 0,
       reportedTotal: 0,
+    })
+    assert.equal(advance.reason, "complete")
+  })
+
+  it("página vazia sem total ainda confirma fim pela paginação", () => {
+    const advance = decideInvoiceListPageAdvance({
+      pageIndex: 0,
+      pageSize: 100,
+      maxPages: 10,
+      pageOk: true,
+      pageInvoicePks: [],
+      seenInvoicePks: new Set(),
+      collectedCount: 0,
+      reportedTotal: null,
     })
     assert.equal(advance.reason, "complete")
   })

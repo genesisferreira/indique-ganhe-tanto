@@ -45,6 +45,7 @@ export type CollectionsSyncResult = {
   fullBaseCoverage: boolean
   degraded: boolean
   scannedContracts: number
+  scannedPages: number
   scannedInvoices: number
   created: number
   updated: number
@@ -327,6 +328,7 @@ export async function syncCollectionsFromControllr(input: {
     fullBaseCoverage: false,
     degraded: false,
     scannedContracts: 0,
+    scannedPages: 0,
     scannedInvoices: 0,
     created: 0,
     updated: 0,
@@ -370,6 +372,8 @@ export async function syncCollectionsFromControllr(input: {
     globalIncomplete: globalList.incomplete === true || globalList.truncated === true,
   })
 
+  result.scannedPages = globalList.scannedPages
+
   if (source.use === "empty") {
     result.fullBaseCoverage = true
     result.degraded = false
@@ -382,9 +386,6 @@ export async function syncCollectionsFromControllr(input: {
     result.fullBaseCoverage = source.fullBaseCoverage
     result.degraded = source.degraded
     result.truncated = globalList.truncated
-    if (globalList.message && source.degraded) {
-      result.message = globalList.message
-    }
     for (const row of globalList.rows) {
       await processInvoiceRow({
         row,
@@ -399,6 +400,14 @@ export async function syncCollectionsFromControllr(input: {
       })
     }
     result.ok = result.errors === 0 && !result.degraded
+    if (source.degraded) {
+      result.message = [
+        globalList.message,
+        `Itens processados nesta varredura: ${result.scannedInvoices}. Páginas lidas: ${globalList.scannedPages}. Cobertura total da base: não.`,
+      ]
+        .filter(Boolean)
+        .join(" ")
+    }
     if (result.unassigned > 0) {
       result.message = [
         result.message,
