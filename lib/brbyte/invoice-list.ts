@@ -378,6 +378,7 @@ export async function listOverdueInvoices(input: {
   const referenceDate = parseInvoiceListReferenceDate(input.referenceDate)
   const pageSize = OVERDUE_INVOICE_LIST_PAGE_SIZE
   const maxPages = input.maxPages ?? OVERDUE_INVOICE_LIST_MAX_PAGES
+  // Reutiliza a referenceDate congelada pelo chamador. Não recalcular no loop.
   const empty = {
     uniqueOrderProven: false as const,
     coverageComplete: false as const,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { invoiceListFormsIncludeContractPk } from "@/lib/brbyte/invoice-list-pagination"
 import {
+  OVERDUE_DISCOVERY_BUSINESS_TIMEZONE,
   OVERDUE_INVOICE_LIST_CONTENT_TYPE,
   OVERDUE_INVOICE_LIST_HTTP_ATTEMPTS,
   OVERDUE_INVOICE_LIST_MAX_PAGES,
@@ -21,6 +22,25 @@ import {
   serializeOverdueInvoiceListForm,
   summarizeOverdueInvoiceListScan,
 } from "@/lib/brbyte/overdue-invoice-list-query"
+
+function nestedDueValue(fields: Record<string, string> | undefined): unknown {
+  const parsed = JSON.parse(fields?.where ?? "null") as unknown[]
+  const nested = parsed[4] as Array<{ value?: unknown }>
+  return nested[2]?.value
+}
+
+function civilDateInTimeZone(now: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now)
+  const year = parts.find((part) => part.type === "year")?.value
+  const month = parts.find((part) => part.type === "month")?.value
+  const day = parts.find((part) => part.type === "day")?.value
+  return `${year}-${month}-${day}`
+}
 
 function rows(from: number, count: number) {
   return Array.from({ length: count }, (_, i) => ({
@@ -47,7 +67,8 @@ describe("TEST A — contrato HTTP da consulta de atrasados", () => {
     assert.equal(params.get("page"), "1")
     assert.equal(params.get("start"), "0")
     assert.equal(params.get("limit"), "15")
-    assert.equal(params.get("sort"), "client_complete_name")
+    assert.equal(params.get("sort"), "invoice_pk")
+    assert.equal(OVERDUE_INVOICE_LIST_SORT_FIELD, "invoice_pk")
     assert.equal(params.get("dir"), "ASC")
     assert.equal(params.has("length"), false)
     assert.equal(params.has("where[invoice_deleted]"), false)
@@ -61,7 +82,7 @@ describe("TEST A — contrato HTTP da consulta de atrasados", () => {
   })
 })
 
-describe("TEST B — filtro exato observado", () => {
+describe("TEST A — where JSON observado preservado", () => {
   it("preserva field/oper/value, tipos e grupo aninhado", () => {
     const where = buildOverdueInvoiceListWhere("2026-09-16")
     assert.deepEqual(where, [
@@ -98,7 +119,7 @@ describe("TEST B — filtro exato observado", () => {
   })
 })
 
-describe("TEST C — data de referência validada e congelada", () => {
+describe("TEST C — fronteira UTC e calendário civil America/Sao_Paulo", () => {
   it("rejeita data fixa implícita e valores inválidos", () => {
     assert.equal(parseInvoiceListReferenceDate("2026-09-16T00:00:00.000Z"), null)
     assert.equal(parseInvoiceListReferenceDate("16/09/2026"), null)
@@ -109,30 +130,94 @@ describe("TEST C — data de referência validada e congelada", () => {
     assert.equal(buildOverdueInvoiceListWhere("2026-13-01"), null)
   })
 
-  it("congela o calendário UTC já usado pela elegibilidade, inclusive na virada do dia", () => {
+  it("converte o mesmo instante now pelo fuso de negócio, não pelo calendário UTC", () => {
+    assert.equal(OVERDUE_DISCOVERY_BUSINESS_TIMEZONE, "America/Sao_Paulo")
     assert.equal(
-      freezeInvoiceListReferenceDate(new Date("2026-09-16T00:00:00.000Z")),
+      freezeInvoiceListReferenceDate(new Date("2026-09-17T01:30:00.000Z")),
       "2026-09-16"
     )
     assert.equal(
-      freezeInvoiceListReferenceDate(new Date("2026-09-15T23:59:59.999Z")),
-      "2026-09-15"
+      freezeInvoiceListReferenceDate(new Date("2026-09-17T03:00:00.000Z")),
+      "2026-09-17"
     )
-    const pages = planOverdueInvoiceListPages({
-      referenceDate: freezeInvoiceListReferenceDate(new Date("2026-09-16T03:00:00.000Z")),
-      pageCount: 3,
-    })
-    assert.ok(pages)
-    const dates = pages.map((fields) => {
-      const parsed = JSON.parse(fields.where) as unknown[]
-      const nested = parsed[4] as Array<{ value?: unknown }>
-      return nested[2]?.value
-    })
-    assert.deepEqual(dates, ["2026-09-16", "2026-09-16", "2026-09-16"])
   })
 })
 
-describe("TEST D — paginação coerente limit=15", () => {
+describe("TEST D — virada de mês e ano com UTC e civil em dias diferentes", () => {
+  it("atrasa o dia civil até a meia-noite de São Paulo na troca de mês e de ano", () => {
+    assert.equal(
+      freezeInvoiceListReferenceDate(new Date("2026-10-01T01:30:00.000Z")),
+      "2026-09-30"
+    )
+    assert.equal(
+      freezeInvoiceListReferenceDate(new Date("2026-10-01T03:00:00.000Z")),
+      "2026-10-01"
+    )
+    assert.equal(
+      freezeInvoiceListReferenceDate(new Date("2027-01-01T01:30:00.000Z")),
+      "2026-12-31"
+    )
+    assert.equal(
+      freezeInvoiceListReferenceDate(new Date("2027-01-01T03:00:00.000Z")),
+      "2027-01-01"
+    )
+  })
+})
+
+describe("TEST E — independência do fuso do host", () => {
+  it("usa IANA explícito e ignora getters locais", () => {
+    const now = new Date("2026-09-17T01:30:00.000Z")
+    const originalFullYear = Date.prototype.getFullYear
+    const originalMonth = Date.prototype.getMonth
+    const originalDate = Date.prototype.getDate
+    Date.prototype.getFullYear = function getFullYearStub() {
+      return 1999
+    }
+    Date.prototype.getMonth = function getMonthStub() {
+      return 0
+    }
+    Date.prototype.getDate = function getDateStub() {
+      return 1
+    }
+    try {
+      assert.equal(freezeInvoiceListReferenceDate(now), "2026-09-16")
+      assert.equal(
+        freezeInvoiceListReferenceDate(now),
+        civilDateInTimeZone(now, OVERDUE_DISCOVERY_BUSINESS_TIMEZONE)
+      )
+      assert.notEqual(freezeInvoiceListReferenceDate(now), civilDateInTimeZone(now, "UTC"))
+      assert.notEqual(
+        freezeInvoiceListReferenceDate(now),
+        civilDateInTimeZone(now, "Pacific/Auckland")
+      )
+    } finally {
+      Date.prototype.getFullYear = originalFullYear
+      Date.prototype.getMonth = originalMonth
+      Date.prototype.getDate = originalDate
+    }
+  })
+})
+
+describe("TEST F — execução atravessando a meia-noite reutiliza a data congelada", () => {
+  it("páginas recebem a mesma referenceDate mesmo se um now posterior já seria outro dia civil", () => {
+    const beforeMidnight = new Date("2026-09-17T02:59:00.000Z")
+    const afterMidnight = new Date("2026-09-17T03:00:00.000Z")
+    const frozen = freezeInvoiceListReferenceDate(beforeMidnight)
+    assert.equal(frozen, "2026-09-16")
+    assert.equal(freezeInvoiceListReferenceDate(afterMidnight), "2026-09-17")
+    const pages = planOverdueInvoiceListPages({
+      referenceDate: frozen,
+      pageCount: 3,
+    })
+    assert.ok(pages)
+    assert.deepEqual(
+      pages.map((fields) => nestedDueValue(fields)),
+      ["2026-09-16", "2026-09-16", "2026-09-16"]
+    )
+  })
+})
+
+describe("TEST B — paginação coerente limit=15", () => {
   it("gera page/start estáveis com os mesmos filtros e ordenação", () => {
     assert.deepEqual(overdueInvoiceListPageCursor(1), { page: 1, start: 0, limit: 15 })
     assert.deepEqual(overdueInvoiceListPageCursor(2), { page: 2, start: 15, limit: 15 })
@@ -181,10 +266,15 @@ describe("TEST D — paginação coerente limit=15", () => {
       ]
     )
     assert.equal(OVERDUE_INVOICE_LIST_SORT_EVIDENCE.length >= 2, true)
+    assert.equal(OVERDUE_INVOICE_LIST_SORT_EVIDENCE.some((line) => line.includes("invoice_pk")), true)
+    assert.equal(
+      OVERDUE_INVOICE_LIST_SORT_EVIDENCE.some((line) => line.includes("client_complete_name")),
+      false
+    )
   })
 })
 
-describe("TEST G — falhas e limites não viram execução completa", () => {
+describe("limites e falhas não viram execução completa", () => {
   it("timeout, página inválida e teto de páginas permanecem incompletos sem fallback extra", () => {
     const timeout = collectOverdueInvoiceListPages(
       [{ ok: false, rows: [], total: null }],

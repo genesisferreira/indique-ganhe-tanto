@@ -408,7 +408,7 @@ export async function syncCollectionsFromControllr(input: {
     if (!source.fullBaseCoverage && !source.degraded) {
       result.message = [
         result.message,
-        "Ordenação por client_complete_name não prova cobertura única do recorte.",
+        "Ordenação por invoice_pk ASC não prova cobertura única do recorte nem ausência de deriva entre páginas. Processamento retomável continua necessário.",
       ]
         .filter(Boolean)
         .join(" ")

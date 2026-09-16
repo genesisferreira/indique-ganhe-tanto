@@ -7,11 +7,19 @@ import {
 /** Limit observado no Controllr para invoice/list de atrasados. pageSize=100 não está validado. */
 export const OVERDUE_INVOICE_LIST_PAGE_SIZE = 15
 export const OVERDUE_INVOICE_LIST_MAX_PAGES = COLLECTION_INVOICE_LIST_MAX_PAGES
-export const OVERDUE_INVOICE_LIST_SORT_FIELD = "client_complete_name"
+export const OVERDUE_INVOICE_LIST_SORT_FIELD = "invoice_pk"
 export const OVERDUE_INVOICE_LIST_SORT_DIR = "ASC"
 export const OVERDUE_INVOICE_LIST_HTTP_ATTEMPTS = 1
 export const OVERDUE_INVOICE_LIST_CONTENT_TYPE =
   "application/x-www-form-urlencoded"
+
+/**
+ * Calendário de negócio da descoberta de atrasados.
+ * Alinhado ao navegador observado no Controllr (America/Sao_Paulo via
+ * BrByte.humanize.date(new Date())), não ao fuso comprovado do servidor ERP.
+ * computeDaysOverdue permanece em calendário UTC e pode divergir perto da meia-noite.
+ */
+export const OVERDUE_DISCOVERY_BUSINESS_TIMEZONE = "America/Sao_Paulo" as const
 
 /**
  * Operadores documentados no probe/wiki e no payload observado:
@@ -36,17 +44,6 @@ export type OverdueInvoiceListWhereNode =
   | OverdueInvoiceListWhereLeaf
   | OverdueInvoiceListWhereLeaf[]
 
-/**
- * Data de referência no mesmo calendário UTC já usado por computeDaysOverdue.
- * Não afirma alinhamento com o fuso do ERP — isso permanece bloqueio de sync real.
- */
-export function freezeInvoiceListReferenceDate(now: Date): string {
-  const year = now.getUTCFullYear().toString().padStart(4, "0")
-  const month = (now.getUTCMonth() + 1).toString().padStart(2, "0")
-  const day = now.getUTCDate().toString().padStart(2, "0")
-  return `${year}-${month}-${day}`
-}
-
 export function parseInvoiceListReferenceDate(value: unknown): string | null {
   if (typeof value !== "string") return null
   const match = REFERENCE_DATE_RE.exec(value.trim())
@@ -63,6 +60,36 @@ export function parseInvoiceListReferenceDate(value: unknown): string | null {
     return null
   }
   return `${match[1]}-${match[2]}-${match[3]}`
+}
+
+function civilDateInTimeZone(now: Date, timeZone: string): string | null {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now)
+  const year = parts.find((part) => part.type === "year")?.value
+  const month = parts.find((part) => part.type === "month")?.value
+  const day = parts.find((part) => part.type === "day")?.value
+  if (!year || !month || !day) return null
+  return parseInvoiceListReferenceDate(`${year}-${month}-${day}`)
+}
+
+/**
+ * Congela YYYY-MM-DD da descoberta no calendário civil America/Sao_Paulo
+ * a partir do instante `now`, via IANA (`Intl.DateTimeFormat`), sem offset fixo
+ * e sem getters locais do host. Uma execução deve chamar isto uma vez e
+ * reutilizar a string em todas as páginas, inclusive se atravessar a meia-noite.
+ */
+export function freezeInvoiceListReferenceDate(now: Date): string {
+  const frozen = civilDateInTimeZone(now, OVERDUE_DISCOVERY_BUSINESS_TIMEZONE)
+  if (!frozen) {
+    throw new RangeError(
+      "Não foi possível congelar a data civil da descoberta de atrasados."
+    )
+  }
+  return frozen
 }
 
 export function buildOverdueInvoiceListWhere(
@@ -222,7 +249,7 @@ export function summarizeOverdueInvoiceListScan(input: {
 }
 
 export const OVERDUE_INVOICE_LIST_SORT_EVIDENCE = [
-  "Probe publicado (invoice-list-probe-result): sort=client_complete_name, dir=ASC.",
-  "Formulário observado no Controllr para atrasados: sort=client_complete_name, dir=ASC.",
-  "Não há evidência versionada de ordenação estável por invoice_pk nesta listagem.",
+  "Sprint 3.1E-I: interface Cobranças, sort=invoice_pk, dir=ASC, limit=15.",
+  "Páginas 1 (start=0) e 2 (start=15) com HTTP 200, IDs crescentes e sem sobreposição.",
+  "Ordenação por invoice_pk não prova ausência de deriva por pagamentos ou alterações entre páginas.",
 ] as const

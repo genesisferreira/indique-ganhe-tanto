@@ -25,6 +25,8 @@ export function parseInvoiceDueDate(value: string | null | undefined): Date | nu
 /**
  * Dias de atraso server-side a partir de invoice_due_date (UTC date).
  * O ERP não envia days_overdue — este cálculo é a fonte operacional.
+ * A descoberta de atrasados usa calendário civil America/Sao_Paulo; esta regra
+ * permanece em UTC e pode divergir perto da meia-noite. Não misturar as duas.
  */
 export function computeDaysOverdue(input: {
   invoiceDueDate: string | null | undefined

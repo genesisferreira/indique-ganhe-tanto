@@ -8,6 +8,10 @@ import { readFileSync, readdirSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
+import {
+  OVERDUE_DISCOVERY_BUSINESS_TIMEZONE,
+  OVERDUE_INVOICE_LIST_SORT_FIELD,
+} from "@/lib/brbyte/overdue-invoice-list-query"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, "../..")
@@ -277,6 +281,10 @@ describe("3.1E-H consulta de atrasados não contamina consumidores financeiros",
     assert.equal(probe.includes("listOverdueInvoices"), false)
     assert.match(probeResult, /"client_status"/)
     assert.match(probeResult, /2026-09-01 00:00:00/)
+    assert.match(probeResult, /client_complete_name/)
+    assert.equal(OVERDUE_INVOICE_LIST_SORT_FIELD, "invoice_pk")
+    assert.equal(OVERDUE_DISCOVERY_BUSINESS_TIMEZONE, "America/Sao_Paulo")
+    assert.equal(overdueFn.includes("freezeInvoiceListReferenceDate"), false)
   })
 })
 
