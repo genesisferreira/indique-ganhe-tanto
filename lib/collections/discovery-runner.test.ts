@@ -12,6 +12,7 @@ import {
   COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_MS,
   COLLECTION_DISCOVERY_TIME_BUDGET_MS,
   COLLECTION_DISCOVERY_TIMEZONE,
+  collectionDiscoveryCappedTimeoutMs,
   sanitizeDiscoveryErrorClass,
 } from "@/lib/collections/discovery-contract"
 import { validateDiscoveryCheckpoint } from "@/lib/collections/discovery-checkpoint"
@@ -496,5 +497,218 @@ describe("TEST J — regressões de probe, primeira fatura e contrato", () => {
     assert.equal(firstInvoice.includes("listOverdueInvoices"), false)
     assert.equal(probe.includes("listOverdueInvoices"), false)
     assert.equal(probe.includes("runOverdueDiscoveryBatch"), false)
+  })
+})
+
+describe("orçamento de duração com relógio controlado", () => {
+  it("não inicia consulta quando a margem de persistência/release não cabe", async () => {
+    assert.equal(
+      collectionDiscoveryCappedTimeoutMs({
+        remainingMs: 4_000,
+        configuredTimeoutMs: 30_000,
+      }),
+      null
+    )
+    assert.equal(
+      collectionDiscoveryCappedTimeoutMs({
+        remainingMs: 20_000,
+        configuredTimeoutMs: 30_000,
+      }),
+      15_000
+    )
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    let fetches = 0
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "w1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => 44_500,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 30_000,
+      fetchPage: async () => {
+        fetches += 1
+        return { ok: true, rows: [{ invoicePk: "10" }], total: 1 }
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(fetches, 0)
+    assert.equal(result.status, "paused")
+    assert.equal(result.resumable, true)
+    assert.equal(result.cursorLastInvoicePk, null)
+  })
+
+  it("pausa no meio da página sem avançar o cursor", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    let nowMs = 0
+    const page = ["10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"]
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "w1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 20_000,
+      configuredTimeoutMs: 5_000,
+      fetchPage: async ({ timeoutMs }) => {
+        assert.equal(timeoutMs <= 5_000, true)
+        nowMs += 12_000
+        return {
+          ok: true,
+          rows: page.map((invoicePk) => ({ invoicePk })),
+          total: 15,
+        }
+      },
+      prepareInvoice: async (invoice) => {
+        nowMs += 4_000
+        return invoice
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.status, "paused")
+    assert.equal(result.resumable, true)
+    assert.equal(result.cursorLastInvoicePk, null)
+    assert.equal(result.created >= 1, true)
+    assert.equal(result.created < 15, true)
+    assert.equal(result.coverageProven, false)
+  })
+
+  it("consulta recebe timeout capado ao restante menos margem", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    let seenTimeout = 0
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "w1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => 25_000,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 30_000,
+      fetchPage: async ({ timeoutMs }) => {
+        seenTimeout = timeoutMs
+        return { ok: true, rows: [] as Array<{ invoicePk: string | null }>, total: 0 }
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(seenTimeout, 15_000)
+    assert.equal(result.status, "pagination_ended")
+  })
+
+  it("página lenta impede a próxima e preserva o cursor confirmado", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    let nowMs = 0
+    let fetches = 0
+    const page = ["10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"]
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "w1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 5_000,
+      maxPages: 4,
+      fetchPage: async () => {
+        fetches += 1
+        nowMs += 30_000
+        return { ok: true, rows: page.map((invoicePk) => ({ invoicePk })), total: 30 }
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(fetches, 1)
+    assert.equal(result.status, "paused")
+    assert.equal(result.cursorLastInvoicePk, "24")
+    assert.equal(result.resumable, true)
+  })
+
+  it("erro de persistência próximo da expiração não avança o cursor", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    repo.persistFencedInvoice = async () => {
+      throw new Error("persist timeout")
+    }
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "w1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => 20_000,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 5_000,
+      fetchPage: async () => ({
+        ok: true,
+        rows: [{ invoicePk: "10" }],
+        total: 1,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.ok, false)
+    assert.equal(result.status, "failed")
+    assert.equal(result.resumable, true)
+    assert.equal(result.cursorLastInvoicePk, null)
+  })
+
+  it("lease stale no persist impede caso, evento e atribuição", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo({
+      leaseGate: () => false,
+    })
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "stale",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      fetchPage: async () => ({
+        ok: true,
+        rows: [{ invoicePk: "10" }],
+        total: 1,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.ok, false)
+    assert.equal(result.status, "failed")
+    assert.equal(repo.cases.size, 0)
+    assert.equal(repo.createdEvents.length, 0)
+    assert.equal(repo.assignments.length, 0)
+    assert.equal(result.cursorLastInvoicePk, null)
   })
 })

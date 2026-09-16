@@ -82,12 +82,13 @@ export async function brbyteAdminPostForm(
   cookie: string,
   path: string,
   fields: Record<string, string>,
-  options?: { maxAttempts?: number }
+  options?: { maxAttempts?: number; timeoutMs?: number }
 ): Promise<BrbyteAdminPostResult> {
   const base = config.apiUrl.replace(/\/$/, "")
   const url = `${base}${path.startsWith("/") ? path : `/${path}`}`
   const body = new URLSearchParams()
   const maxAttempts = Math.max(1, options?.maxAttempts ?? 2)
+  const timeoutMs = options?.timeoutMs ?? config.timeoutMs
 
   for (const [key, value] of Object.entries(fields)) {
     if (value !== "") body.set(key, value)
@@ -98,7 +99,7 @@ export async function brbyteAdminPostForm(
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
+      const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
       const res = await fetch(url, {
         method: "POST",

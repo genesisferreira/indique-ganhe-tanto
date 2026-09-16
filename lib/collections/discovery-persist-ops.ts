@@ -26,6 +26,42 @@ export function createOpsDiscoveryCaseRepo(): DiscoveryCaseRepo {
         invoicePk: asString(data?.invoice_pk) ?? invoicePk,
       } satisfies ExistingCollectionCase
     },
+    async persistFencedInvoice(input) {
+      const { data, error } = await db.rpc("persist_collection_discovery_invoice", {
+        p_run_id: input.lease.runId,
+        p_owner: input.lease.owner,
+        p_generation: input.lease.generation,
+        p_actor_profile_id: input.actorProfileId,
+        p_write_model: input.writeModel,
+        p_assign: input.assign,
+        p_statement_timeout_ms: input.statementTimeoutMs ?? null,
+      })
+      const payload = data && typeof data === "object" ? (data as Record<string, unknown>) : null
+      if (error || payload?.ok !== true) {
+        const code = String(payload?.code ?? "persist_error")
+        return {
+          ok: false,
+          code:
+            code === "stale_lease" || code === "not_found" || code === "invalid_input"
+              ? code
+              : "persist_error",
+          caseId: null,
+          inserted: false,
+          newlyAssigned: false,
+          assignmentId: null,
+          unassigned: false,
+        }
+      }
+      return {
+        ok: true,
+        code: payload.inserted === true ? "created" : "updated",
+        caseId: payload.caseId ? String(payload.caseId) : null,
+        inserted: payload.inserted === true,
+        newlyAssigned: payload.newlyAssigned === true,
+        assignmentId: payload.assignmentId ? String(payload.assignmentId) : null,
+        unassigned: payload.unassigned === true,
+      }
+    },
     async insertOpen(writeModel) {
       const inserted = await db
         .from("collection_cases")

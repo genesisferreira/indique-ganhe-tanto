@@ -31,6 +31,9 @@ export const COLLECTION_DISCOVERY_PAGE_SIZE = OVERDUE_INVOICE_LIST_PAGE_SIZE
 export const COLLECTION_DISCOVERY_SORT_FIELD = OVERDUE_INVOICE_LIST_SORT_FIELD
 export const COLLECTION_DISCOVERY_SORT_DIR = OVERDUE_INVOICE_LIST_SORT_DIR
 export const COLLECTION_DISCOVERY_BUDGET_MARGIN_MS = 5_000
+export const COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS =
+  COLLECTION_DISCOVERY_BUDGET_MARGIN_MS
+export const COLLECTION_DISCOVERY_MIN_QUERY_TIMEOUT_MS = 1_000
 
 export type CollectionDiscoveryStatus =
   | "running"
@@ -116,4 +119,25 @@ export function collectionDiscoveryShouldStopForTime(input: {
 }): boolean {
   const margin = input.marginMs ?? COLLECTION_DISCOVERY_BUDGET_MARGIN_MS
   return input.remainingMs < input.lastPageDurationMs + margin
+}
+
+/**
+ * Timeout de consulta/hidratação limitado ao orçamento restante,
+ * preservando margem para persistir e liberar a lease.
+ * null = não iniciar a operação (pausar).
+ * AbortSignal só deixa de aguardar a resposta; não cancela o ERP remoto.
+ */
+export function collectionDiscoveryCappedTimeoutMs(input: {
+  remainingMs: number
+  configuredTimeoutMs: number
+  persistReleaseMarginMs?: number
+  minTimeoutMs?: number
+}): number | null {
+  const margin =
+    input.persistReleaseMarginMs ?? COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS
+  const minTimeout = input.minTimeoutMs ?? COLLECTION_DISCOVERY_MIN_QUERY_TIMEOUT_MS
+  const available = input.remainingMs - margin
+  if (available < minTimeout) return null
+  const configured = Math.max(1, input.configuredTimeoutMs)
+  return Math.min(configured, available)
 }

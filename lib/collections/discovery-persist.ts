@@ -4,8 +4,31 @@ import { buildCollectionCaseWriteModel } from "@/lib/collections/sync-decision"
 
 export type DiscoveryPersistAction = "skip" | "create" | "update_open"
 
+export type DiscoveryLease = {
+  runId: string
+  owner: string
+  generation: number
+}
+
+export type DiscoveryFencedPersistResult = {
+  ok: boolean
+  code: "created" | "updated" | "stale_lease" | "persist_error" | "not_found" | "invalid_input"
+  caseId: string | null
+  inserted: boolean
+  newlyAssigned: boolean
+  assignmentId: string | null
+  unassigned: boolean
+}
+
 export type DiscoveryCaseRepo = {
   findByInvoicePk(invoicePk: string): Promise<ExistingCollectionCase | null>
+  persistFencedInvoice(input: {
+    lease: DiscoveryLease
+    writeModel: Record<string, unknown>
+    actorProfileId: string
+    assign: boolean
+    statementTimeoutMs?: number | null
+  }): Promise<DiscoveryFencedPersistResult>
   insertOpen(writeModel: Record<string, unknown>): Promise<{ id: string; inserted: boolean }>
   updateFinancials(caseId: string, writeModel: Record<string, unknown>): Promise<void>
   recordCreatedEvent(input: { caseId: string; invoicePk: string; actorProfileId: string }): Promise<void>
@@ -52,14 +75,17 @@ export async function persistDiscoveredOverdueInvoice(input: {
   collectionsEnabled: boolean
   actorProfileId: string
   repo: DiscoveryCaseRepo
-}): Promise<DiscoveryPersistResult> {
-  const skipped: DiscoveryPersistResult = {
+  lease?: DiscoveryLease | null
+  statementTimeoutMs?: number | null
+}): Promise<DiscoveryPersistResult & { staleLease: boolean }> {
+  const skipped: DiscoveryPersistResult & { staleLease: boolean } = {
     action: "skip",
     created: false,
     updated: false,
     skipped: true,
     newlyAssigned: false,
     unassigned: false,
+    staleLease: false,
   }
   const action = decideDiscoveryPersistAction(input)
   if (action === "skip") return skipped
@@ -68,6 +94,28 @@ export async function persistDiscoveredOverdueInvoice(input: {
     invoice: input.invoice,
     now: input.now,
   })
+
+  if (input.lease) {
+    const fenced = await input.repo.persistFencedInvoice({
+      lease: input.lease,
+      writeModel,
+      actorProfileId: input.actorProfileId,
+      assign: action === "create" || input.existing?.status !== "escalated_retention",
+      statementTimeoutMs: input.statementTimeoutMs,
+    })
+    if (!fenced.ok) {
+      return { ...skipped, skipped: false, staleLease: fenced.code === "stale_lease" }
+    }
+    return {
+      action: fenced.inserted ? "create" : "update_open",
+      created: fenced.inserted,
+      updated: !fenced.inserted,
+      skipped: false,
+      newlyAssigned: fenced.newlyAssigned,
+      unassigned: fenced.unassigned,
+      staleLease: false,
+    }
+  }
 
   if (action === "create") {
     const inserted = await input.repo.insertOpen({ ...writeModel, status: "open" })
@@ -80,6 +128,7 @@ export async function persistDiscoveredOverdueInvoice(input: {
         skipped: false,
         newlyAssigned: false,
         unassigned: false,
+        staleLease: false,
       }
     }
     await input.repo.recordCreatedEvent({
@@ -98,6 +147,7 @@ export async function persistDiscoveredOverdueInvoice(input: {
       skipped: false,
       newlyAssigned: assigned.newlyAssigned,
       unassigned: !assigned.assignmentId,
+      staleLease: false,
     }
   }
 
@@ -117,10 +167,13 @@ export async function persistDiscoveredOverdueInvoice(input: {
     skipped: false,
     newlyAssigned: assigned.newlyAssigned === true,
     unassigned: !assigned.assignmentId,
+    staleLease: false,
   }
 }
 
-export function createMemoryDiscoveryCaseRepo(): DiscoveryCaseRepo & {
+export function createMemoryDiscoveryCaseRepo(options?: {
+  leaseGate?: (lease: DiscoveryLease) => boolean
+}): DiscoveryCaseRepo & {
   cases: Map<string, ExistingCollectionCase>
   createdEvents: string[]
   assignments: string[]
@@ -136,6 +189,57 @@ export function createMemoryDiscoveryCaseRepo(): DiscoveryCaseRepo & {
     assignments,
     async findByInvoicePk(invoicePk) {
       return cases.get(invoicePk) ?? null
+    },
+    async persistFencedInvoice(input) {
+      if (options?.leaseGate && !options.leaseGate(input.lease)) {
+        return {
+          ok: false,
+          code: "stale_lease",
+          caseId: null,
+          inserted: false,
+          newlyAssigned: false,
+          assignmentId: null,
+          unassigned: false,
+        }
+      }
+      const invoicePk = String(input.writeModel.invoice_pk ?? "")
+      const existing = cases.get(invoicePk)
+      if (existing) {
+        return {
+          ok: true,
+          code: "updated",
+          caseId: existing.id,
+          inserted: false,
+          newlyAssigned: false,
+          assignmentId: assignments.includes(existing.id) ? `asg-${existing.id}` : null,
+          unassigned: !assignments.includes(existing.id) && input.assign,
+        }
+      }
+      const inserted = await this.insertOpen({ ...input.writeModel, status: "open" })
+      await this.recordCreatedEvent({
+        caseId: inserted.id,
+        invoicePk,
+        actorProfileId: input.actorProfileId,
+      })
+      let assignmentId: string | null = null
+      let newlyAssigned = false
+      if (input.assign) {
+        const assigned = await this.ensureAssignment({
+          caseId: inserted.id,
+          actorProfileId: input.actorProfileId,
+        })
+        assignmentId = assigned.assignmentId
+        newlyAssigned = assigned.newlyAssigned
+      }
+      return {
+        ok: true,
+        code: "created",
+        caseId: inserted.id,
+        inserted: true,
+        newlyAssigned,
+        assignmentId,
+        unassigned: !assignmentId,
+      }
     },
     async insertOpen(writeModel) {
       const invoicePk = String(writeModel.invoice_pk ?? "")

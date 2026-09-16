@@ -3,7 +3,9 @@ import {
   COLLECTION_DISCOVERY_LEASE_MS,
   COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH,
   COLLECTION_DISCOVERY_PAGE_SIZE,
+  COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS,
   COLLECTION_DISCOVERY_TIME_BUDGET_MS,
+  collectionDiscoveryCappedTimeoutMs,
   collectionDiscoveryRemainingBudgetMs,
   collectionDiscoveryShouldStopForTime,
   sanitizeDiscoveryErrorClass,
@@ -36,12 +38,15 @@ export type DiscoveryRunnerDeps<TRow extends { invoicePk: string | null } = { in
   referenceInstant: Date
   referenceDate: string
   clock?: () => number
+  startedAtMs?: number
+  configuredTimeoutMs?: number
   leaseMs?: number
   budgetMs?: number
   maxPages?: number
   fetchPage: (input: {
     referenceDate: string
     afterInvoicePk: string | null
+    timeoutMs: number
   }) => Promise<DiscoveryFetchedPage<TRow>>
   toInvoice: (row: TRow) => CollectionSyncInvoice | null
   prepareInvoice?: (
@@ -92,22 +97,24 @@ function countersFromRun(run: CollectionDiscoveryRun): CollectionDiscoveryCounte
 
 function resultFromRun(
   run: CollectionDiscoveryRun,
-  extra: Partial<DiscoveryBatchResult> & { ok: boolean; resumable: boolean; message: string }
+  extra: Partial<DiscoveryBatchResult> & { ok: boolean; resumable: boolean; message: string },
+  liveCounters?: CollectionDiscoveryCounters
 ): DiscoveryBatchResult {
+  const source = liveCounters ?? countersFromRun(run)
   return {
     status: run.status,
     runId: run.id,
     referenceInstant: run.referenceInstant,
     referenceDate: run.referenceDate,
     cursorLastInvoicePk: run.cursorLastInvoicePk,
-    scannedPages: run.scannedPages,
-    scannedInvoices: run.scannedInvoices,
-    created: run.createdCount,
-    updated: run.updatedCount,
-    skipped: run.skippedCount,
-    assigned: run.assignedCount,
-    unassigned: run.unassignedCount,
-    errors: run.errorCount,
+    scannedPages: source.scannedPages,
+    scannedInvoices: source.scannedInvoices,
+    created: source.createdCount,
+    updated: source.updatedCount,
+    skipped: source.skippedCount,
+    assigned: source.assignedCount,
+    unassigned: source.unassignedCount,
+    errors: source.errorCount,
     truncated: run.status === "paused" || run.status === "failed",
     coverageProven: false,
     uniqueOrderProven: false,
@@ -119,9 +126,10 @@ export async function runOverdueDiscoveryBatch<
   TRow extends { invoicePk: string | null } = { invoicePk: string | null },
 >(input: DiscoveryRunnerDeps<TRow>): Promise<DiscoveryBatchResult> {
   const clock = input.clock ?? Date.now
-  const startedAtMs = clock()
+  const startedAtMs = input.startedAtMs ?? clock()
   const budgetMs = input.budgetMs ?? COLLECTION_DISCOVERY_TIME_BUDGET_MS
   const maxPages = input.maxPages ?? COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH
+  const configuredTimeoutMs = input.configuredTimeoutMs ?? 30_000
   const claim = await input.store.claimOrStart({
     owner: input.owner,
     now: input.now,
@@ -180,18 +188,20 @@ export async function runOverdueDiscoveryBatch<
     })
     return resultFromRun(
       { ...run, status: "failed", lastErrorClass: sanitized },
-      { ok: false, resumable: true, message }
+      { ok: false, resumable: true, message },
+      counters
     )
   }
 
   while (pagesThisBatch < maxPages) {
+    const remainingBeforeFetch = collectionDiscoveryRemainingBudgetMs({
+      startedAtMs,
+      nowMs: clock(),
+      budgetMs,
+    })
     if (
       collectionDiscoveryShouldStopForTime({
-        remainingMs: collectionDiscoveryRemainingBudgetMs({
-          startedAtMs,
-          nowMs: clock(),
-          budgetMs,
-        }),
+        remainingMs: remainingBeforeFetch,
         lastPageDurationMs,
       })
     ) {
@@ -202,18 +212,47 @@ export async function runOverdueDiscoveryBatch<
         status: "paused",
       })
       const paused = released.ok ? released.run : { ...run, status: "paused" as const }
-      return resultFromRun(paused, {
-        ok: true,
-        resumable: true,
-        message:
-          "Lote pausado por orçamento de duração. Retome a mesma execução; cobertura global não comprovada.",
+      return resultFromRun(
+        paused,
+        {
+          ok: true,
+          resumable: true,
+          message:
+            "Lote pausado por orçamento de duração. Retome a mesma execução; cobertura global não comprovada.",
+        },
+        counters
+      )
+    }
+
+    const queryTimeoutMs = collectionDiscoveryCappedTimeoutMs({
+      remainingMs: remainingBeforeFetch,
+      configuredTimeoutMs,
+    })
+    if (queryTimeoutMs == null) {
+      const released = await input.store.release({
+        runId: run.id,
+        owner,
+        generation,
+        status: "paused",
       })
+      const paused = released.ok ? released.run : { ...run, status: "paused" as const }
+      return resultFromRun(
+        paused,
+        {
+          ok: true,
+          resumable: true,
+          message:
+            "Lote pausado: orçamento restante insuficiente para consulta com margem de persistência/release.",
+        },
+        counters
+      )
     }
 
     const pageStarted = clock()
     const fetched = await input.fetchPage({
       referenceDate: run.referenceDate,
       afterInvoicePk: run.cursorLastInvoicePk,
+      timeoutMs: queryTimeoutMs,
     })
     lastPageDurationMs = Math.max(1, clock() - pageStarted)
 
@@ -252,7 +291,18 @@ export async function runOverdueDiscoveryBatch<
       })
     }
 
+    const lease = { runId: run.id, owner, generation }
+    let processedAll = true
     for (const row of fetched.rows) {
+      const remainingForPersist = collectionDiscoveryRemainingBudgetMs({
+        startedAtMs,
+        nowMs: clock(),
+        budgetMs,
+      })
+      if (remainingForPersist < COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS) {
+        processedAll = false
+        break
+      }
       const invoice = input.toInvoice(row)
       const pk = invoice ? parseOverdueInvoicePk(invoice.invoicePk) : null
       if (!invoice || !pk) {
@@ -262,6 +312,14 @@ export async function runOverdueDiscoveryBatch<
       counters.scannedInvoices += 1
       const existing = await input.repo.findByInvoicePk(pk)
       try {
+        const hydrateTimeout = collectionDiscoveryCappedTimeoutMs({
+          remainingMs: remainingForPersist,
+          configuredTimeoutMs,
+        })
+        if (input.prepareInvoice && hydrateTimeout == null) {
+          processedAll = false
+          break
+        }
         const prepared = input.prepareInvoice
           ? await input.prepareInvoice(invoice, existing, frozenNow)
           : invoice
@@ -273,7 +331,15 @@ export async function runOverdueDiscoveryBatch<
           collectionsEnabled: input.collectionsEnabled,
           actorProfileId: input.actorProfileId,
           repo: input.repo,
+          lease,
+          statementTimeoutMs: Math.max(
+            1,
+            remainingForPersist - COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS
+          ),
         })
+        if (persisted.staleLease) {
+          return fail("stale_lease", "Lease perdida. Worker antigo não gravou o restante da página.")
+        }
         if (persisted.created) counters.createdCount += 1
         if (persisted.updated) counters.updatedCount += 1
         if (persisted.skipped) counters.skippedCount += 1
@@ -286,6 +352,26 @@ export async function runOverdueDiscoveryBatch<
           "Falha ao persistir página. Cursor permanece no último identificador confirmado."
         )
       }
+    }
+
+    if (!processedAll) {
+      const released = await input.store.release({
+        runId: run.id,
+        owner,
+        generation,
+        status: "paused",
+      })
+      const paused = released.ok ? released.run : { ...run, status: "paused" as const }
+      return resultFromRun(
+        paused,
+        {
+          ok: true,
+          resumable: true,
+          message:
+            "Lote pausado no meio da página. Cursor não avançou; reprocessamento da página é idempotente.",
+        },
+        counters
+      )
     }
 
     counters.scannedPages += 1

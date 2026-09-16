@@ -39,12 +39,18 @@ export async function fetchInvoiceInfo(input: {
     { where: JSON.stringify({ invoice_pk: invoicePk }) },
   ]
 
+  const startedAtMs = Date.now()
+  const budgetMs = Math.max(1, input.config.timeoutMs)
+
   for (const fields of lookupForms) {
+    const remainingMs = budgetMs - (Date.now() - startedAtMs)
+    if (remainingMs < 1) break
     const result = await brbyteAdminPostForm(
       input.config,
       input.cookie,
       BRBYTE_API_PATHS.invoiceListInfo,
-      fields
+      fields,
+      { maxAttempts: 1, timeoutMs: remainingMs }
     )
 
     if (!result.ok) continue

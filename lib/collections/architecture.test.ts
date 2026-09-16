@@ -337,6 +337,33 @@ describe("3.1E-K descoberta retomável", () => {
   })
 })
 
+describe("3.1E-L persistência fenced", () => {
+  it("RPC de persistência valida lease na mesma transação", () => {
+    const patch = readFileSync(
+      join(repoRoot, "supabase/patch-collection-discovery-fenced-persist.sql"),
+      "utf8"
+    )
+    assert.match(patch, /persist_collection_discovery_invoice/)
+    assert.match(patch, /for update/)
+    assert.match(patch, /stale_lease/)
+    assert.match(patch, /collection_case_events_created_once_uidx/)
+    assert.match(patch, /grant execute on function public\.persist_collection_discovery_invoice/)
+    assert.match(patch, /to service_role/)
+    assert.equal(/grant execute[\s\S]*persist_collection_discovery_invoice[\s\S]*to authenticated/i.test(patch), false)
+    const persistOps = readFileSync(join(repoRoot, "lib/collections/discovery-persist-ops.ts"), "utf8")
+    assert.match(persistOps, /persist_collection_discovery_invoice/)
+    const sync = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
+    assert.match(sync, /startedAtMs/)
+    assert.match(sync, /collectionDiscoveryCappedTimeoutMs/)
+    const invoiceInfo = readFileSync(join(repoRoot, "lib/brbyte/invoice-info.ts"), "utf8")
+    assert.match(invoiceInfo, /timeoutMs: remainingMs/)
+    assert.match(invoiceInfo, /maxAttempts: 1/)
+    const runner = readFileSync(join(repoRoot, "lib/collections/discovery-runner.ts"), "utf8")
+    assert.match(runner, /statementTimeoutMs/)
+    assert.match(runner, /COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS/)
+  })
+})
+
 describe("código 3.1 sem service_role no browser", () => {
   it("libs novas não expõem service role", () => {
     const dirs = [

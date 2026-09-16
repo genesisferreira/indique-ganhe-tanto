@@ -10,6 +10,11 @@ import {
   computeDaysOverdue,
   isControllrInvoicePaid,
 } from "@/lib/collections/eligibility"
+import {
+  COLLECTION_DISCOVERY_TIME_BUDGET_MS,
+  collectionDiscoveryCappedTimeoutMs,
+  collectionDiscoveryRemainingBudgetMs,
+} from "@/lib/collections/discovery-contract"
 import { createOpsDiscoveryCaseRepo } from "@/lib/collections/discovery-persist-ops"
 import { runOverdueDiscoveryBatch } from "@/lib/collections/discovery-runner"
 import { createOpsDiscoveryStore } from "@/lib/collections/discovery-store-ops"
@@ -126,7 +131,30 @@ export async function syncCollectionsFromControllr(input: {
     }
   }
 
-  const login = await brbyteAdminLogin(config)
+  const clock = Date.now
+  const startedAtMs = clock()
+  const budgetMs = COLLECTION_DISCOVERY_TIME_BUDGET_MS
+  const loginTimeout = collectionDiscoveryCappedTimeoutMs({
+    remainingMs: collectionDiscoveryRemainingBudgetMs({
+      startedAtMs,
+      nowMs: clock(),
+      budgetMs,
+    }),
+    configuredTimeoutMs: config.timeoutMs,
+  })
+  if (loginTimeout == null) {
+    return {
+      ...empty,
+      ok: true,
+      resumable: true,
+      discoveryStatus: "paused",
+      truncated: true,
+      message:
+        "Orçamento insuficiente para login operacional com margem de persistência. Sem claim.",
+    }
+  }
+
+  const login = await brbyteAdminLogin({ ...config, timeoutMs: loginTimeout })
   if ("error" in login) {
     return { ...empty, ok: false, degraded: true, message: login.error }
   }
@@ -143,15 +171,20 @@ export async function syncCollectionsFromControllr(input: {
     referenceInstant: now,
     referenceDate,
     runId: input.runId,
+    clock,
+    startedAtMs,
+    budgetMs,
+    configuredTimeoutMs: config.timeoutMs,
     minimumDaysOverdue: settings.minimumDaysOverdue,
     collectionsEnabled: settings.isEnabled,
-    fetchPage: async ({ referenceDate: frozenDate, afterInvoicePk }) => {
+    fetchPage: async ({ referenceDate: frozenDate, afterInvoicePk, timeoutMs }) => {
       const page = await listOverdueInvoicesPage({
         config,
         cookie: login.cookie,
         referenceDate: frozenDate,
         page: 1,
         afterInvoicePk,
+        timeoutMs,
       })
       console.log(LOG_TAG, {
         scope: "discovery-page",
@@ -168,15 +201,26 @@ export async function syncCollectionsFromControllr(input: {
       }
     },
     toInvoice: (row) => presentCollectionInvoiceFromListRow(row),
-    prepareInvoice: async (invoice, existing, frozenNow) =>
-      hydrateInvoice({
+    prepareInvoice: async (invoice, existing, frozenNow) => {
+      const remaining = collectionDiscoveryRemainingBudgetMs({
+        startedAtMs,
+        nowMs: clock(),
+        budgetMs,
+      })
+      const hydrateTimeout = collectionDiscoveryCappedTimeoutMs({
+        remainingMs: remaining,
+        configuredTimeoutMs: config.timeoutMs,
+      })
+      if (hydrateTimeout == null) return invoice
+      return hydrateInvoice({
         invoice,
         existing,
         minimumDaysOverdue: settings.minimumDaysOverdue,
         now: frozenNow,
-        config,
+        config: { ...config, timeoutMs: hydrateTimeout },
         cookie: login.cookie,
-      }),
+      })
+    },
   })
 
   return {

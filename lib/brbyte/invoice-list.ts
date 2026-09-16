@@ -232,6 +232,7 @@ export async function listOverdueInvoicesPage(input: {
   referenceDate: string
   page: number
   afterInvoicePk?: string | null
+  timeoutMs?: number
 }): Promise<{
   ok: boolean
   rows: ReturnType<typeof extractInvoiceListRows>
@@ -289,7 +290,10 @@ export async function listOverdueInvoicesPage(input: {
     input.cookie,
     BRBYTE_API_PATHS.invoiceList,
     fields,
-    { maxAttempts: OVERDUE_INVOICE_LIST_HTTP_ATTEMPTS }
+    {
+      maxAttempts: OVERDUE_INVOICE_LIST_HTTP_ATTEMPTS,
+      timeoutMs: input.timeoutMs,
+    }
   )
 
   const page = Number(fields.page)
