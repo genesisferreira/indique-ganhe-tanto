@@ -1,5 +1,5 @@
 /**
- * PostgreSQL local descartável em 127.0.0.1:55432.
+ * PostgreSQL local descartável em 127.0.0.1:55434.
  * Não usa DATABASE_URL nem credenciais do projeto.
  */
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -9,10 +9,10 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const here = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = join(here, "../..")
 const labRoot = "D:\\igt-pg-3-1e-l"
-const dataDir = join(labRoot, "data-l2")
+const dataDir = join(labRoot, "data-m")
 export const CONN_FILE = join(labRoot, "connection.json")
 
-const PORT = 55433
+const PORT = 55434
 const HOST = "127.0.0.1"
 const USER = "postgres"
 const PASSWORD = "igt_local_only_not_prod"

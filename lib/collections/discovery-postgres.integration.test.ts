@@ -10,6 +10,11 @@ const CONTRACT = "overdue-invoice-list.keyset.v1"
 const STRATEGY = "keyset_invoice_pk_gt"
 const TZ = "America/Sao_Paulo"
 const ACTOR = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+const EMPLOYEE_PROFILE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+let employeeId = ""
+let membershipId = ""
+let collectionsSectorId = ""
 
 type PgRow = Record<string, unknown>
 type PgResult = { rows: PgRow[] }
@@ -124,11 +129,70 @@ describe("PostgreSQL real — descoberta retomável", { timeout: 180_000 }, () =
     assert.match(String(conn.listenAddresses), /127\.0\.0\.1|localhost/)
     assert.match(String(conn.serverAddr), /127\.0\.0\.1/)
     await client.query(
-      `insert into public.profiles (id, full_name, email, phone, role)
-       values ($1, 'Fixture Cobrança', 'cobranca-lab@example.test', '11900000000', 'funcionario')
+      `insert into public.profiles (id, full_name, email, phone, role, is_active)
+       values
+         ($1, 'Fixture Cobrança Ator', 'cobranca-lab-actor@example.test', '11900000000', 'funcionario', true),
+         ($2, 'Fixture Cobrança Fila', 'cobranca-lab-employee@example.test', '11900000001', 'funcionario', true)
        on conflict (id) do nothing`,
-      [ACTOR]
+      [ACTOR, EMPLOYEE_PROFILE]
     )
+    const seeded = await rpc(
+      client,
+      `insert into public.employees (profile_id, status)
+       values ($1, 'active')
+       on conflict (profile_id) do update set status = 'active'
+       returning id`,
+      [EMPLOYEE_PROFILE]
+    )
+    employeeId = String(seeded.id)
+    const membership = await rpc(
+      client,
+      `insert into public.employee_sector_memberships (employee_id, sector_id, is_active)
+       select $1::uuid, s.id, true
+       from public.sectors s
+       where s.code = 'collections' and s.is_active = true
+       on conflict (employee_id, sector_id) where is_active = true do nothing
+       returning id, sector_id`,
+      [employeeId]
+    )
+    if (membership?.id) {
+      membershipId = String(membership.id)
+      collectionsSectorId = String(membership.sector_id)
+    } else {
+      const existing = await rpc(
+        client,
+        `select m.id, m.sector_id
+         from public.employee_sector_memberships m
+         join public.sectors s on s.id = m.sector_id
+         where m.employee_id = $1 and s.code = 'collections' and m.is_active = true`,
+        [employeeId]
+      )
+      membershipId = String(existing.id)
+      collectionsSectorId = String(existing.sector_id)
+    }
+    await client.query(
+      `update public.sector_assignment_settings
+       set is_enabled = true, assignment_mode = 'round_robin'
+       where sector_id = $1`,
+      [collectionsSectorId]
+    )
+    await client.query(
+      `update public.employee_sector_assignment_settings
+       set receiving_assignments = true,
+           is_available = true,
+           daily_limit = null,
+           max_active_assignments = null,
+           active_assignments = 0,
+           total_received_today = 0,
+           last_assignment_at = null
+       where membership_id = $1`,
+      [membershipId]
+    )
+    const picked = await rpc(
+      client,
+      `select public.pick_next_sector_employee('collections', null) as employee_id`
+    )
+    assert.equal(String(picked.employee_id), employeeId)
   })
 
   after(async () => {
@@ -412,5 +476,317 @@ describe("PostgreSQL real — descoberta retomável", { timeout: 180_000 }, () =
       `select relrowsecurity from pg_class where relname = 'collection_discovery_runs'`
     )
     assert.equal(rls.relrowsecurity, true)
+  })
+
+  it("atribui fatura elegível ao funcionário fictício de Cobrança", async () => {
+    const claimed = await claim(client, "assign-owner")
+    const runId = claimed.run.id
+    const gen = claimed.run.leaseGeneration
+    const before = await rpc(
+      client,
+      `select total_received_today::int as today, active_assignments::int as active, last_assignment_at
+       from public.employee_sector_assignment_settings where membership_id = $1`,
+      [membershipId]
+    )
+    const created = await persist(client, runId, "assign-owner", gen, "95001")
+    assert.equal(created.ok, true)
+    assert.equal(created.inserted, true)
+    assert.equal(created.newlyAssigned, true)
+    assert.ok(created.assignmentId)
+    const cases = await rpc(
+      client,
+      `select count(*)::int as n, min(id::text) as case_id, min(sector_assignment_id::text) as assignment_id
+       from public.collection_cases where invoice_pk = '95001'`
+    )
+    assert.equal(cases.n, 1)
+    assert.equal(cases.assignment_id, created.assignmentId)
+    const events = await rpc(
+      client,
+      `select count(*)::int as n from public.collection_case_events
+       where event_type = 'created' and case_id = $1`,
+      [cases.case_id]
+    )
+    assert.equal(events.n, 1)
+    const asg = await rpc(
+      client,
+      `select a.id::text as id, a.employee_id::text as employee_id, a.sector_id::text as sector_id,
+              a.work_type, a.status, a.assignment_source, s.code as sector_code
+       from public.sector_work_assignments a
+       join public.sectors s on s.id = a.sector_id
+       where a.id = $1`,
+      [created.assignmentId]
+    )
+    assert.equal(asg.employee_id, employeeId)
+    assert.equal(asg.sector_id, collectionsSectorId)
+    assert.equal(asg.sector_code, "collections")
+    assert.equal(asg.work_type, "collection_case")
+    assert.equal(asg.status, "active")
+    assert.equal(asg.assignment_source, "auto_assign")
+    const engineEvents = await rpc(
+      client,
+      `select count(*)::int as n from public.sector_assignment_events
+       where assignment_id = $1 and event_type = 'assigned'`,
+      [created.assignmentId]
+    )
+    assert.equal(engineEvents.n, 1)
+    const after = await rpc(
+      client,
+      `select total_received_today::int as today, active_assignments::int as active, last_assignment_at
+       from public.employee_sector_assignment_settings where membership_id = $1`,
+      [membershipId]
+    )
+    assert.equal(Number(after.today), Number(before.today) + 1)
+    assert.equal(Number(after.active), Number(before.active) + 1)
+    assert.ok(after.last_assignment_at)
+    assert.equal(created.newlyAssigned, true)
+  })
+
+  it("reprocessamento não duplica atribuição nem avança o round-robin", async () => {
+    const claimed = await claim(client, "idem-owner")
+    const runId = claimed.run.id
+    const gen = claimed.run.leaseGeneration
+    const first = await persist(client, runId, "idem-owner", gen, "95002")
+    assert.equal(first.ok, true)
+    assert.equal(first.newlyAssigned, true)
+    await client.query(
+      `update public.collection_cases
+       set status = 'in_contact', metadata = '{"note":"manual-assign"}'::jsonb
+       where invoice_pk = '95002'`
+    )
+    const snapshot = await rpc(
+      client,
+      `select total_received_today::int as today, active_assignments::int as active,
+              last_assignment_at::text as last_at
+       from public.employee_sector_assignment_settings where membership_id = $1`,
+      [membershipId]
+    )
+    const second = await persist(client, runId, "idem-owner", gen, "95002", true, {
+      outstanding_amount: "77",
+      days_overdue: 14,
+    })
+    assert.equal(second.ok, true)
+    assert.equal(second.inserted, false)
+    assert.equal(second.newlyAssigned, false)
+    assert.equal(second.assignmentId, first.assignmentId)
+    const row = await rpc(
+      client,
+      `select status, metadata, outstanding_amount::text as amount, days_overdue,
+              sector_assignment_id::text as assignment_id
+       from public.collection_cases where invoice_pk = '95002'`
+    )
+    assert.equal(row.status, "in_contact")
+    assert.equal((row.metadata as { note?: string }).note, "manual-assign")
+    assert.equal(Number(row.amount), 77)
+    assert.equal(row.days_overdue, 14)
+    assert.equal(row.assignment_id, first.assignmentId)
+    const cases = await rpc(
+      client,
+      `select count(*)::int as n from public.collection_cases where invoice_pk = '95002'`
+    )
+    assert.equal(cases.n, 1)
+    const created = await rpc(
+      client,
+      `select count(*)::int as n from public.collection_case_events
+       where event_type = 'created' and case_id = $1`,
+      [first.caseId]
+    )
+    assert.equal(created.n, 1)
+    const assigns = await rpc(
+      client,
+      `select count(*)::int as n from public.sector_work_assignments
+       where work_type = 'collection_case' and work_id = $1`,
+      [first.caseId]
+    )
+    assert.equal(assigns.n, 1)
+    const engineEvents = await rpc(
+      client,
+      `select count(*)::int as n from public.sector_assignment_events
+       where assignment_id = $1`,
+      [first.assignmentId]
+    )
+    assert.equal(engineEvents.n, 1)
+    const after = await rpc(
+      client,
+      `select total_received_today::int as today, active_assignments::int as active,
+              last_assignment_at::text as last_at
+       from public.employee_sector_assignment_settings where membership_id = $1`,
+      [membershipId]
+    )
+    assert.equal(after.today, snapshot.today)
+    assert.equal(after.active, snapshot.active)
+    assert.equal(after.last_at, snapshot.last_at)
+  })
+
+  it("ausência de elegível é resultado normal; erro no vínculo desfaz a transação", async () => {
+    const claimed = await claim(client, "rollback-owner")
+    const runId = claimed.run.id
+    const gen = claimed.run.leaseGeneration
+    await client.query(
+      `update public.employee_sector_assignment_settings
+       set receiving_assignments = false where membership_id = $1`,
+      [membershipId]
+    )
+    try {
+      const unassigned = await persist(client, runId, "rollback-owner", gen, "96001")
+      assert.equal(unassigned.ok, true)
+      assert.equal(unassigned.inserted, true)
+      assert.equal(unassigned.newlyAssigned, false)
+      assert.equal(unassigned.assignmentId, null)
+      assert.equal(unassigned.unassigned, true)
+      const kept = await rpc(
+        client,
+        `select count(*)::int as n from public.collection_cases where invoice_pk = '96001'`
+      )
+      assert.equal(kept.n, 1)
+      const asg = await rpc(
+        client,
+        `select count(*)::int as n from public.sector_work_assignments
+         where work_type = 'collection_case' and work_id = $1`,
+        [unassigned.caseId]
+      )
+      assert.equal(asg.n, 0)
+    } finally {
+      await client.query(
+        `update public.employee_sector_assignment_settings
+         set receiving_assignments = true, is_available = true
+         where membership_id = $1`,
+        [membershipId]
+      )
+    }
+
+    await client.query(`
+      create or replace function public.lab_fail_after_assignment_link()
+      returns trigger
+      language plpgsql
+      as $f$
+      begin
+        if current_setting('igt.lab_fail_assignment_link', true) = 'on' then
+          raise exception 'lab_fail_assignment_link';
+        end if;
+        return NEW;
+      end;
+      $f$;
+      drop trigger if exists trg_lab_fail_after_assignment_link on public.collection_cases;
+      create trigger trg_lab_fail_after_assignment_link
+      after update of sector_assignment_id on public.collection_cases
+      for each row execute function public.lab_fail_after_assignment_link();
+    `)
+    const before = await rpc(
+      client,
+      `select total_received_today::int as today, active_assignments::int as active
+       from public.employee_sector_assignment_settings where membership_id = $1`,
+      [membershipId]
+    )
+    await client.query("select set_config('igt.lab_fail_assignment_link', 'on', false)")
+    try {
+      await assert.rejects(
+        () => persist(client, runId, "rollback-owner", gen, "96002"),
+        /lab_fail_assignment_link/
+      )
+      const cases = await rpc(
+        client,
+        `select count(*)::int as n from public.collection_cases where invoice_pk = '96002'`
+      )
+      assert.equal(cases.n, 0)
+      const events = await rpc(
+        client,
+        `select count(*)::int as n from public.collection_case_events e
+         join public.collection_cases c on c.id = e.case_id
+         where c.invoice_pk = '96002'`
+      )
+      assert.equal(events.n, 0)
+      const assigns = await rpc(
+        client,
+        `select count(*)::int as n from public.sector_work_assignments a
+         join public.collection_cases c on c.id = a.work_id
+         where c.invoice_pk = '96002'`
+      )
+      assert.equal(assigns.n, 0)
+      const after = await rpc(
+        client,
+        `select total_received_today::int as today, active_assignments::int as active
+         from public.employee_sector_assignment_settings where membership_id = $1`,
+        [membershipId]
+      )
+      assert.equal(after.today, before.today)
+      assert.equal(after.active, before.active)
+    } finally {
+      await client.query("select set_config('igt.lab_fail_assignment_link', 'off', false)")
+      await client.query(`
+        drop trigger if exists trg_lab_fail_after_assignment_link on public.collection_cases;
+        drop function if exists public.lab_fail_after_assignment_link();
+      `)
+      await client.query(
+        `update public.employee_sector_assignment_settings
+         set receiving_assignments = true, is_available = true
+         where membership_id = $1`,
+        [membershipId]
+      )
+    }
+  })
+
+  it("fencing bloqueia atribuição com funcionário elegível presente", async () => {
+    const claimed = await claim(client, "old-assign", 1_000)
+    const runId = claimed.run.id
+    const gen1 = claimed.run.leaseGeneration
+    await client.query(
+      `update public.collection_discovery_runs
+       set lease_until = timezone('utc', now()) - interval '5 seconds'
+       where id = $1`,
+      [runId]
+    )
+    const expired = await persist(client, runId, "old-assign", gen1, "97001")
+    assert.equal(expired.ok, false)
+    assert.equal(expired.code, "stale_lease")
+    const recovered = await claim(client, "new-assign", 60_000, runId)
+    assert.equal(recovered.ok, true)
+    const gen2 = recovered.run.leaseGeneration
+    const stale = await persist(client, runId, "old-assign", gen1, "97002")
+    assert.equal(stale.code, "stale_lease")
+    const blocked = await rpc(
+      client,
+      `select
+         (select count(*)::int from public.collection_cases where invoice_pk in ('97001','97002')) as cases,
+         (select count(*)::int from public.collection_case_events e
+          join public.collection_cases c on c.id = e.case_id
+          where c.invoice_pk in ('97001','97002')) as events,
+         (select count(*)::int from public.sector_work_assignments a
+          join public.collection_cases c on c.id = a.work_id
+          where c.invoice_pk in ('97001','97002')) as assigns`
+    )
+    assert.equal(blocked.cases, 0)
+    assert.equal(blocked.events, 0)
+    assert.equal(blocked.assigns, 0)
+    const fresh = await persist(client, runId, "new-assign", gen2, "97003")
+    assert.equal(fresh.ok, true)
+    assert.equal(fresh.newlyAssigned, true)
+  })
+
+  it("persistência em transação impede claim concorrente da mesma run", async () => {
+    const claimed = await claim(client, "lock-owner")
+    const runId = claimed.run.id
+    const gen = claimed.run.leaseGeneration
+    const writer = await newClient()
+    const claimant = await newClient()
+    await writer.query("begin")
+    const persisted = await persist(writer, runId, "lock-owner", gen, "98001")
+    assert.equal(persisted.ok, true)
+    assert.equal(persisted.newlyAssigned, true)
+    const claimWait = claimant.query(
+      `select public.claim_collection_discovery_run($1,$2,$3,$4::timestamptz,$5::date,$6,$7,$8::uuid) as payload`,
+      ["lock-rival", 60_000, CONTRACT, "2026-09-16T12:00:00.000Z", "2026-09-16", TZ, STRATEGY, runId]
+    )
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await writer.query("commit")
+    const rival = payloadOf((await claimWait).rows[0])
+    assert.equal(rival.ok, false)
+    assert.equal(rival.code, "busy")
+    const assigns = await rpc(
+      client,
+      `select count(*)::int as n from public.sector_work_assignments
+       where work_type = 'collection_case' and work_id = $1`,
+      [persisted.caseId]
+    )
+    assert.equal(assigns.n, 1)
   })
 })
