@@ -615,6 +615,85 @@ describe("orçamento de duração com relógio controlado", () => {
     assert.equal(result.status, "pagination_ended")
   })
 
+  it("listagem ~11,2s pausa pelo orçamento sem exigir quatro páginas", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    let nowMs = 0
+    let fetches = 0
+    const pages: Record<string, string[]> = {
+      "": ["10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"],
+      "24": ["25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39"],
+      "39": ["40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54"],
+      "54": ["55", "56", "57", "58", "59", "60", "61", "62", "63", "64", "65", "66", "67", "68", "69"],
+    }
+    const first = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "w1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 30_000,
+      maxPages: 4,
+      fetchPage: async ({ afterInvoicePk, timeoutMs }) => {
+        assert.equal(timeoutMs <= 30_000, true)
+        fetches += 1
+        nowMs += 11_200
+        const rows = pages[afterInvoicePk ?? ""] ?? []
+        return {
+          ok: true,
+          rows: rows.map((invoicePk) => ({ invoicePk })),
+          total: 60,
+        }
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(fetches < 4, true)
+    assert.equal(fetches >= 1, true)
+    assert.equal(first.status, "paused")
+    assert.equal(first.resumable, true)
+    assert.equal(first.cursorLastInvoicePk, "54")
+    assert.equal(first.coverageProven, false)
+
+    nowMs = 0
+    const second = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "w2",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 30_000,
+      maxPages: 1,
+      fetchPage: async ({ afterInvoicePk }) => {
+        nowMs += 11_200
+        const rows = pages[afterInvoicePk ?? ""] ?? []
+        return {
+          ok: true,
+          rows: rows.map((invoicePk) => ({ invoicePk })),
+          total: 60,
+        }
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(second.runId, first.runId)
+    assert.equal(second.referenceDate, first.referenceDate)
+    assert.equal(second.cursorLastInvoicePk, "69")
+    assert.equal(second.created, first.created + 15)
+  })
+
   it("página lenta impede a próxima e preserva o cursor confirmado", async () => {
     const store = createMemoryDiscoveryStore()
     const repo = createMemoryDiscoveryCaseRepo()

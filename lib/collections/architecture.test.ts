@@ -364,6 +364,29 @@ describe("3.1E-L persistência fenced", () => {
   })
 })
 
+describe("3.1E-O timeout HTTP cobre o corpo", () => {
+  it("helper operacional delega deadline único e preserva timeout do runner", () => {
+    const adminHttp = readFileSync(join(repoRoot, "lib/brbyte/admin-http.ts"), "utf8")
+    const request = readFileSync(join(repoRoot, "lib/brbyte/admin-http-request.ts"), "utf8")
+    const invoiceInfo = readFileSync(join(repoRoot, "lib/brbyte/invoice-info.ts"), "utf8")
+    const runner = readFileSync(join(repoRoot, "lib/collections/discovery-runner.ts"), "utf8")
+    const contract = readFileSync(join(repoRoot, "lib/collections/discovery-contract.ts"), "utf8")
+    assert.match(adminHttp, /timeoutMs: options\?\.timeoutMs \?\? config\.timeoutMs/)
+    assert.match(adminHttp, /postControllrForm/)
+    assert.match(adminHttp, /loginControllr/)
+    assert.match(request, /const text = await res\.text\(\)/)
+    assert.match(request, /CONTROLLR_HTTP_ABORT_DOES_NOT_CANCEL_SERVER = true/)
+    assert.match(request, /CONTROLLR_HTTP_SYNC_PARSE_NOT_PREEMPTIVE = true/)
+    assert.match(invoiceInfo, /timeoutMs: remainingMs/)
+    assert.match(runner, /collectionDiscoveryCappedTimeoutMs/)
+    assert.match(contract, /COLLECTION_DISCOVERY_TIME_BUDGET_MS = 45_000/)
+    assert.match(contract, /COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_S = 60/)
+    assert.match(contract, /COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH = 4/)
+    assert.match(contract, /COLLECTION_DISCOVERY_LEASE_MS/)
+    assert.equal(contract.includes("COLLECTION_DISCOVERY_TIME_BUDGET_MS = 90"), false)
+  })
+})
+
 describe("código 3.1 sem service_role no browser", () => {
   it("libs novas não expõem service role", () => {
     const dirs = [
