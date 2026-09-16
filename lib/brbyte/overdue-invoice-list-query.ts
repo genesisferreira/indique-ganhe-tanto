@@ -23,13 +23,17 @@ export const OVERDUE_DISCOVERY_BUSINESS_TIMEZONE = "America/Sao_Paulo" as const
 
 /**
  * Operadores documentados no probe/wiki e no payload observado:
- * 1 = < ; 7 = IS ; 8 = IS NOT.
+ * 1 = < ; 2 = > (documentado; combinação com atrasados pendente de validação real);
+ * 7 = IS ; 8 = IS NOT.
  */
 export const OVERDUE_INVOICE_LIST_OPER = {
   LT: 1,
+  GT: 2,
   IS: 7,
   IS_NOT: 8,
 } as const
+
+export const OVERDUE_INVOICE_PK_RE = /^[1-9]\d*$/
 
 const REFERENCE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/
 
@@ -39,6 +43,7 @@ export type OverdueInvoiceListWhereLeaf =
   | { field: "invoice_date_due"; oper: 8; value: null }
   | { field: "invoice_date_credit"; oper: 7; value: null }
   | { field: "invoice_date_due"; oper: 1; value: string }
+  | { field: "invoice_pk"; oper: 2; value: number }
 
 export type OverdueInvoiceListWhereNode =
   | OverdueInvoiceListWhereLeaf
@@ -92,6 +97,35 @@ export function freezeInvoiceListReferenceDate(now: Date): string {
   return frozen
 }
 
+export function parseOverdueInvoicePk(value: unknown): string | null {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+    return String(value)
+  }
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!OVERDUE_INVOICE_PK_RE.test(trimmed)) return null
+  try {
+    if (BigInt(trimmed) <= BigInt(0)) return null
+  } catch {
+    return null
+  }
+  return trimmed
+}
+
+export function compareOverdueInvoicePk(left: string, right: string): number {
+  const a = BigInt(left)
+  const b = BigInt(right)
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
+}
+
+function invoicePkWhereValue(pk: string): number | null {
+  const asNumber = Number(pk)
+  if (!Number.isSafeInteger(asNumber) || asNumber <= 0) return null
+  return asNumber
+}
+
 export function buildOverdueInvoiceListWhere(
   referenceDate: string
 ): OverdueInvoiceListWhereNode[] | null {
@@ -108,6 +142,46 @@ export function buildOverdueInvoiceListWhere(
       { field: "invoice_date_due", oper: OVERDUE_INVOICE_LIST_OPER.LT, value: frozen },
     ],
   ]
+}
+
+/**
+ * Where-base de Atrasado + invoice_pk > cursor.
+ * A combinação oper 2 com este recorte NÃO foi validada ao vivo.
+ */
+export function buildOverdueInvoiceListWhereAfter(
+  referenceDate: string,
+  afterInvoicePk: string | null
+): OverdueInvoiceListWhereNode[] | null {
+  const base = buildOverdueInvoiceListWhere(referenceDate)
+  if (!base) return null
+  if (afterInvoicePk == null) return base
+  const pk = parseOverdueInvoicePk(afterInvoicePk)
+  const value = pk ? invoicePkWhereValue(pk) : null
+  if (pk == null || value == null) return null
+  return [
+    ...base,
+    { field: "AND" },
+    { field: "invoice_pk", oper: OVERDUE_INVOICE_LIST_OPER.GT, value },
+  ]
+}
+
+export function buildOverdueInvoiceListKeysetFormFields(input: {
+  referenceDate: string
+  afterInvoicePk: string | null
+}): Record<string, string> | null {
+  const where = buildOverdueInvoiceListWhereAfter(
+    input.referenceDate,
+    input.afterInvoicePk
+  )
+  if (!where) return null
+  return {
+    where: JSON.stringify(where),
+    page: "1",
+    start: "0",
+    limit: String(OVERDUE_INVOICE_LIST_PAGE_SIZE),
+    sort: OVERDUE_INVOICE_LIST_SORT_FIELD,
+    dir: OVERDUE_INVOICE_LIST_SORT_DIR,
+  }
 }
 
 export function overdueInvoiceListPageCursor(

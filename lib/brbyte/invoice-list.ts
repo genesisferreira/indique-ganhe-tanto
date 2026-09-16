@@ -20,6 +20,7 @@ import {
   OVERDUE_INVOICE_LIST_MAX_PAGES,
   OVERDUE_INVOICE_LIST_PAGE_SIZE,
   buildOverdueInvoiceListFormFields,
+  buildOverdueInvoiceListKeysetFormFields,
   parseInvoiceListReferenceDate,
 } from "@/lib/brbyte/overdue-invoice-list-query"
 
@@ -230,6 +231,7 @@ export async function listOverdueInvoicesPage(input: {
   cookie: string
   referenceDate: string
   page: number
+  afterInvoicePk?: string | null
 }): Promise<{
   ok: boolean
   rows: ReturnType<typeof extractInvoiceListRows>
@@ -257,10 +259,16 @@ export async function listOverdueInvoicesPage(input: {
       referenceDate: input.referenceDate,
     }
   }
-  const fields = buildOverdueInvoiceListFormFields({
-    referenceDate,
-    page: input.page,
-  })
+  const fields =
+    input.afterInvoicePk !== undefined
+      ? buildOverdueInvoiceListKeysetFormFields({
+          referenceDate,
+          afterInvoicePk: input.afterInvoicePk,
+        })
+      : buildOverdueInvoiceListFormFields({
+          referenceDate,
+          page: input.page,
+        })
   if (!fields) {
     return {
       ok: false,

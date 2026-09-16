@@ -211,14 +211,14 @@ describe("3.1B mutações exigem ownership ativo", () => {
 describe("3.1E-G sync varre a base Controllr", () => {
   it("lista global de faturas e não depende só de 200 referrals", () => {
     const src = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
-    assert.match(src, /listOverdueInvoices/)
+    assert.match(src, /runOverdueDiscoveryBatch/)
+    assert.match(src, /listOverdueInvoicesPage/)
     assert.equal(src.includes("listAllOpenInvoices"), false)
-    assert.match(src, /ensureCollectionAssignment/)
+    assert.equal(src.includes("listContractInvoices"), false)
     assert.match(src, /minimumDaysOverdue/)
     assert.equal(src.includes(".limit(200)"), false)
-    assert.match(src, /resolveCollectionsInvoiceSource/)
-    assert.match(src, /fullBaseCoverage/)
-    assert.match(src, /listContractInvoices/)
+    assert.match(src, /coverageProven: false/)
+    assert.match(src, /createOpsDiscoveryStore/)
   })
 
   it("invoice/list pagina sem contract_pk obrigatório", () => {
@@ -227,6 +227,7 @@ describe("3.1E-G sync varre a base Controllr", () => {
     assert.match(src, /export async function listOverdueInvoices/)
     assert.match(src, /invoiceListPageQueryForms/)
     assert.match(src, /buildOverdueInvoiceListFormFields/)
+    assert.match(src, /buildOverdueInvoiceListKeysetFormFields/)
     assert.match(src, /COLLECTION_INVOICE_LIST_MAX_PAGES/)
     assert.match(src, /OVERDUE_INVOICE_LIST_MAX_PAGES/)
     assert.match(src, /decideInvoiceListPageAdvance/)
@@ -238,15 +239,20 @@ describe("3.1E-G sync varre a base Controllr", () => {
     assert.equal(src.includes("brbyteAdminPostForm"), false)
     assert.equal(src.includes("assignSectorWorkItem"), false)
     assert.match(src, /COLLECTION_BATCH_LOCK_KEY/)
+    const runner = readFileSync(join(repoRoot, "lib/collections/discovery-runner.ts"), "utf8")
+    assert.equal(runner.includes("COLLECTION_BATCH_TIME_BUDGET_MS"), false)
   })
 
   it("varredura parcial não reconcilia casos ausentes da lista", () => {
     const src = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
-    assert.match(src, /for \(const row of globalList.rows\)/)
     assert.equal(/existingByInvoice\.values\(/.test(src), false)
     assert.equal(/existingByInvoice\.forEach/.test(src), false)
     assert.match(src, /scannedPages/)
-    assert.match(src, /Cobertura total da base: não/)
+    assert.match(src, /runOverdueDiscoveryBatch/)
+    const persist = readFileSync(join(repoRoot, "lib/collections/discovery-persist.ts"), "utf8")
+    assert.match(persist, /decision.action === "close_paid"/)
+    assert.match(persist, /decision.action === "reopen"/)
+    assert.equal(persist.includes("status: \"close_paid\""), false)
   })
 })
 
@@ -285,6 +291,49 @@ describe("3.1E-H consulta de atrasados não contamina consumidores financeiros",
     assert.equal(OVERDUE_INVOICE_LIST_SORT_FIELD, "invoice_pk")
     assert.equal(OVERDUE_DISCOVERY_BUSINESS_TIMEZONE, "America/Sao_Paulo")
     assert.equal(overdueFn.includes("freezeInvoiceListReferenceDate"), false)
+  })
+})
+
+describe("3.1E-K descoberta retomável", () => {
+  it("migration de checkpoint restringe acesso ao backend", () => {
+    const patch = readFileSync(
+      join(repoRoot, "supabase/patch-collection-discovery-checkpoint.sql"),
+      "utf8"
+    )
+    assert.match(patch, /create table if not exists public\.collection_discovery_runs/)
+    assert.match(patch, /lease_generation/)
+    assert.match(patch, /claim_collection_discovery_run/)
+    assert.match(patch, /advance_collection_discovery_checkpoint/)
+    assert.match(patch, /stale_lease/)
+    assert.match(patch, /revoke all on table public\.collection_discovery_runs from authenticated/)
+    assert.match(patch, /grant execute on function public\.claim_collection_discovery_run/)
+    assert.match(patch, /to service_role/)
+    assert.equal(/grant execute[\s\S]*claim_collection_discovery_run[\s\S]*to authenticated/i.test(patch), false)
+    assert.equal(/vercel\.json/.test(patch), false)
+  })
+
+  it("rota de sync permanece autorizada e sem cron", () => {
+    const route = readFileSync(join(repoRoot, "app/api/admin/collections/sync/route.ts"), "utf8")
+    assert.match(route, /maxDuration = 60/)
+    assert.match(route, /authorizeOperationalRequest/)
+    assert.match(route, /action: "sync"/)
+    const vercel = readFileSync(join(repoRoot, "vercel.json"), "utf8")
+    assert.equal(/collections/.test(vercel), false)
+  })
+
+  it("update financeiro da descoberta não sobrescreve estágio nem atribuição", () => {
+    const persistOps = readFileSync(
+      join(repoRoot, "lib/collections/discovery-persist-ops.ts"),
+      "utf8"
+    )
+    const updateFn = persistOps.slice(
+      persistOps.indexOf("async updateFinancials"),
+      persistOps.indexOf("async recordCreatedEvent")
+    )
+    assert.equal(updateFn.includes("status"), false)
+    assert.equal(updateFn.includes("sector_assignment"), false)
+    assert.equal(updateFn.includes("metadata"), false)
+    assert.match(updateFn, /outstanding_amount/)
   })
 })
 

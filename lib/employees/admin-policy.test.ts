@@ -166,8 +166,10 @@ describe("L) commercial não ganha bypass indevido", () => {
 
 describe("M) Cobrança continua usando assignment engine", () => {
   it("sync ainda chama ensureCollectionAssignment", () => {
-    const src = readSrc("lib/collections/sync.ts")
-    assert.match(src, /ensureCollectionAssignment/)
+    const persist = readSrc("lib/collections/discovery-persist-ops.ts")
+    const sync = readSrc("lib/collections/sync.ts")
+    assert.match(persist, /ensureCollectionAssignment/)
+    assert.match(sync, /createOpsDiscoveryCaseRepo/)
   })
 })
 
@@ -529,8 +531,10 @@ describe("3.1D-B G) collections continua normal", () => {
     assert.equal(decideMembershipChange({ existing: [], wantActive: true }).action, "insert")
   })
   it("sync de cobrança permanece no motor 2.2", () => {
-    const src = readSrc("lib/collections/sync.ts")
-    assert.match(src, /ensureCollectionAssignment/)
+    const persist = readSrc("lib/collections/discovery-persist-ops.ts")
+    const sync = readSrc("lib/collections/sync.ts")
+    assert.match(persist, /ensureCollectionAssignment/)
+    assert.match(sync, /createOpsDiscoveryCaseRepo/)
   })
 })
 

@@ -12,7 +12,9 @@ import {
   OVERDUE_INVOICE_LIST_SORT_EVIDENCE,
   OVERDUE_INVOICE_LIST_SORT_FIELD,
   buildOverdueInvoiceListFormFields,
+  buildOverdueInvoiceListKeysetFormFields,
   buildOverdueInvoiceListWhere,
+  buildOverdueInvoiceListWhereAfter,
   collectOverdueInvoiceListPages,
   freezeInvoiceListReferenceDate,
   overdueInvoiceListPageCursor,
@@ -116,6 +118,35 @@ describe("TEST A — where JSON observado preservado", () => {
     assert.equal(blob.includes("client.client_pk"), false)
     assert.equal(blob.includes("contract_pk"), false)
     assert.equal(invoiceListFormsIncludeContractPk([fields]), false)
+  })
+})
+
+describe("keyset invoice_pk > cursor sem validação ao vivo", () => {
+  it("preserva o where-base e usa page=1/start=0 com oper 2", () => {
+    const where = buildOverdueInvoiceListWhereAfter("2026-09-16", "310141")
+    assert.ok(where)
+    const base = buildOverdueInvoiceListWhere("2026-09-16")
+    assert.deepEqual(where.slice(0, 5), base)
+    assert.deepEqual(where.slice(5), [
+      { field: "AND" },
+      { field: "invoice_pk", oper: 2, value: 310141 },
+    ])
+    const fields = buildOverdueInvoiceListKeysetFormFields({
+      referenceDate: "2026-09-16",
+      afterInvoicePk: "310141",
+    })
+    assert.ok(fields)
+    assert.equal(fields.page, "1")
+    assert.equal(fields.start, "0")
+    assert.equal(fields.limit, "15")
+    assert.equal(fields.sort, "invoice_pk")
+    assert.equal(fields.dir, "ASC")
+    assert.equal(OVERDUE_INVOICE_LIST_OPER.GT, 2)
+    assert.equal(buildOverdueInvoiceListWhereAfter("2026-09-16", "abc"), null)
+    assert.equal(buildOverdueInvoiceListKeysetFormFields({
+      referenceDate: "2026-09-16",
+      afterInvoicePk: null,
+    })?.start, "0")
   })
 })
 
