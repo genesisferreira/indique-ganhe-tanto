@@ -3,7 +3,8 @@ import "server-only"
 import { brbyteAdminLogin } from "@/lib/brbyte/admin-http"
 import { getBrbyteOperationalConfig } from "@/lib/brbyte/config"
 import { fetchInvoiceInfo } from "@/lib/brbyte/invoice-info"
-import { listAllOpenInvoices, listContractInvoices } from "@/lib/brbyte/invoice-list"
+import { listContractInvoices, listOverdueInvoices } from "@/lib/brbyte/invoice-list"
+import { freezeInvoiceListReferenceDate } from "@/lib/brbyte/overdue-invoice-list-query"
 import {
   computeDaysOverdue,
   isControllrInvoicePaid,
@@ -362,23 +363,27 @@ export async function syncCollectionsFromControllr(input: {
   }
   const existingByInvoice = existing.map
 
-  const globalList = await listAllOpenInvoices({
+  const now = input.now ?? new Date()
+  const referenceDate = freezeInvoiceListReferenceDate(now)
+  const globalList = await listOverdueInvoices({
     config,
     cookie: login.cookie,
+    referenceDate,
   })
   const source = resolveCollectionsInvoiceSource({
     globalOk: globalList.ok,
     globalRowCount: globalList.rows.length,
     globalIncomplete: globalList.incomplete === true || globalList.truncated === true,
+    coverageProven: false,
   })
 
   result.scannedPages = globalList.scannedPages
 
   if (source.use === "empty") {
-    result.fullBaseCoverage = true
+    result.fullBaseCoverage = false
     result.degraded = false
     result.ok = true
-    result.message = "Listagem global válida e vazia. Nenhum caso elegível."
+    result.message = "Consulta de atrasados válida e vazia. Nenhum candidato neste recorte."
     return result
   }
 
@@ -391,7 +396,7 @@ export async function syncCollectionsFromControllr(input: {
         row,
         existingByInvoice,
         actorProfileId: input.actorProfileId,
-        now: input.now,
+        now,
         minimumDaysOverdue: settings.minimumDaysOverdue,
         collectionsEnabled: settings.isEnabled,
         config,
@@ -400,6 +405,14 @@ export async function syncCollectionsFromControllr(input: {
       })
     }
     result.ok = result.errors === 0 && !result.degraded
+    if (!source.fullBaseCoverage && !source.degraded) {
+      result.message = [
+        result.message,
+        "Ordenação por client_complete_name não prova cobertura única do recorte.",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    }
     if (source.degraded) {
       result.message = [
         globalList.message,
@@ -477,7 +490,7 @@ export async function syncCollectionsFromControllr(input: {
         },
         existingByInvoice,
         actorProfileId: input.actorProfileId,
-        now: input.now,
+        now,
         minimumDaysOverdue: settings.minimumDaysOverdue,
         collectionsEnabled: settings.isEnabled,
         config,

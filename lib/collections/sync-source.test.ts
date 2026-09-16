@@ -28,6 +28,18 @@ describe("fonte da listagem de cobrança", () => {
     assert.equal(decision.fullBaseCoverage, true)
   })
 
+  it("recorte paginado sem prova de ordenação única não declara cobertura completa", () => {
+    const decision = resolveCollectionsInvoiceSource({
+      globalOk: true,
+      globalRowCount: 45,
+      globalIncomplete: false,
+      coverageProven: false,
+    })
+    assert.equal(decision.use, "global")
+    assert.equal(decision.fullBaseCoverage, false)
+    assert.equal(decision.degraded, false)
+  })
+
   it("erro da listagem global dispara fallback degradado", () => {
     const decision = resolveCollectionsInvoiceSource({
       globalOk: false,

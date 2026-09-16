@@ -19,12 +19,18 @@ export function resolveCollectionsInvoiceSource(input: {
   globalOk: boolean
   globalRowCount: number
   globalIncomplete: boolean
+  coverageProven?: boolean
 }): CollectionsInvoiceSourceDecision {
   if (input.globalOk && input.globalRowCount === 0 && !input.globalIncomplete) {
     return { use: "empty", fullBaseCoverage: true, degraded: false }
   }
   if (input.globalOk && !input.globalIncomplete) {
-    return { use: "global", fullBaseCoverage: true, degraded: false }
+    const coverageProven = input.coverageProven !== false
+    return {
+      use: "global",
+      fullBaseCoverage: coverageProven,
+      degraded: false,
+    }
   }
   if (input.globalRowCount > 0) {
     return {

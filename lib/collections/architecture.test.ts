@@ -207,20 +207,26 @@ describe("3.1B mutações exigem ownership ativo", () => {
 describe("3.1E-G sync varre a base Controllr", () => {
   it("lista global de faturas e não depende só de 200 referrals", () => {
     const src = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
-    assert.match(src, /listAllOpenInvoices/)
+    assert.match(src, /listOverdueInvoices/)
+    assert.equal(src.includes("listAllOpenInvoices"), false)
     assert.match(src, /ensureCollectionAssignment/)
     assert.match(src, /minimumDaysOverdue/)
     assert.equal(src.includes(".limit(200)"), false)
     assert.match(src, /resolveCollectionsInvoiceSource/)
     assert.match(src, /fullBaseCoverage/)
+    assert.match(src, /listContractInvoices/)
   })
 
   it("invoice/list pagina sem contract_pk obrigatório", () => {
     const src = readFileSync(join(repoRoot, "lib/brbyte/invoice-list.ts"), "utf8")
     assert.match(src, /export async function listAllOpenInvoices/)
+    assert.match(src, /export async function listOverdueInvoices/)
     assert.match(src, /invoiceListPageQueryForms/)
+    assert.match(src, /buildOverdueInvoiceListFormFields/)
     assert.match(src, /COLLECTION_INVOICE_LIST_MAX_PAGES/)
+    assert.match(src, /OVERDUE_INVOICE_LIST_MAX_PAGES/)
     assert.match(src, /decideInvoiceListPageAdvance/)
+    assert.match(src, /maxAttempts: OVERDUE_INVOICE_LIST_HTTP_ATTEMPTS/)
   })
 
   it("desenho em lotes não é runner de sync", () => {
@@ -237,6 +243,40 @@ describe("3.1E-G sync varre a base Controllr", () => {
     assert.equal(/existingByInvoice\.forEach/.test(src), false)
     assert.match(src, /scannedPages/)
     assert.match(src, /Cobertura total da base: não/)
+  })
+})
+
+describe("3.1E-H consulta de atrasados não contamina consumidores financeiros", () => {
+  it("listContractInvoices e primeira fatura não usam o filtro de atrasados", () => {
+    const invoiceList = readFileSync(join(repoRoot, "lib/brbyte/invoice-list.ts"), "utf8")
+    const firstInvoice = readFileSync(
+      join(repoRoot, "lib/brbyte/check-first-invoice.service.ts"),
+      "utf8"
+    )
+    const probe = readFileSync(join(repoRoot, "lib/brbyte/invoice-list-probe.ts"), "utf8")
+    const probeResult = readFileSync(
+      join(repoRoot, "lib/brbyte/invoice-list-probe-result.ts"),
+      "utf8"
+    )
+    const contractFn = invoiceList.slice(invoiceList.indexOf("export async function listContractInvoices"))
+    const overdueFn = invoiceList.slice(invoiceList.indexOf("export async function listOverdueInvoicesPage"))
+    const pageFn = invoiceList.slice(
+      invoiceList.indexOf("export async function listInvoicesPage"),
+      invoiceList.indexOf("export async function listAllOpenInvoices")
+    )
+    assert.match(contractFn, /where\[contract_pk\]/)
+    assert.equal(contractFn.includes("invoice_date_credit"), false)
+    assert.equal(pageFn.includes("invoice_date_credit"), false)
+    assert.equal(pageFn.includes("buildOverdueInvoiceListFormFields"), false)
+    assert.match(overdueFn, /buildOverdueInvoiceListFormFields/)
+    assert.match(overdueFn, /maxAttempts: OVERDUE_INVOICE_LIST_HTTP_ATTEMPTS/)
+    assert.equal(overdueFn.includes("invoiceListPageQueryForms"), false)
+    assert.match(firstInvoice, /listContractInvoices/)
+    assert.equal(firstInvoice.includes("listOverdueInvoices"), false)
+    assert.equal(firstInvoice.includes("listInvoicesPage"), false)
+    assert.equal(probe.includes("listOverdueInvoices"), false)
+    assert.match(probeResult, /"client_status"/)
+    assert.match(probeResult, /2026-09-01 00:00:00/)
   })
 })
 
