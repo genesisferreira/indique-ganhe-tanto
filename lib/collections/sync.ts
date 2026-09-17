@@ -18,6 +18,7 @@ import {
 import { createOpsDiscoveryCaseRepo } from "@/lib/collections/discovery-persist-ops"
 import { runOverdueDiscoveryBatch } from "@/lib/collections/discovery-runner"
 import { createOpsDiscoveryStore } from "@/lib/collections/discovery-store-ops"
+import { classifyInvoiceDetailForReconciliation } from "@/lib/collections/reconciliation"
 import {
   collectionInvoiceNeedsDetailFetch,
   mergeInvoiceInfoIntoSyncInvoice,
@@ -221,6 +222,32 @@ export async function syncCollectionsFromControllr(input: {
         cookie: login.cookie,
       })
     },
+    fetchInvoiceDetail: async ({ invoicePk, timeoutMs }) => {
+      const remaining = collectionDiscoveryRemainingBudgetMs({
+        startedAtMs,
+        nowMs: clock(),
+        budgetMs,
+      })
+      const detailTimeout = collectionDiscoveryCappedTimeoutMs({
+        remainingMs: remaining,
+        configuredTimeoutMs: config.timeoutMs,
+      })
+      const usedTimeout = detailTimeout == null ? timeoutMs : Math.min(timeoutMs, detailTimeout)
+      const info = await fetchInvoiceInfo({
+        config: { ...config, timeoutMs: usedTimeout },
+        cookie: login.cookie,
+        invoicePk,
+      })
+      return classifyInvoiceDetailForReconciliation({
+        requestedInvoicePk: invoicePk,
+        ok: info.ok,
+        httpStatus: info.httpStatus,
+        message: info.message,
+        abortClass: info.abortClass,
+        info: info.info,
+        payload: info.payload,
+      })
+    },
   })
 
   return {
@@ -234,6 +261,7 @@ export async function syncCollectionsFromControllr(input: {
     skipped: batch.skipped,
     assigned: batch.assigned,
     unassigned: batch.unassigned,
+    closedPaid: batch.closedPaid,
     truncated: batch.truncated,
     errors: batch.errors,
     resumable: batch.resumable,

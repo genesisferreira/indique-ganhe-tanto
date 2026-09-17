@@ -436,6 +436,11 @@ describe("checkpoint incompatível não retoma em silêncio", () => {
       lastErrorClass: null,
       coverageProven: false as const,
       uniqueOrderProven: false as const,
+      phase: "discovery" as const,
+      reconcileCursorInvoicePk: null,
+      reconcileScannedCount: 0,
+      reconcileClosedCount: 0,
+      reconcileSkippedCount: 0,
     }
     const store = createMemoryDiscoveryStore([seeded])
     const repo = createMemoryDiscoveryCaseRepo()
@@ -472,8 +477,14 @@ describe("TEST I — segurança", () => {
     assert.equal(sanitizeDiscoveryErrorClass("page_error"), "page_error")
     const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..")
     const sql = readFileSync(join(repoRoot, "supabase/patch-collection-discovery-checkpoint.sql"), "utf8")
+    const reconSql = readFileSync(
+      join(repoRoot, "supabase/patch-collection-discovery-reconciliation.sql"),
+      "utf8"
+    )
     assert.equal(sql.includes("cookie"), false)
     assert.equal(/password|authorization|bearer|secret/i.test(sql), false)
+    assert.equal(reconSql.includes("cookie"), false)
+    assert.equal(/password|authorization|bearer|secret/i.test(reconSql), false)
     const route = readFileSync(join(repoRoot, "app/api/admin/collections/sync/route.ts"), "utf8")
     assert.match(route, /authorizeOperationalRequest/)
     assert.match(route, /action: "sync"/)
@@ -791,3 +802,185 @@ describe("orçamento de duração com relógio controlado", () => {
     assert.equal(result.cursorLastInvoicePk, null)
   })
 })
+
+describe("reconciliação retomável no runner existente", () => {
+  function paidDetail(invoicePk: string) {
+    return {
+      outcome: "close_paid" as const,
+      requestedInvoicePk: invoicePk,
+      returnedInvoicePk: invoicePk,
+      errorClass: null,
+      evidence: {
+        isPaid: true,
+        invoiceMsg: "paid",
+        invoiceDateCredit: "2026-09-10",
+        invoiceDeleted: false,
+      },
+    }
+  }
+
+  it("pausa a reconciliação e retoma sem duplicar fechamento", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    await repo.insertOpen({ invoice_pk: "81" })
+    await repo.insertOpen({ invoice_pk: "82" })
+    let details = 0
+    let nowMs = 0
+    const first = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "recon-1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 16_000,
+      configuredTimeoutMs: 5_000,
+      fetchPage: async () => ({ ok: true, rows: [] as Array<{ invoicePk: string | null }>, total: 0 }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+      fetchInvoiceDetail: async ({ invoicePk }) => {
+        details += 1
+        nowMs += 12_000
+        return paidDetail(invoicePk)
+      },
+    })
+    assert.equal(first.ok, true)
+    assert.equal(first.resumable, true)
+    assert.equal(first.status, "paused")
+    assert.equal(first.phase, "reconciliation")
+    assert.equal(first.closedPaid, 1)
+    assert.equal(repo.paymentEvents.length, 1)
+    const firstPk = repo.cases.get("81")?.status === "paid" ? "81" : "82"
+    const secondPk = firstPk === "81" ? "82" : "81"
+    assert.equal(repo.cases.get(firstPk)?.status, "paid")
+    assert.equal(repo.cases.get(secondPk)?.status, "open")
+
+    nowMs = 0
+    const second = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "recon-2",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 5_000,
+      fetchPage: async () => {
+        throw new Error("discovery should not run after phase change")
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+      fetchInvoiceDetail: async ({ invoicePk }) => paidDetail(invoicePk),
+    })
+    assert.equal(second.runId, first.runId)
+    assert.equal(second.referenceDate, first.referenceDate)
+    assert.equal(second.referenceInstant, first.referenceInstant)
+    assert.equal(second.status, "phases_completed")
+    assert.equal(second.closedPaid, 2)
+    assert.equal(repo.paymentEvents.length, 2)
+    assert.equal(repo.cases.get("81")?.status, "paid")
+    assert.equal(repo.cases.get("82")?.status, "paid")
+    assert.equal(repo.assignments.length, 0)
+    assert.equal(details >= 1, true)
+  })
+
+  it("timeout no detalhe não avança o cursor e retoma o mesmo caso", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    await repo.insertOpen({ invoice_pk: "91" })
+    const outcomes = ["timeout_or_error", "close_paid"] as const
+    let calls = 0
+    const first = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "timeout-1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      fetchPage: async () => ({ ok: true, rows: [] as Array<{ invoicePk: string | null }>, total: 0 }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+      fetchInvoiceDetail: async ({ invoicePk }) => {
+        const outcome = outcomes[Math.min(calls, outcomes.length - 1)]
+        calls += 1
+        if (outcome === "timeout_or_error") {
+          return {
+            outcome,
+            requestedInvoicePk: invoicePk,
+            returnedInvoicePk: null,
+            errorClass: "detail_timeout",
+            evidence: null,
+          }
+        }
+        return paidDetail(invoicePk)
+      },
+    })
+    assert.equal(first.status, "paused")
+    assert.equal(first.reconcileCursorInvoicePk, null)
+    assert.equal(repo.cases.get("91")?.status, "open")
+    const second = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "timeout-2",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      fetchPage: async () => ({ ok: true, rows: [] as Array<{ invoicePk: string | null }>, total: 0 }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+      fetchInvoiceDetail: async ({ invoicePk }) => {
+        const outcome = outcomes[Math.min(calls, outcomes.length - 1)]
+        calls += 1
+        if (outcome === "timeout_or_error") {
+          return {
+            outcome,
+            requestedInvoicePk: invoicePk,
+            returnedInvoicePk: null,
+            errorClass: "detail_timeout",
+            evidence: null,
+          }
+        }
+        return paidDetail(invoicePk)
+      },
+    })
+    assert.equal(second.status, "phases_completed")
+    assert.equal(repo.cases.get("91")?.status, "paid")
+    assert.equal(repo.paymentEvents.length, 1)
+  })
+
+  it("worker antigo com lease stale não fecha caso nem emite evento", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo({ leaseGate: () => false })
+    await repo.insertOpen({ invoice_pk: "92" })
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "stale-recon",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      fetchPage: async () => ({ ok: true, rows: [] as Array<{ invoicePk: string | null }>, total: 0 }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+      fetchInvoiceDetail: async ({ invoicePk }) => paidDetail(invoicePk),
+    })
+    assert.equal(result.ok, false)
+    assert.equal(repo.cases.get("92")?.status, "open")
+    assert.equal(repo.paymentEvents.length, 0)
+  })
+})
+

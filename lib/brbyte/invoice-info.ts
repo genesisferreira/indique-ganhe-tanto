@@ -1,6 +1,6 @@
 import "server-only"
 
-import { brbyteAdminPostForm } from "@/lib/brbyte/admin-http"
+import { brbyteAdminPostForm, type ControllrHttpAbortClass } from "@/lib/brbyte/admin-http"
 import type { BrbyteCreateInterestConfig } from "@/lib/brbyte/config"
 import {
   extractInvoiceInfo,
@@ -21,6 +21,7 @@ export async function fetchInvoiceInfo(input: {
   payload: Record<string, unknown> | null
   httpStatus: number | null
   message?: string
+  abortClass?: ControllrHttpAbortClass
 }> {
   const invoicePk = input.invoicePk.trim()
   if (!invoicePk) {
@@ -53,7 +54,19 @@ export async function fetchInvoiceInfo(input: {
       { maxAttempts: 1, timeoutMs: remainingMs }
     )
 
-    if (!result.ok) continue
+    if (!result.ok) {
+      if (result.abortClass === "timeout" || result.abortClass === "external_abort") {
+        return {
+          ok: false,
+          info: null,
+          payload: null,
+          httpStatus: result.status,
+          message: result.message,
+          abortClass: result.abortClass,
+        }
+      }
+      continue
+    }
 
     const payload =
       result.json && typeof result.json === "object"
@@ -99,5 +112,6 @@ export async function fetchInvoiceInfo(input: {
     payload: null,
     httpStatus: null,
     message: "Não foi possível consultar detalhes da fatura no Controllr.",
+    abortClass: "transport",
   }
 }

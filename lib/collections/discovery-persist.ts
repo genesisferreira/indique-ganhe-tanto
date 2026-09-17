@@ -1,6 +1,7 @@
 import { decideCollectionSyncAction } from "@/lib/collections/sync-decision"
 import type { CollectionSyncInvoice, ExistingCollectionCase } from "@/lib/collections/sync-decision"
 import { buildCollectionCaseWriteModel } from "@/lib/collections/sync-decision"
+import { COLLECTION_OPEN_STATUSES } from "@/types/collections"
 
 export type DiscoveryPersistAction = "skip" | "create" | "update_open"
 
@@ -20,6 +21,24 @@ export type DiscoveryFencedPersistResult = {
   unassigned: boolean
 }
 
+export type DiscoveryFencedReconcileResult = {
+  ok: boolean
+  code:
+    | "closed"
+    | "already_paid"
+    | "skipped_terminal"
+    | "stale_lease"
+    | "persist_error"
+    | "not_found"
+    | "invalid_input"
+    | "identity_mismatch"
+    | "missing_migration"
+  caseId: string | null
+  closed: boolean
+  alreadyPaid: boolean
+  eventInserted: boolean
+}
+
 export type DiscoveryCaseRepo = {
   findByInvoicePk(invoicePk: string): Promise<ExistingCollectionCase | null>
   persistFencedInvoice(input: {
@@ -29,6 +48,22 @@ export type DiscoveryCaseRepo = {
     assign: boolean
     statementTimeoutMs?: number | null
   }): Promise<DiscoveryFencedPersistResult>
+  listOpenAfter(input: {
+    lease: DiscoveryLease
+    afterInvoicePk: string | null
+    limit: number
+  }): Promise<
+    | { ok: true; cases: ExistingCollectionCase[] }
+    | { ok: false; code: "stale_lease" | "not_found" | "invalid_input" | "missing_migration" }
+  >
+  reconcilePaidFenced(input: {
+    lease: DiscoveryLease
+    caseId: string
+    invoicePk: string
+    actorProfileId: string
+    evidence?: Record<string, unknown>
+    statementTimeoutMs?: number | null
+  }): Promise<DiscoveryFencedReconcileResult>
   insertOpen(writeModel: Record<string, unknown>): Promise<{ id: string; inserted: boolean }>
   updateFinancials(caseId: string, writeModel: Record<string, unknown>): Promise<void>
   recordCreatedEvent(input: { caseId: string; invoicePk: string; actorProfileId: string }): Promise<void>
@@ -177,21 +212,25 @@ export function createMemoryDiscoveryCaseRepo(options?: {
   cases: Map<string, ExistingCollectionCase>
   createdEvents: string[]
   assignments: string[]
+  paymentEvents: string[]
 } {
   const cases = new Map<string, ExistingCollectionCase>()
   const byId = new Map<string, ExistingCollectionCase>()
   const createdEvents: string[] = []
   const assignments: string[] = []
+  const paymentEvents: string[] = []
   let seq = 0
+  const leaseOk = (lease: DiscoveryLease) => !options?.leaseGate || options.leaseGate(lease)
   return {
     cases,
     createdEvents,
     assignments,
+    paymentEvents,
     async findByInvoicePk(invoicePk) {
       return cases.get(invoicePk) ?? null
     },
     async persistFencedInvoice(input) {
-      if (options?.leaseGate && !options.leaseGate(input.lease)) {
+      if (!leaseOk(input.lease)) {
         return {
           ok: false,
           code: "stale_lease",
@@ -268,6 +307,89 @@ export function createMemoryDiscoveryCaseRepo(options?: {
       }
       assignments.push(input.caseId)
       return { assignmentId: `asg-${input.caseId}`, code: "assigned", newlyAssigned: true }
+    },
+    async listOpenAfter(input) {
+      if (!leaseOk(input.lease)) return { ok: false, code: "stale_lease" }
+      const after = input.afterInvoicePk
+      const listed = [...cases.values()]
+        .filter((row) => (COLLECTION_OPEN_STATUSES as readonly string[]).includes(row.status))
+        .filter((row) => {
+          const pk = row.invoicePk
+          if (!pk || !/^[1-9]\d*$/.test(pk)) return false
+          if (after == null) return true
+          return BigInt(pk) > BigInt(after)
+        })
+        .sort((a, b) => {
+          const left = a.invoicePk ?? "0"
+          const right = b.invoicePk ?? "0"
+          return BigInt(left) < BigInt(right) ? -1 : 1
+        })
+        .slice(0, input.limit)
+      return { ok: true, cases: listed }
+    },
+    async reconcilePaidFenced(input) {
+      if (!leaseOk(input.lease)) {
+        return {
+          ok: false,
+          code: "stale_lease",
+          caseId: null,
+          closed: false,
+          alreadyPaid: false,
+          eventInserted: false,
+        }
+      }
+      const current = byId.get(input.caseId) ?? [...cases.values()].find((row) => row.id === input.caseId)
+      if (!current) {
+        return {
+          ok: false,
+          code: "not_found",
+          caseId: null,
+          closed: false,
+          alreadyPaid: false,
+          eventInserted: false,
+        }
+      }
+      if (current.invoicePk !== input.invoicePk) {
+        return {
+          ok: false,
+          code: "identity_mismatch",
+          caseId: current.id,
+          closed: false,
+          alreadyPaid: false,
+          eventInserted: false,
+        }
+      }
+      if (current.status === "paid") {
+        return {
+          ok: true,
+          code: "already_paid",
+          caseId: current.id,
+          closed: false,
+          alreadyPaid: true,
+          eventInserted: false,
+        }
+      }
+      if (!(COLLECTION_OPEN_STATUSES as readonly string[]).includes(current.status)) {
+        return {
+          ok: true,
+          code: "skipped_terminal",
+          caseId: current.id,
+          closed: false,
+          alreadyPaid: false,
+          eventInserted: false,
+        }
+      }
+      current.status = "paid"
+      const eventInserted = !paymentEvents.includes(current.id)
+      if (eventInserted) paymentEvents.push(current.id)
+      return {
+        ok: true,
+        code: "closed",
+        caseId: current.id,
+        closed: true,
+        alreadyPaid: false,
+        eventInserted,
+      }
     },
   }
 }

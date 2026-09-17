@@ -7,14 +7,21 @@ import {
   COLLECTION_DISCOVERY_PAGINATION_STRATEGY,
   COLLECTION_DISCOVERY_QUERY_CONTRACT_VERSION,
   COLLECTION_DISCOVERY_TIMEZONE,
+  emptyDiscoveryReconciliationFields,
   type CollectionDiscoveryCounters,
   type CollectionDiscoveryRun,
   type CollectionDiscoveryStatus,
 } from "@/lib/collections/discovery-contract"
 
+function missingRpc(error: { message?: string } | null | undefined): boolean {
+  const message = String(error?.message ?? "")
+  return /does not exist|could not find the function|schema cache/i.test(message)
+}
+
 function asRun(value: unknown): CollectionDiscoveryRun | null {
   const row = asRecord(value)
   if (!row?.id) return null
+  const defaults = emptyDiscoveryReconciliationFields()
   return {
     id: String(row.id),
     queryContractVersion: String(row.queryContractVersion ?? ""),
@@ -50,6 +57,11 @@ function asRun(value: unknown): CollectionDiscoveryRun | null {
     lastErrorClass: asString(row.lastErrorClass),
     coverageProven: false,
     uniqueOrderProven: false,
+    phase: row.phase === "reconciliation" ? "reconciliation" : defaults.phase,
+    reconcileCursorInvoicePk: asString(row.reconcileCursorInvoicePk),
+    reconcileScannedCount: Number(row.reconcileScannedCount ?? defaults.reconcileScannedCount),
+    reconcileClosedCount: Number(row.reconcileClosedCount ?? defaults.reconcileClosedCount),
+    reconcileSkippedCount: Number(row.reconcileSkippedCount ?? defaults.reconcileSkippedCount),
   }
 }
 
@@ -118,6 +130,41 @@ export function createOpsDiscoveryStore(): DiscoveryStore {
         p_reported_total: input.counters.reportedTotal,
         p_last_error_class: input.lastErrorClass ?? null,
       })
+      const payload = asRecord(data)
+      if (error || payload?.ok !== true) {
+        return { ok: false, code: "stale_lease" } satisfies DiscoveryWriteResult
+      }
+      const run = asRun(payload.run)
+      if (!run) return { ok: false, code: "stale_lease" }
+      return { ok: true, run }
+    },
+    async enterReconciliation(input) {
+      const { data, error } = await db.rpc("enter_collection_reconciliation_phase", {
+        p_run_id: input.runId,
+        p_owner: input.owner,
+        p_generation: input.generation,
+      })
+      if (missingRpc(error)) return { ok: false, code: "missing_migration" } satisfies DiscoveryWriteResult
+      const payload = asRecord(data)
+      if (error || payload?.ok !== true) {
+        return { ok: false, code: "stale_lease" } satisfies DiscoveryWriteResult
+      }
+      const run = asRun(payload.run)
+      if (!run) return { ok: false, code: "stale_lease" }
+      return { ok: true, run }
+    },
+    async advanceReconciliation(input) {
+      const { data, error } = await db.rpc("advance_collection_reconciliation_checkpoint", {
+        p_run_id: input.runId,
+        p_owner: input.owner,
+        p_generation: input.generation,
+        p_reconcile_cursor_invoice_pk: input.reconcileCursorInvoicePk,
+        p_reconcile_scanned_count: input.reconcileScannedCount,
+        p_reconcile_closed_count: input.reconcileClosedCount,
+        p_reconcile_skipped_count: input.reconcileSkippedCount,
+        p_last_error_class: input.lastErrorClass ?? null,
+      })
+      if (missingRpc(error)) return { ok: false, code: "missing_migration" } satisfies DiscoveryWriteResult
       const payload = asRecord(data)
       if (error || payload?.ok !== true) {
         return { ok: false, code: "stale_lease" } satisfies DiscoveryWriteResult

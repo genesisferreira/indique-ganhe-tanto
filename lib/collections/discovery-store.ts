@@ -7,6 +7,7 @@ import {
   COLLECTION_DISCOVERY_QUERY_CONTRACT_VERSION,
   COLLECTION_DISCOVERY_TIMEZONE,
   emptyDiscoveryCounters,
+  emptyDiscoveryReconciliationFields,
   type CollectionDiscoveryCounters,
   type CollectionDiscoveryRun,
   type CollectionDiscoveryStatus,
@@ -27,7 +28,7 @@ export type DiscoveryClaimResult =
 
 export type DiscoveryWriteResult =
   | { ok: true; run: CollectionDiscoveryRun }
-  | { ok: false; code: "stale_lease" | "not_found" | "invalid_input" }
+  | { ok: false; code: "stale_lease" | "not_found" | "invalid_input" | "missing_migration" }
 
 export type DiscoveryStore = {
   claimOrStart(input: {
@@ -47,17 +48,60 @@ export type DiscoveryStore = {
     counters: CollectionDiscoveryCounters
     lastErrorClass?: string | null
   }): Promise<DiscoveryWriteResult>
+  enterReconciliation(input: {
+    runId: string
+    owner: string
+    generation: number
+    now: Date
+  }): Promise<DiscoveryWriteResult>
+  advanceReconciliation(input: {
+    runId: string
+    owner: string
+    generation: number
+    now: Date
+    reconcileCursorInvoicePk: string | null
+    reconcileScannedCount: number
+    reconcileClosedCount: number
+    reconcileSkippedCount: number
+    lastErrorClass?: string | null
+  }): Promise<DiscoveryWriteResult>
   release(input: {
     runId: string
     owner: string
     generation: number
-    status: Extract<CollectionDiscoveryStatus, "paused" | "failed" | "pagination_ended">
+    status: Extract<
+      CollectionDiscoveryStatus,
+      "paused" | "failed" | "pagination_ended" | "phases_completed"
+    >
     lastErrorClass?: string | null
   }): Promise<DiscoveryWriteResult>
 }
 
 function cloneRun(run: CollectionDiscoveryRun): CollectionDiscoveryRun {
-  return { ...run, coverageProven: false, uniqueOrderProven: false }
+  return {
+    ...emptyDiscoveryReconciliationFields(),
+    ...run,
+    phase: run.phase === "reconciliation" ? "reconciliation" : "discovery",
+    reconcileCursorInvoicePk: run.reconcileCursorInvoicePk ?? null,
+    reconcileScannedCount: Number(run.reconcileScannedCount ?? 0),
+    reconcileClosedCount: Number(run.reconcileClosedCount ?? 0),
+    reconcileSkippedCount: Number(run.reconcileSkippedCount ?? 0),
+    coverageProven: false,
+    uniqueOrderProven: false,
+  }
+}
+
+function assertWritableLease(
+  run: CollectionDiscoveryRun,
+  input: { owner: string; generation: number; now: Date }
+): boolean {
+  return (
+    run.leaseOwner === input.owner &&
+    run.leaseGeneration === input.generation &&
+    run.status === "running" &&
+    Boolean(run.leaseUntil) &&
+    Date.parse(String(run.leaseUntil)) > input.now.getTime()
+  )
 }
 
 function toIso(value: Date): string {
@@ -152,6 +196,7 @@ export function createMemoryDiscoveryStore(seed: CollectionDiscoveryRun[] = []):
           lastErrorClass: null,
           coverageProven: false,
           uniqueOrderProven: false,
+          ...emptyDiscoveryReconciliationFields(),
         }
         runs.set(created.id, created)
         return { ok: true, code: "created", created: true, run: cloneRun(created) }
@@ -161,20 +206,58 @@ export function createMemoryDiscoveryStore(seed: CollectionDiscoveryRun[] = []):
       return exclusive(() => {
         const run = runs.get(input.runId)
         if (!run) return { ok: false, code: "not_found" } satisfies DiscoveryWriteResult
-        const nowMs = input.now.getTime()
-        if (
-          run.leaseOwner !== input.owner ||
-          run.leaseGeneration !== input.generation ||
-          run.status !== "running" ||
-          !run.leaseUntil ||
-          Date.parse(run.leaseUntil) <= nowMs
-        ) {
+        if (!assertWritableLease(run, input)) {
           return { ok: false, code: "stale_lease" } satisfies DiscoveryWriteResult
         }
         const next: CollectionDiscoveryRun = {
           ...run,
           cursorLastInvoicePk: input.cursorLastInvoicePk,
           ...input.counters,
+          lastErrorClass: input.lastErrorClass ?? run.lastErrorClass,
+          coverageProven: false,
+          uniqueOrderProven: false,
+        }
+        runs.set(next.id, next)
+        return { ok: true, run: cloneRun(next) }
+      })
+    },
+    enterReconciliation(input) {
+      return exclusive(() => {
+        const run = runs.get(input.runId)
+        if (!run) return { ok: false, code: "not_found" } satisfies DiscoveryWriteResult
+        if (!assertWritableLease(run, input)) {
+          return { ok: false, code: "stale_lease" } satisfies DiscoveryWriteResult
+        }
+        const next: CollectionDiscoveryRun = {
+          ...run,
+          phase: "reconciliation",
+          coverageProven: false,
+          uniqueOrderProven: false,
+        }
+        runs.set(next.id, next)
+        return { ok: true, run: cloneRun(next) }
+      })
+    },
+    advanceReconciliation(input) {
+      return exclusive(() => {
+        const run = runs.get(input.runId)
+        if (!run) return { ok: false, code: "not_found" } satisfies DiscoveryWriteResult
+        if (!assertWritableLease(run, input)) {
+          return { ok: false, code: "stale_lease" } satisfies DiscoveryWriteResult
+        }
+        if (
+          input.reconcileCursorInvoicePk != null &&
+          !/^[1-9]\d*$/.test(input.reconcileCursorInvoicePk)
+        ) {
+          return { ok: false, code: "invalid_input" } satisfies DiscoveryWriteResult
+        }
+        const next: CollectionDiscoveryRun = {
+          ...run,
+          phase: "reconciliation",
+          reconcileCursorInvoicePk: input.reconcileCursorInvoicePk,
+          reconcileScannedCount: input.reconcileScannedCount,
+          reconcileClosedCount: input.reconcileClosedCount,
+          reconcileSkippedCount: input.reconcileSkippedCount,
           lastErrorClass: input.lastErrorClass ?? run.lastErrorClass,
           coverageProven: false,
           uniqueOrderProven: false,

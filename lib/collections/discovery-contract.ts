@@ -40,6 +40,9 @@ export type CollectionDiscoveryStatus =
   | "paused"
   | "failed"
   | "pagination_ended"
+  | "phases_completed"
+
+export type CollectionDiscoveryPhase = "discovery" | "reconciliation"
 
 export type CollectionDiscoveryRun = {
   id: string
@@ -65,6 +68,11 @@ export type CollectionDiscoveryRun = {
   lastErrorClass: string | null
   coverageProven: false
   uniqueOrderProven: false
+  phase: CollectionDiscoveryPhase
+  reconcileCursorInvoicePk: string | null
+  reconcileScannedCount: number
+  reconcileClosedCount: number
+  reconcileSkippedCount: number
 }
 
 export type CollectionDiscoveryCounters = {
@@ -90,6 +98,22 @@ export function emptyDiscoveryCounters(): CollectionDiscoveryCounters {
     unassignedCount: 0,
     errorCount: 0,
     reportedTotal: null,
+  }
+}
+
+export function emptyDiscoveryReconciliationFields(): {
+  phase: CollectionDiscoveryPhase
+  reconcileCursorInvoicePk: null
+  reconcileScannedCount: number
+  reconcileClosedCount: number
+  reconcileSkippedCount: number
+} {
+  return {
+    phase: "discovery",
+    reconcileCursorInvoicePk: null,
+    reconcileScannedCount: 0,
+    reconcileClosedCount: 0,
+    reconcileSkippedCount: 0,
   }
 }
 

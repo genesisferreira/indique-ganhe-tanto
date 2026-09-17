@@ -364,6 +364,34 @@ describe("3.1E-L persistência fenced", () => {
   })
 })
 
+describe("3.1E-Q reconciliação financeira retomável", () => {
+  it("patch restringe RPCs ao service_role e não infere pagamento por ausência", () => {
+    const patch = readFileSync(
+      join(repoRoot, "supabase/patch-collection-discovery-reconciliation.sql"),
+      "utf8"
+    )
+    assert.match(patch, /reconcile_collection_case_paid/)
+    assert.match(patch, /advance_collection_reconciliation_checkpoint/)
+    assert.match(patch, /collection_case_events_payment_detected_once_uidx/)
+    assert.match(patch, /phases_completed/)
+    assert.match(patch, /grant execute on function public\.reconcile_collection_case_paid/)
+    assert.match(patch, /to service_role/)
+    assert.equal(
+      /grant execute[\s\S]*reconcile_collection_case_paid[\s\S]*to authenticated/i.test(patch),
+      false
+    )
+    assert.match(patch, /NÃO vira close_paid/)
+    const persist = readFileSync(join(repoRoot, "lib/collections/discovery-persist.ts"), "utf8")
+    assert.match(persist, /decision.action === "close_paid"/)
+    const runner = readFileSync(join(repoRoot, "lib/collections/discovery-runner.ts"), "utf8")
+    assert.match(runner, /fetchInvoiceDetail/)
+    assert.match(runner, /runReconciliation/)
+    const sync = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
+    assert.match(sync, /classifyInvoiceDetailForReconciliation/)
+    assert.match(sync, /closedPaid: batch.closedPaid/)
+  })
+})
+
 describe("3.1E-O timeout HTTP cobre o corpo", () => {
   it("helper operacional delega deadline único e preserva timeout do runner", () => {
     const adminHttp = readFileSync(join(repoRoot, "lib/brbyte/admin-http.ts"), "utf8")

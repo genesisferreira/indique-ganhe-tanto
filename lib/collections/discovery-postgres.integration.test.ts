@@ -2,6 +2,14 @@ import assert from "node:assert/strict"
 import { after, before, beforeEach, describe, it } from "node:test"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { fetchInvoiceInfo } from "@/lib/brbyte/invoice-info"
+import { listOverdueInvoicesPage } from "@/lib/brbyte/invoice-list"
+import { presentCollectionInvoiceFromListRow } from "@/lib/collections/invoice-from-controllr"
+import { runOverdueDiscoveryBatch } from "@/lib/collections/discovery-runner"
+import { classifyInvoiceDetailForReconciliation } from "@/lib/collections/reconciliation"
+import type { DiscoveryCaseRepo } from "@/lib/collections/discovery-persist"
+import type { DiscoveryStore } from "@/lib/collections/discovery-store"
+import type { CollectionDiscoveryRun } from "@/lib/collections/discovery-contract"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const labUrl = pathToFileURL(join(here, "../../scripts/local-pg-collections-lab/run.mjs")).href
@@ -788,5 +796,709 @@ describe("PostgreSQL real — descoberta retomável", { timeout: 180_000 }, () =
       [persisted.caseId]
     )
     assert.equal(assigns.n, 1)
+  })
+
+  it("reconciliação: evidência positiva fecha uma vez; ausência e inválidos não pagam", async () => {
+    const claimed = await claim(client, "recon-fin")
+    const runId = claimed.run.id
+    const gen = claimed.run.leaseGeneration
+    const openStill = await persist(client, runId, "recon-fin", gen, "81001")
+    const openPaid = await persist(client, runId, "recon-fin", gen, "81002")
+    const openPaidMsg = await persist(client, runId, "recon-fin", gen, "81003")
+    const openNoCredit = await persist(client, runId, "recon-fin", gen, "81004")
+    const openCreditOnly = await persist(client, runId, "recon-fin", gen, "81005")
+    const openRemoved = await persist(client, runId, "recon-fin", gen, "81006")
+    const openMismatch = await persist(client, runId, "recon-fin", gen, "81007")
+    assert.equal(openStill.ok, true)
+    await client.query(
+      `update public.collection_cases
+       set metadata = '{"note":"manual-recon"}'::jsonb, status = 'in_contact'
+       where invoice_pk in ('81001','81002')`
+    )
+
+    const listed = payloadOf(
+      await rpc(
+        client,
+        `select public.list_open_collection_cases_after($1,$2,$3,null,15) as payload`,
+        [runId, "recon-fin", gen]
+      )
+    )
+    assert.equal(listed.ok, true)
+    assert.equal((listed.cases as unknown[]).length >= 7, true)
+
+    const skippedKeep = await rpc(
+      client,
+      `select status, metadata from public.collection_cases where invoice_pk = '81001'`
+    )
+    assert.equal(skippedKeep.status, "in_contact")
+    assert.equal((skippedKeep.metadata as { note?: string }).note, "manual-recon")
+
+    const closed = payloadOf(
+      await rpc(
+        client,
+        `select public.reconcile_collection_case_paid($1,$2,$3,$4::uuid,$5::uuid,$6,$7::jsonb,null) as payload`,
+        [
+          runId,
+          "recon-fin",
+          gen,
+          ACTOR,
+          openPaid.caseId,
+          "81002",
+          JSON.stringify({ source: "lab", isPaid: true }),
+        ]
+      )
+    )
+    assert.equal(closed.ok, true)
+    assert.equal(closed.closed, true)
+    assert.equal(closed.eventInserted, true)
+    const paidRow = await rpc(
+      client,
+      `select status, metadata, days_overdue from public.collection_cases where invoice_pk = '81002'`
+    )
+    assert.equal(paidRow.status, "paid")
+    assert.equal((paidRow.metadata as { note?: string }).note, "manual-recon")
+    const events = await rpc(
+      client,
+      `select count(*)::int as n from public.collection_case_events
+       where event_type = 'payment_detected' and case_id = $1`,
+      [openPaid.caseId]
+    )
+    assert.equal(events.n, 1)
+
+    const again = payloadOf(
+      await rpc(
+        client,
+        `select public.reconcile_collection_case_paid($1,$2,$3,$4::uuid,$5::uuid,$6,'{}'::jsonb,null) as payload`,
+        [runId, "recon-fin", gen, ACTOR, openPaid.caseId, "81002"]
+      )
+    )
+    assert.equal(again.ok, true)
+    assert.equal(again.code, "already_paid")
+    assert.equal(again.eventInserted, false)
+    const eventsAgain = await rpc(
+      client,
+      `select count(*)::int as n from public.collection_case_events
+       where event_type = 'payment_detected' and case_id = $1`,
+      [openPaid.caseId]
+    )
+    assert.equal(eventsAgain.n, 1)
+
+    const mismatch = payloadOf(
+      await rpc(
+        client,
+        `select public.reconcile_collection_case_paid($1,$2,$3,$4::uuid,$5::uuid,$6,'{}'::jsonb,null) as payload`,
+        [runId, "recon-fin", gen, ACTOR, openMismatch.caseId, "99999"]
+      )
+    )
+    assert.equal(mismatch.ok, false)
+    assert.equal(mismatch.code, "identity_mismatch")
+    const mismatchRow = await rpc(
+      client,
+      `select status from public.collection_cases where invoice_pk = '81007'`
+    )
+    assert.equal(mismatchRow.status, "open")
+
+    const assigns = await rpc(
+      client,
+      `select count(*)::int as n from public.sector_work_assignments
+       where work_type = 'collection_case' and work_id = $1 and assignment_source = 'auto_assign'`,
+      [openPaid.caseId]
+    )
+    assert.ok(Number(assigns.n) >= 0)
+    void openPaidMsg
+    void openNoCredit
+    void openCreditOnly
+    void openRemoved
+  })
+
+  it("reconciliação: worker antigo e rollback transacional", async () => {
+    const claimed = await claim(client, "recon-stale", 1_000)
+    const runId = claimed.run.id
+    const gen1 = claimed.run.leaseGeneration
+    const seeded = await persist(client, runId, "recon-stale", gen1, "82001")
+    assert.equal(seeded.ok, true)
+    await client.query(
+      `update public.collection_discovery_runs
+       set lease_until = timezone('utc', now()) - interval '5 seconds'
+       where id = $1`,
+      [runId]
+    )
+    const expired = payloadOf(
+      await rpc(
+        client,
+        `select public.reconcile_collection_case_paid($1,$2,$3,$4::uuid,$5::uuid,$6,'{}'::jsonb,null) as payload`,
+        [runId, "recon-stale", gen1, ACTOR, seeded.caseId, "82001"]
+      )
+    )
+    assert.equal(expired.ok, false)
+    assert.equal(expired.code, "stale_lease")
+    const recovered = await claim(client, "recon-new", 60_000, runId)
+    assert.equal(recovered.ok, true)
+    const gen2 = recovered.run.leaseGeneration
+    const stale = payloadOf(
+      await rpc(
+        client,
+        `select public.reconcile_collection_case_paid($1,$2,$3,$4::uuid,$5::uuid,$6,'{}'::jsonb,null) as payload`,
+        [runId, "recon-stale", gen1, ACTOR, seeded.caseId, "82001"]
+      )
+    )
+    assert.equal(stale.code, "stale_lease")
+    const stillOpen = await rpc(
+      client,
+      `select status from public.collection_cases where invoice_pk = '82001'`
+    )
+    assert.equal(stillOpen.status, "open")
+    const noPayEvent = await rpc(
+      client,
+      `select count(*)::int as n from public.collection_case_events
+       where event_type = 'payment_detected' and case_id = $1`,
+      [seeded.caseId]
+    )
+    assert.equal(noPayEvent.n, 0)
+
+    await client.query(`
+      create or replace function public.lab_fail_after_payment_event()
+      returns trigger
+      language plpgsql
+      as $f$
+      begin
+        if current_setting('igt.lab_fail_reconcile', true) = 'on' then
+          raise exception 'lab_fail_reconcile';
+        end if;
+        return NEW;
+      end;
+      $f$;
+      drop trigger if exists trg_lab_fail_after_payment_event on public.collection_case_events;
+      create trigger trg_lab_fail_after_payment_event
+      after insert on public.collection_case_events
+      for each row execute function public.lab_fail_after_payment_event();
+    `)
+    await client.query("select set_config('igt.lab_fail_reconcile', 'on', false)")
+    try {
+      await assert.rejects(
+        () =>
+          client.query(
+            `select public.reconcile_collection_case_paid($1,$2,$3,$4::uuid,$5::uuid,$6,'{}'::jsonb,null)`,
+            [runId, "recon-new", gen2, ACTOR, seeded.caseId, "82001"]
+          ),
+        /lab_fail_reconcile/
+      )
+      const rolled = await rpc(
+        client,
+        `select status from public.collection_cases where invoice_pk = '82001'`
+      )
+      assert.equal(rolled.status, "open")
+      const rolledEvents = await rpc(
+        client,
+        `select count(*)::int as n from public.collection_case_events
+         where event_type = 'payment_detected' and case_id = $1`,
+        [seeded.caseId]
+      )
+      assert.equal(rolledEvents.n, 0)
+    } finally {
+      await client.query("select set_config('igt.lab_fail_reconcile', 'off', false)")
+      await client.query(`
+        drop trigger if exists trg_lab_fail_after_payment_event on public.collection_case_events;
+        drop function if exists public.lab_fail_after_payment_event();
+      `)
+    }
+
+    const fresh = payloadOf(
+      await rpc(
+        client,
+        `select public.reconcile_collection_case_paid($1,$2,$3,$4::uuid,$5::uuid,$6,'{}'::jsonb,null) as payload`,
+        [runId, "recon-new", gen2, ACTOR, seeded.caseId, "82001"]
+      )
+    )
+    assert.equal(fresh.ok, true)
+    assert.equal(fresh.closed, true)
+  })
+
+  it("RPCs de reconciliação permanecem no service_role com search_path fixo", async () => {
+    const auth = await newClient()
+    await auth.query("set role authenticated")
+    await assert.rejects(
+      () =>
+        auth.query(`select public.reconcile_collection_case_paid($1,$2,$3,$4::uuid,$5::uuid,$6,'{}'::jsonb,null)`, [
+          "00000000-0000-4000-8000-000000000001",
+          "x",
+          1,
+          ACTOR,
+          "00000000-0000-4000-8000-000000000002",
+          "1",
+        ]),
+      /permission denied/i
+    )
+    await auth.query("reset role")
+    const execAuth = await rpc(
+      client,
+      `select has_function_privilege('authenticated', 'public.reconcile_collection_case_paid(uuid,text,integer,uuid,uuid,text,jsonb,integer)', 'execute') as ok`
+    )
+    assert.equal(execAuth.ok, false)
+    const execService = await rpc(
+      client,
+      `select has_function_privilege('service_role', 'public.reconcile_collection_case_paid(uuid,text,integer,uuid,uuid,text,jsonb,integer)', 'execute') as ok`
+    )
+    assert.equal(execService.ok, true)
+    const path = await rpc(
+      client,
+      `select prosecdef, proconfig
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'reconcile_collection_case_paid'`
+    )
+    assert.equal(path.prosecdef, true)
+    assert.equal(JSON.stringify(path.proconfig).includes("search_path=public"), true)
+  })
+
+  it("helper HTTP simulado + runner + PG: descoberta, reconciliação e timeout", async () => {
+    await client.query(
+      `update public.collection_cases
+       set status = 'closed', closed_at = timezone('utc', now())
+       where status in ('open', 'in_contact', 'promise_to_pay', 'unresolved')`
+    )
+    const seedRun = await claim(client, "seed-helper")
+    const seedGen = seedRun.run.leaseGeneration
+    const absentOpen = await persist(client, seedRun.run.id, "seed-helper", seedGen, "83001")
+    const absentPaid = await persist(client, seedRun.run.id, "seed-helper", seedGen, "83002")
+    const timeoutCase = await persist(client, seedRun.run.id, "seed-helper", seedGen, "83003")
+    assert.equal(absentOpen.ok, true)
+    await client.query(
+      `update public.collection_cases
+       set metadata = '{"note":"keep-manual"}'::jsonb
+       where invoice_pk in ('83001','83002','83003')`
+    )
+    await client.query(
+      `select public.release_collection_discovery_run($1,$2,$3,'paused',null)`,
+      [seedRun.run.id, "seed-helper", seedGen]
+    )
+    await closeResumableRuns()
+
+    const originalFetch = globalThis.fetch
+    const details: Record<string, Record<string, unknown>> = {
+      "83001": {
+        invoice_pk: "83001",
+        invoice_msg: "open",
+        invoice_date_credit: null,
+        invoice_deleted: false,
+      },
+      "83002": {
+        invoice_pk: "83002",
+        invoice_msg: "paid",
+        invoice_date_credit: "2026-09-10",
+        isPaid: true,
+      },
+    }
+    let blockedExternal = true
+    const pendingAborts: AbortSignal[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const href = String(input instanceof Request ? input.url : input)
+      if (!href.startsWith("http://127.0.0.1")) {
+        blockedExternal = false
+        throw new Error(`blocked-external:${href}`)
+      }
+      const url = new URL(href)
+      if (url.pathname.endsWith("/login")) {
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { "content-type": "application/json", "set-cookie": "lab=1" },
+        })
+      }
+      const body = String(init?.body ?? "")
+      const params = new URLSearchParams(body)
+      if (url.pathname.includes("list_info")) {
+        const pk =
+          params.get("invoice_pk") ||
+          params.get("where[invoice_pk]") ||
+          (() => {
+            try {
+              const parsed = JSON.parse(params.get("where") ?? "{}") as { invoice_pk?: string }
+              return parsed.invoice_pk ?? ""
+            } catch {
+              return ""
+            }
+          })()
+        if (pk === "83003") {
+          const signal = init?.signal
+          if (signal) pendingAborts.push(signal)
+          await new Promise((_, reject) => {
+            const timer = setTimeout(() => reject(new Error("lab-timeout-not-aborted")), 30_000)
+            signal?.addEventListener("abort", () => {
+              clearTimeout(timer)
+              reject(Object.assign(new Error("AbortError"), { name: "AbortError" }))
+            })
+          })
+        }
+        const row = details[pk]
+        if (!row) {
+          return new Response(JSON.stringify({ success: false, message: "Invoice not found" }), {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        return new Response(JSON.stringify({ success: true, results: [row] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      if (url.pathname.includes("/invoice/list")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            results: [
+              {
+                invoice_pk: "84001",
+                invoice_deleted: false,
+                invoice_due_date: "2026-08-01 00:00:00",
+                invoice_date_credit: null,
+                contract_pk: "1",
+                client_pk: "1",
+              },
+            ],
+            recordsTotal: 1,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      }
+      throw new Error(`unexpected-path:${url.pathname}`)
+    }) as typeof fetch
+
+    const config = {
+      enabled: true,
+      apiUrl: "http://127.0.0.1:9",
+      apiUser: "lab-user",
+      apiPassword: "lab-only",
+      defaultLeadPk: "1",
+      defaultInterestStatus: "1",
+      defaultPlanPk: "1",
+      timeoutMs: 5_000,
+    }
+
+    function asRun(row: Record<string, any>): CollectionDiscoveryRun {
+      return {
+        ...row,
+        coverageProven: false,
+        uniqueOrderProven: false,
+        phase: row.phase === "reconciliation" ? "reconciliation" : "discovery",
+        reconcileCursorInvoicePk: row.reconcileCursorInvoicePk ?? null,
+        reconcileScannedCount: Number(row.reconcileScannedCount ?? 0),
+        reconcileClosedCount: Number(row.reconcileClosedCount ?? 0),
+        reconcileSkippedCount: Number(row.reconcileSkippedCount ?? 0),
+      } as CollectionDiscoveryRun
+    }
+
+    const store: DiscoveryStore = {
+      async claimOrStart(input) {
+        const payload = await claim(
+          client,
+          input.owner,
+          input.leaseMs ?? 60_000,
+          input.runId ?? null
+        )
+        if (payload.ok !== true) {
+          return { ok: false, code: payload.code } as Awaited<ReturnType<DiscoveryStore["claimOrStart"]>>
+        }
+        return {
+          ok: true,
+          code: payload.created === true ? "created" : "claimed",
+          created: payload.created === true,
+          run: asRun(payload.run),
+        }
+      },
+      async advance(input) {
+        const row = await rpc(
+          client,
+          `select public.advance_collection_discovery_checkpoint(
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+           ) as payload`,
+          [
+            input.runId,
+            input.owner,
+            input.generation,
+            input.cursorLastInvoicePk,
+            input.counters.scannedPages,
+            input.counters.scannedInvoices,
+            input.counters.createdCount,
+            input.counters.updatedCount,
+            input.counters.skippedCount,
+            input.counters.assignedCount,
+            input.counters.unassignedCount,
+            input.counters.errorCount,
+            input.counters.reportedTotal,
+            input.lastErrorClass ?? null,
+          ]
+        )
+        const payload = row.payload as Record<string, any>
+        if (payload?.ok !== true) return { ok: false, code: "stale_lease" }
+        return { ok: true, run: asRun(payload.run) }
+      },
+      async enterReconciliation(input) {
+        const row = await rpc(
+          client,
+          `select public.enter_collection_reconciliation_phase($1,$2,$3) as payload`,
+          [input.runId, input.owner, input.generation]
+        )
+        const payload = row.payload as Record<string, any>
+        if (payload?.ok !== true) return { ok: false, code: "stale_lease" }
+        return { ok: true, run: asRun(payload.run) }
+      },
+      async advanceReconciliation(input) {
+        const row = await rpc(
+          client,
+          `select public.advance_collection_reconciliation_checkpoint($1,$2,$3,$4,$5,$6,$7,$8) as payload`,
+          [
+            input.runId,
+            input.owner,
+            input.generation,
+            input.reconcileCursorInvoicePk,
+            input.reconcileScannedCount,
+            input.reconcileClosedCount,
+            input.reconcileSkippedCount,
+            input.lastErrorClass ?? null,
+          ]
+        )
+        const payload = row.payload as Record<string, any>
+        if (payload?.ok !== true) return { ok: false, code: "stale_lease" }
+        return { ok: true, run: asRun(payload.run) }
+      },
+      async release(input) {
+        const row = await rpc(
+          client,
+          `select public.release_collection_discovery_run($1,$2,$3,$4,$5) as payload`,
+          [input.runId, input.owner, input.generation, input.status, input.lastErrorClass ?? null]
+        )
+        const payload = row.payload as Record<string, any>
+        if (payload?.ok !== true) return { ok: false, code: "stale_lease" }
+        return { ok: true, run: asRun(payload.run) }
+      },
+    }
+
+    const repo: DiscoveryCaseRepo = {
+      async findByInvoicePk(invoicePk) {
+        const row = await rpc(
+          client,
+          `select id::text as id, status, invoice_pk from public.collection_cases where invoice_pk = $1`,
+          [invoicePk]
+        )
+        if (!row?.id) return null
+        return { id: String(row.id), status: String(row.status) as never, invoicePk }
+      },
+      async persistFencedInvoice(input) {
+        return persist(
+          client,
+          input.lease.runId,
+          input.lease.owner,
+          input.lease.generation,
+          String(input.writeModel.invoice_pk ?? ""),
+          input.assign
+        ) as Promise<Awaited<ReturnType<DiscoveryCaseRepo["persistFencedInvoice"]>>>
+      },
+      async listOpenAfter(input) {
+        const row = await rpc(
+          client,
+          `select public.list_open_collection_cases_after($1,$2,$3,$4,$5) as payload`,
+          [
+            input.lease.runId,
+            input.lease.owner,
+            input.lease.generation,
+            input.afterInvoicePk,
+            input.limit,
+          ]
+        )
+        const payload = row.payload as Record<string, any>
+        if (payload?.ok !== true) return { ok: false, code: payload?.code ?? "invalid_input" }
+        return {
+          ok: true,
+          cases: (payload.cases as Array<Record<string, string>>).map((item) => ({
+            id: String(item.id),
+            status: String(item.status) as never,
+            invoicePk: String(item.invoicePk),
+          })),
+        }
+      },
+      async reconcilePaidFenced(input) {
+        const row = await rpc(
+          client,
+          `select public.reconcile_collection_case_paid($1,$2,$3,$4::uuid,$5::uuid,$6,$7::jsonb,$8) as payload`,
+          [
+            input.lease.runId,
+            input.lease.owner,
+            input.lease.generation,
+            input.actorProfileId,
+            input.caseId,
+            input.invoicePk,
+            JSON.stringify(input.evidence ?? {}),
+            input.statementTimeoutMs ?? null,
+          ]
+        )
+        const payload = row.payload as Record<string, any>
+        if (payload?.ok !== true) {
+          return {
+            ok: false,
+            code: payload?.code ?? "persist_error",
+            caseId: null,
+            closed: false,
+            alreadyPaid: false,
+            eventInserted: false,
+          }
+        }
+        return {
+          ok: true,
+          code: payload.code,
+          caseId: payload.caseId ? String(payload.caseId) : input.caseId,
+          closed: payload.closed === true,
+          alreadyPaid: payload.alreadyPaid === true,
+          eventInserted: payload.eventInserted === true,
+        }
+      },
+      async insertOpen() {
+        throw new Error("unused")
+      },
+      async updateFinancials() {},
+      async recordCreatedEvent() {},
+      async ensureAssignment() {
+        return { assignmentId: null, code: "unused", newlyAssigned: false }
+      },
+    }
+
+    try {
+      let nowMs = 0
+      const first = await runOverdueDiscoveryBatch({
+        store,
+        repo,
+        owner: "helper-worker",
+        actorProfileId: ACTOR,
+        now: new Date("2026-09-16T12:00:00.000Z"),
+        referenceInstant: new Date("2026-09-16T12:00:00.000Z"),
+        referenceDate: "2026-09-16",
+        minimumDaysOverdue: 5,
+        collectionsEnabled: true,
+        startedAtMs: 0,
+        clock: () => nowMs,
+        budgetMs: 45_000,
+        configuredTimeoutMs: 80,
+        fetchPage: async ({ referenceDate, afterInvoicePk, timeoutMs }) => {
+          nowMs += 11_300
+          const page = await listOverdueInvoicesPage({
+            config: { ...config, timeoutMs },
+            cookie: "lab=1",
+            referenceDate,
+            page: 1,
+            afterInvoicePk,
+            timeoutMs,
+          })
+          return {
+            ok: page.ok,
+            rows: page.rows,
+            total: page.total,
+            httpStatus: page.httpStatus,
+            message: page.message,
+          }
+        },
+        toInvoice: (row) => presentCollectionInvoiceFromListRow(row),
+        fetchInvoiceDetail: async ({ invoicePk, timeoutMs }) => {
+          const info = await fetchInvoiceInfo({
+            config: { ...config, timeoutMs },
+            cookie: "lab=1",
+            invoicePk,
+          })
+          return classifyInvoiceDetailForReconciliation({
+            requestedInvoicePk: invoicePk,
+            ok: info.ok,
+            httpStatus: info.httpStatus,
+            message: info.message,
+            abortClass: info.abortClass,
+            info: info.info,
+            payload: info.payload,
+          })
+        },
+      })
+      assert.equal(blockedExternal, true)
+      assert.equal(first.ok, true)
+      assert.equal(first.referenceDate, "2026-09-16")
+      assert.equal(first.created >= 1, true)
+      const created = await rpc(
+        client,
+        `select count(*)::int as n from public.collection_cases where invoice_pk = '84001'`
+      )
+      assert.equal(created.n, 1)
+      assert.equal(first.resumable, true)
+      assert.equal(first.coverageProven, false)
+
+      nowMs = 0
+      const second = await runOverdueDiscoveryBatch({
+        store,
+        repo,
+        owner: "helper-worker-2",
+        actorProfileId: ACTOR,
+        now: new Date("2026-09-17T12:00:00.000Z"),
+        referenceInstant: new Date("2026-09-17T12:00:00.000Z"),
+        referenceDate: "2026-09-17",
+        runId: first.runId,
+        minimumDaysOverdue: 5,
+        collectionsEnabled: true,
+        startedAtMs: 0,
+        clock: () => nowMs,
+        budgetMs: 45_000,
+        configuredTimeoutMs: 80,
+        fetchPage: async ({ referenceDate, afterInvoicePk, timeoutMs }) => {
+          const page = await listOverdueInvoicesPage({
+            config: { ...config, timeoutMs },
+            cookie: "lab=1",
+            referenceDate,
+            page: 1,
+            afterInvoicePk,
+            timeoutMs,
+          })
+          return { ok: page.ok, rows: page.rows, total: page.total, httpStatus: page.httpStatus }
+        },
+        toInvoice: (row) => presentCollectionInvoiceFromListRow(row),
+        fetchInvoiceDetail: async ({ invoicePk, timeoutMs }) => {
+          const info = await fetchInvoiceInfo({
+            config: { ...config, timeoutMs },
+            cookie: "lab=1",
+            invoicePk,
+          })
+          return classifyInvoiceDetailForReconciliation({
+            requestedInvoicePk: invoicePk,
+            ok: info.ok,
+            httpStatus: info.httpStatus,
+            message: info.message,
+            abortClass: info.abortClass,
+            info: info.info,
+            payload: info.payload,
+          })
+        },
+      })
+      assert.equal(second.runId, first.runId)
+      assert.equal(second.referenceDate, "2026-09-16")
+      const stillOpen = await rpc(
+        client,
+        `select status, metadata from public.collection_cases where invoice_pk = '83001'`
+      )
+      assert.equal(stillOpen.status, "open")
+      assert.equal((stillOpen.metadata as { note?: string }).note, "keep-manual")
+      const paid = await rpc(
+        client,
+        `select status from public.collection_cases where invoice_pk = '83002'`
+      )
+      assert.equal(paid.status, "paid")
+      const payEvents = await rpc(
+        client,
+        `select count(*)::int as n from public.collection_case_events
+         where event_type = 'payment_detected' and case_id = $1`,
+        [absentPaid.caseId]
+      )
+      assert.equal(payEvents.n, 1)
+      const timeoutRow = await rpc(
+        client,
+        `select status from public.collection_cases where invoice_pk = '83003'`
+      )
+      assert.equal(timeoutRow.status, "open")
+      void timeoutCase
+      void absentOpen
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

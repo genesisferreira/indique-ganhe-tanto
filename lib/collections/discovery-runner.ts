@@ -10,6 +10,7 @@ import {
   collectionDiscoveryShouldStopForTime,
   sanitizeDiscoveryErrorClass,
   type CollectionDiscoveryCounters,
+  type CollectionDiscoveryPhase,
   type CollectionDiscoveryRun,
   type CollectionDiscoveryStatus,
 } from "@/lib/collections/discovery-contract"
@@ -19,6 +20,11 @@ import {
   type DiscoveryCaseRepo,
 } from "@/lib/collections/discovery-persist"
 import type { DiscoveryStore } from "@/lib/collections/discovery-store"
+import {
+  reconciliationAdvancesCursor,
+  shouldWriteReconciliationClosePaid,
+  type ReconciliationDetailResult,
+} from "@/lib/collections/reconciliation"
 import type { CollectionSyncInvoice, ExistingCollectionCase } from "@/lib/collections/sync-decision"
 
 export type DiscoveryFetchedPage<TRow extends { invoicePk: string | null } = { invoicePk: string | null }> = {
@@ -54,6 +60,11 @@ export type DiscoveryRunnerDeps<TRow extends { invoicePk: string | null } = { in
     existing: ExistingCollectionCase | null,
     frozenNow: Date
   ) => Promise<CollectionSyncInvoice>
+  fetchInvoiceDetail?: (input: {
+    invoicePk: string
+    timeoutMs: number
+    referenceDate: string
+  }) => Promise<ReconciliationDetailResult>
   minimumDaysOverdue: number
   collectionsEnabled: boolean
   runId?: string | null
@@ -78,6 +89,9 @@ export type DiscoveryBatchResult = {
   truncated: boolean
   coverageProven: false
   uniqueOrderProven: false
+  phase: CollectionDiscoveryPhase | null
+  reconcileCursorInvoicePk: string | null
+  closedPaid: number
   message: string
 }
 
@@ -118,6 +132,9 @@ function resultFromRun(
     truncated: run.status === "paused" || run.status === "failed",
     coverageProven: false,
     uniqueOrderProven: false,
+    phase: run.phase,
+    reconcileCursorInvoicePk: run.reconcileCursorInvoicePk,
+    closedPaid: run.reconcileClosedCount,
     ...extra,
   }
 }
@@ -165,6 +182,9 @@ export async function runOverdueDiscoveryBatch<
       truncated: false,
       coverageProven: false,
       uniqueOrderProven: false,
+      phase: null,
+      reconcileCursorInvoicePk: null,
+      closedPaid: 0,
       message,
     }
   }
@@ -191,6 +211,258 @@ export async function runOverdueDiscoveryBatch<
       { ok: false, resumable: true, message },
       counters
     )
+  }
+
+  const pause = async (message: string) => {
+    const released = await input.store.release({
+      runId: run.id,
+      owner,
+      generation,
+      status: "paused",
+    })
+    const paused = released.ok ? released.run : { ...run, status: "paused" as const }
+    return resultFromRun(paused, { ok: true, resumable: true, message }, counters)
+  }
+
+  const endPaginationWithoutRecon = async (message: string) => {
+    const released = await input.store.release({
+      runId: run.id,
+      owner,
+      generation,
+      status: "pagination_ended",
+    })
+    const ended = released.ok ? released.run : { ...run, status: "pagination_ended" as const }
+    return resultFromRun(ended, {
+      ok: true,
+      resumable: false,
+      truncated: false,
+      message,
+    })
+  }
+
+  const runReconciliation = async (): Promise<DiscoveryBatchResult> => {
+    if (run.phase !== "reconciliation") {
+      const entered = await input.store.enterReconciliation({
+        runId: run.id,
+        owner,
+        generation,
+        now: input.now,
+      })
+      if (!entered.ok) {
+        if (entered.code === "missing_migration") {
+          return endPaginationWithoutRecon(
+            "Paginação da descoberta encerrou. Reconciliação indisponível: migration ausente. Encerramento da paginação não prova cobertura global."
+          )
+        }
+        return fail("stale_lease", "Lease perdida ao entrar na reconciliação.")
+      }
+      run = entered.run
+    }
+
+    const fetchDetail = input.fetchInvoiceDetail
+    if (!fetchDetail) {
+      return endPaginationWithoutRecon(
+        "Paginação da descoberta encerrou neste recorte. Encerramento da paginação não prova cobertura global."
+      )
+    }
+
+    const lease = { runId: run.id, owner, generation }
+    let reconScanned = run.reconcileScannedCount
+    let reconClosed = run.reconcileClosedCount
+    let reconSkipped = run.reconcileSkippedCount
+    let reconCursor = run.reconcileCursorInvoicePk
+    let reconPages = 0
+    let lastDetailDurationMs = 8_000
+
+    while (reconPages < maxPages) {
+      const remaining = collectionDiscoveryRemainingBudgetMs({
+        startedAtMs,
+        nowMs: clock(),
+        budgetMs,
+      })
+      if (
+        collectionDiscoveryShouldStopForTime({
+          remainingMs: remaining,
+          lastPageDurationMs: lastDetailDurationMs,
+        })
+      ) {
+        return pause(
+          "Lote pausado por orçamento na reconciliação. Cursor permanece no último identificador confirmado. Conclusão operacional não comprovada."
+        )
+      }
+      const queryTimeoutMs = collectionDiscoveryCappedTimeoutMs({
+        remainingMs: remaining,
+        configuredTimeoutMs,
+      })
+      if (queryTimeoutMs == null) {
+        return pause(
+          "Lote pausado: orçamento restante insuficiente para detalhe com margem de persistência/release."
+        )
+      }
+
+      const listed = await input.repo.listOpenAfter({
+        lease,
+        afterInvoicePk: reconCursor,
+        limit: COLLECTION_DISCOVERY_PAGE_SIZE,
+      })
+      if (!listed.ok) {
+        if (listed.code === "missing_migration") {
+          return endPaginationWithoutRecon(
+            "Paginação da descoberta encerrou. Reconciliação indisponível: migration ausente. Encerramento da paginação não prova cobertura global."
+          )
+        }
+        if (listed.code === "stale_lease") {
+          return fail("stale_lease", "Lease perdida. Worker antigo não listou casos para reconciliação.")
+        }
+        return fail("persist_error", "Falha ao listar casos abertos para reconciliação. Cursor não avançou.")
+      }
+
+      if (listed.cases.length === 0) {
+        const released = await input.store.release({
+          runId: run.id,
+          owner,
+          generation,
+          status: "phases_completed",
+        })
+        const ended = released.ok
+          ? released.run
+          : { ...run, status: "phases_completed" as const, phase: "reconciliation" as const }
+        return resultFromRun(
+          ended,
+          {
+            ok: true,
+            resumable: false,
+            truncated: false,
+            message:
+              "Fases operacionais desta execução encerraram neste recorte. Conclusão operacional não prova cobertura global.",
+          },
+          counters
+        )
+      }
+
+      let processedAll = true
+      for (const existing of listed.cases) {
+        const invoicePk = parseOverdueInvoicePk(existing.invoicePk)
+        if (!invoicePk) continue
+        const remainingForDetail = collectionDiscoveryRemainingBudgetMs({
+          startedAtMs,
+          nowMs: clock(),
+          budgetMs,
+        })
+        if (remainingForDetail < COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS) {
+          processedAll = false
+          break
+        }
+        const detailTimeout = collectionDiscoveryCappedTimeoutMs({
+          remainingMs: remainingForDetail,
+          configuredTimeoutMs,
+        })
+        if (detailTimeout == null) {
+          processedAll = false
+          break
+        }
+
+        const detailStarted = clock()
+        const classified = await fetchDetail({
+          invoicePk,
+          timeoutMs: detailTimeout,
+          referenceDate: run.referenceDate,
+        })
+        lastDetailDurationMs = Math.max(1, clock() - detailStarted)
+
+        if (!reconciliationAdvancesCursor(classified.outcome)) {
+          processedAll = false
+          break
+        }
+
+        reconScanned += 1
+        if (
+          shouldWriteReconciliationClosePaid({
+            outcome: classified.outcome,
+            currentStatus: existing.status,
+          })
+        ) {
+          const remainingForPersist = collectionDiscoveryRemainingBudgetMs({
+            startedAtMs,
+            nowMs: clock(),
+            budgetMs,
+          })
+          const closed = await input.repo.reconcilePaidFenced({
+            lease,
+            caseId: existing.id,
+            invoicePk,
+            actorProfileId: input.actorProfileId,
+            evidence: classified.evidence
+              ? {
+                  source: "collections_controllr_reconciliation",
+                  invoice_msg: classified.evidence.invoiceMsg,
+                  invoice_date_credit: classified.evidence.invoiceDateCredit,
+                  isPaid: classified.evidence.isPaid,
+                }
+              : { source: "collections_controllr_reconciliation" },
+            statementTimeoutMs: Math.max(
+              1,
+              remainingForPersist - COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS
+            ),
+          })
+          if (!closed.ok) {
+            if (closed.code === "stale_lease") {
+              return fail("stale_lease", "Lease perdida. Worker antigo não fechou o caso.")
+            }
+            if (closed.code === "identity_mismatch") {
+              reconSkipped += 1
+            } else {
+              return fail(
+                "persist_error",
+                "Falha ao persistir fechamento. Cursor de reconciliação não avançou."
+              )
+            }
+          } else if (closed.closed) {
+            reconClosed += 1
+          } else {
+            reconSkipped += 1
+          }
+        } else {
+          reconSkipped += 1
+        }
+
+        const advanced = await input.store.advanceReconciliation({
+          runId: run.id,
+          owner,
+          generation,
+          now: new Date(input.now.getTime() + Math.max(0, clock() - startedAtMs)),
+          reconcileCursorInvoicePk: invoicePk,
+          reconcileScannedCount: reconScanned,
+          reconcileClosedCount: reconClosed,
+          reconcileSkippedCount: reconSkipped,
+        })
+        if (!advanced.ok) {
+          if (advanced.code === "missing_migration") {
+            return endPaginationWithoutRecon(
+              "Paginação da descoberta encerrou. Reconciliação indisponível: migration ausente. Encerramento da paginação não prova cobertura global."
+            )
+          }
+          return fail("stale_lease", "Lease perdida. Worker antigo não avançou o checkpoint de reconciliação.")
+        }
+        run = advanced.run
+        reconCursor = run.reconcileCursorInvoicePk
+      }
+
+      reconPages += 1
+      if (!processedAll) {
+        return pause(
+          "Lote pausado no meio da reconciliação. Cursor permanece no último identificador confirmado; reprocessamento é idempotente."
+        )
+      }
+    }
+
+    return pause(
+      "Lote pausado no limite de páginas da reconciliação. Retome a mesma execução; cobertura global não comprovada."
+    )
+  }
+
+  if (run.phase === "reconciliation") {
+    return runReconciliation()
   }
 
   while (pagesThisBatch < maxPages) {
@@ -275,20 +547,10 @@ export async function runOverdueDiscoveryBatch<
     }
 
     if (progression.invoicePks.length === 0) {
-      const released = await input.store.release({
-        runId: run.id,
-        owner,
-        generation,
-        status: "pagination_ended",
-      })
-      const ended = released.ok ? released.run : { ...run, status: "pagination_ended" as const }
-      return resultFromRun(ended, {
-        ok: true,
-        resumable: false,
-        truncated: false,
-        message:
-          "Paginação da descoberta encerrou neste recorte. Encerramento da paginação não prova cobertura global.",
-      })
+      if (input.fetchInvoiceDetail) return runReconciliation()
+      return endPaginationWithoutRecon(
+        "Paginação da descoberta encerrou neste recorte. Encerramento da paginação não prova cobertura global."
+      )
     }
 
     const lease = { runId: run.id, owner, generation }
@@ -392,20 +654,10 @@ export async function runOverdueDiscoveryBatch<
     counters = countersFromRun(run)
 
     if (progression.invoicePks.length < COLLECTION_DISCOVERY_PAGE_SIZE) {
-      const released = await input.store.release({
-        runId: run.id,
-        owner,
-        generation,
-        status: "pagination_ended",
-      })
-      const ended = released.ok ? released.run : { ...run, status: "pagination_ended" as const }
-      return resultFromRun(ended, {
-        ok: true,
-        resumable: false,
-        truncated: false,
-        message:
-          "Paginação da descoberta encerrou neste recorte. Encerramento da paginação não prova cobertura global.",
-      })
+      if (input.fetchInvoiceDetail) return runReconciliation()
+      return endPaginationWithoutRecon(
+        "Paginação da descoberta encerrou neste recorte. Encerramento da paginação não prova cobertura global."
+      )
     }
   }
 
