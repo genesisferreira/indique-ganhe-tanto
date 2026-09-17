@@ -246,4 +246,131 @@ describe("regra positiva de pagamento da reconciliação", () => {
       false
     )
   })
+
+  it('invoice_deleted="true" com isPaid=true não fecha', () => {
+    const classified = classifyInvoiceDetailForReconciliation({
+      requestedInvoicePk: "52",
+      ok: true,
+      httpStatus: 200,
+      info: {
+        invoicePk: "52",
+        invoiceMsg: "open",
+        invoiceDateCredit: null,
+        isPaid: false,
+        raw: { invoice_pk: "52", invoice_msg: "open", invoice_deleted: "true", isPaid: true },
+      },
+    })
+    assert.equal(classified.outcome, "inconclusive")
+    assert.equal(
+      shouldWriteReconciliationClosePaid({ outcome: classified.outcome, currentStatus: "open" }),
+      false
+    )
+  })
+
+  it("invoice_deleted com tipo desconhecido e pagamento positivo permanece inconclusivo", () => {
+    for (const flag of [1, "1", "yes", { nested: true }]) {
+      const classified = classifyInvoiceDetailForReconciliation({
+        requestedInvoicePk: "53",
+        ok: true,
+        httpStatus: 200,
+        info: {
+          invoicePk: "53",
+          invoiceMsg: "paid",
+          invoiceDateCredit: "2026-09-10",
+          isPaid: true,
+          raw: {
+            invoice_pk: "53",
+            invoice_msg: "paid",
+            invoice_date_credit: "2026-09-10",
+            invoice_deleted: flag,
+            isPaid: true,
+          },
+        },
+      })
+      assert.equal(classified.outcome, "inconclusive", String(flag))
+      assert.equal(
+        shouldWriteReconciliationClosePaid({ outcome: classified.outcome, currentStatus: "open" }),
+        false,
+        String(flag)
+      )
+    }
+  })
+
+  it("booleanos válidos de remoção preservam o comportamento existente", () => {
+    const paidWithDeletedFalse = classifyInvoiceDetailForReconciliation({
+      requestedInvoicePk: "54",
+      ok: true,
+      httpStatus: 200,
+      info: {
+        invoicePk: "54",
+        invoiceMsg: "open",
+        invoiceDateCredit: null,
+        isPaid: false,
+        raw: { invoice_pk: "54", invoice_msg: "open", invoice_deleted: false, isPaid: true },
+      },
+    })
+    assert.equal(paidWithDeletedFalse.outcome, "close_paid")
+    assert.equal(
+      shouldWriteReconciliationClosePaid({
+        outcome: paidWithDeletedFalse.outcome,
+        currentStatus: "open",
+      }),
+      true
+    )
+
+    const deletedTrueUnpaid = classifyInvoiceDetailForReconciliation({
+      requestedInvoicePk: "55",
+      ok: true,
+      httpStatus: 200,
+      info: {
+        invoicePk: "55",
+        invoiceMsg: "open",
+        invoiceDateCredit: null,
+        raw: { invoice_pk: "55", invoice_msg: "open", invoice_deleted: true, isPaid: false },
+      },
+    })
+    assert.equal(deletedTrueUnpaid.outcome, "removed_or_cancelled")
+
+    const absentDeletedPaid = classifyInvoiceDetailForReconciliation({
+      requestedInvoicePk: "56",
+      ok: true,
+      httpStatus: 200,
+      info: {
+        invoicePk: "56",
+        invoiceMsg: "open",
+        invoiceDateCredit: null,
+        isPaid: false,
+        raw: { invoice_pk: "56", invoice_msg: "open", isPaid: true },
+      },
+    })
+    assert.equal(absentDeletedPaid.outcome, "close_paid")
+
+    const contradictoryBooleans = classifyInvoiceDetailForReconciliation({
+      requestedInvoicePk: "57",
+      ok: true,
+      httpStatus: 200,
+      info: {
+        invoicePk: "57",
+        invoiceMsg: "paid",
+        invoiceDateCredit: "2026-09-10",
+        isPaid: true,
+        raw: {
+          invoice_pk: "57",
+          invoice_msg: "paid",
+          invoice_date_credit: "2026-09-10",
+          invoice_deleted: true,
+          invoiceDeleted: false,
+          isPaid: true,
+        },
+      },
+    })
+    assert.equal(contradictoryBooleans.outcome, "inconclusive")
+    assert.equal(
+      shouldWriteReconciliationClosePaid({
+        outcome: contradictoryBooleans.outcome,
+        currentStatus: "open",
+      }),
+      false
+    )
+  })
 })

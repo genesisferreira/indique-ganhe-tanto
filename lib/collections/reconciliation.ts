@@ -12,6 +12,7 @@ export type ReconciliationOutcome =
   | "invalid_detail"
   | "identity_mismatch"
   | "timeout_or_error"
+  | "inconclusive"
 
 export type ReconciliationEvidence = {
   isPaid: boolean
@@ -52,13 +53,33 @@ export function invoicePkFromDetailRaw(raw: Record<string, unknown> | null | und
   return readPk(raw.invoice_pk ?? raw.invoicePk)
 }
 
-function readDeletedFlag(raw: Record<string, unknown> | null): boolean {
-  if (!raw) return false
+type DeletedIndicator =
+  | { kind: "absent" }
+  | { kind: "boolean"; value: boolean }
+  | { kind: "unexpected" }
+
+/**
+ * Remoção só com booleano literal. String/número/objeto não viram deleted
+ * nem autorizam close_paid; flags booleanas contraditórias também não.
+ */
+function readDeletedIndicator(raw: Record<string, unknown> | null): DeletedIndicator {
+  if (!raw) return { kind: "absent" }
+  let booleanValue: boolean | undefined
   for (const key of ["invoice_deleted", "invoiceDeleted"]) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue
     const value = raw[key]
-    if (value === true) return true
+    if (value === undefined || value === null) continue
+    if (value === true || value === false) {
+      if (booleanValue !== undefined && booleanValue !== value) {
+        return { kind: "unexpected" }
+      }
+      booleanValue = value
+      continue
+    }
+    return { kind: "unexpected" }
   }
-  return false
+  if (booleanValue === undefined) return { kind: "absent" }
+  return { kind: "boolean", value: booleanValue }
 }
 
 /** Ramo booleano de pagamento: somente true literal. Strings/números não autorizam. */
@@ -162,7 +183,8 @@ export function classifyInvoiceDetailForReconciliation(input: {
   const invoiceDateCredit =
     input.info?.invoiceDateCredit ??
     (typeof raw.invoice_date_credit === "string" ? raw.invoice_date_credit : null)
-  const invoiceDeleted = readDeletedFlag(raw)
+  const deletedIndicator = readDeletedIndicator(raw)
+  const invoiceDeleted = deletedIndicator.kind === "boolean" ? deletedIndicator.value : false
   const rawPaid = readStrictPaidFlag(raw)
   const paid = isControllrInvoicePaid({
     isPaid: rawPaid || input.info?.isPaid === true,
@@ -174,6 +196,16 @@ export function classifyInvoiceDetailForReconciliation(input: {
     invoiceMsg: invoiceMsg ?? null,
     invoiceDateCredit: invoiceDateCredit ?? null,
     invoiceDeleted,
+  }
+
+  if (deletedIndicator.kind === "unexpected") {
+    return {
+      outcome: "inconclusive",
+      requestedInvoicePk: requested,
+      returnedInvoicePk: returnedPk,
+      errorClass: "inconclusive_removal_indicator",
+      evidence,
+    }
   }
 
   if (isRemovedOrCancelled({ invoiceMsg, invoiceDeleted })) {
