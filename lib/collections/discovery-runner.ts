@@ -250,8 +250,9 @@ export async function runOverdueDiscoveryBatch<
       })
       if (!entered.ok) {
         if (entered.code === "missing_migration") {
-          return endPaginationWithoutRecon(
-            "Paginação da descoberta encerrou. Reconciliação indisponível: migration ausente. Encerramento da paginação não prova cobertura global."
+          return fail(
+            "missing_migration",
+            "Reconciliação indisponível: migration ausente. Não marca conclusão das fases. Aplique o patch e retome a mesma execução."
           )
         }
         return fail("stale_lease", "Lease perdida ao entrar na reconciliação.")
@@ -307,8 +308,9 @@ export async function runOverdueDiscoveryBatch<
       })
       if (!listed.ok) {
         if (listed.code === "missing_migration") {
-          return endPaginationWithoutRecon(
-            "Paginação da descoberta encerrou. Reconciliação indisponível: migration ausente. Encerramento da paginação não prova cobertura global."
+          return fail(
+            "missing_migration",
+            "Reconciliação indisponível: migration ausente. Não marca conclusão das fases. Aplique o patch e retome a mesma execução."
           )
         }
         if (listed.code === "stale_lease") {
@@ -438,8 +440,9 @@ export async function runOverdueDiscoveryBatch<
         })
         if (!advanced.ok) {
           if (advanced.code === "missing_migration") {
-            return endPaginationWithoutRecon(
-              "Paginação da descoberta encerrou. Reconciliação indisponível: migration ausente. Encerramento da paginação não prova cobertura global."
+            return fail(
+              "missing_migration",
+              "Reconciliação indisponível: migration ausente. Não marca conclusão das fases. Aplique o patch e retome a mesma execução."
             )
           }
           return fail("stale_lease", "Lease perdida. Worker antigo não avançou o checkpoint de reconciliação.")

@@ -52,14 +52,22 @@ export function invoicePkFromDetailRaw(raw: Record<string, unknown> | null | und
   return readPk(raw.invoice_pk ?? raw.invoicePk)
 }
 
-function readFlag(raw: Record<string, unknown> | null, keys: string[]): boolean | null {
-  if (!raw) return null
-  for (const key of keys) {
+function readDeletedFlag(raw: Record<string, unknown> | null): boolean {
+  if (!raw) return false
+  for (const key of ["invoice_deleted", "invoiceDeleted"]) {
     const value = raw[key]
-    if (value === true || value === 1 || value === "1" || value === "true") return true
-    if (value === false || value === 0 || value === "0" || value === "false") return false
+    if (value === true) return true
   }
-  return null
+  return false
+}
+
+/** Ramo booleano de pagamento: somente true literal. Strings/números não autorizam. */
+function readStrictPaidFlag(raw: Record<string, unknown> | null): boolean {
+  if (!raw) return false
+  for (const key of ["isPaid", "is_paid"]) {
+    if (raw[key] === true) return true
+  }
+  return false
 }
 
 function isRemovedOrCancelled(input: {
@@ -121,10 +129,10 @@ export function classifyInvoiceDetailForReconciliation(input: {
       }
     }
     return {
-      outcome: input.httpStatus != null && input.httpStatus >= 400 ? "invalid_detail" : "timeout_or_error",
+      outcome: "timeout_or_error",
       requestedInvoicePk: requested,
       returnedInvoicePk: null,
-      errorClass: input.httpStatus != null && input.httpStatus >= 400 ? "invalid_detail" : "detail_error",
+      errorClass: "detail_error",
       evidence: null,
     }
   }
@@ -154,8 +162,8 @@ export function classifyInvoiceDetailForReconciliation(input: {
   const invoiceDateCredit =
     input.info?.invoiceDateCredit ??
     (typeof raw.invoice_date_credit === "string" ? raw.invoice_date_credit : null)
-  const invoiceDeleted = readFlag(raw, ["invoice_deleted", "invoiceDeleted"]) === true
-  const rawPaid = readFlag(raw, ["isPaid", "is_paid"]) === true
+  const invoiceDeleted = readDeletedFlag(raw)
+  const rawPaid = readStrictPaidFlag(raw)
   const paid = isControllrInvoicePaid({
     isPaid: rawPaid || input.info?.isPaid === true,
     invoiceMsg,

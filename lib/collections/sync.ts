@@ -122,6 +122,18 @@ export async function syncCollectionsFromControllr(input: {
     uniqueOrderProven: false,
   }
 
+  const settings = await loadCollectionOperationalSettings()
+  if (settings.isEnabled === false) {
+    return {
+      ...empty,
+      ok: false,
+      degraded: true,
+      discoveryStatus: "disabled",
+      message:
+        "Fila de Cobrança desligada nas configurações. Nenhuma descoberta, reconciliação ou escrita foi executada.",
+    }
+  }
+
   const config = getBrbyteOperationalConfig()
   if (!config) {
     return {
@@ -160,7 +172,6 @@ export async function syncCollectionsFromControllr(input: {
     return { ...empty, ok: false, degraded: true, message: login.error }
   }
 
-  const settings = await loadCollectionOperationalSettings()
   const now = input.now ?? new Date()
   const referenceDate = freezeInvoiceListReferenceDate(now)
   const batch = await runOverdueDiscoveryBatch({

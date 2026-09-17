@@ -178,4 +178,72 @@ describe("regra positiva de pagamento da reconciliação", () => {
     assert.equal(filledMissingPk.outcome, "invalid_detail")
     assert.equal(reconciliationAdvancesCursor("still_open"), true)
   })
+
+  it("strings e números não fecham pelo ramo booleano isPaid", () => {
+    for (const flag of ["true", "false", "1", 1, 0, "yes"]) {
+      const classified = classifyInvoiceDetailForReconciliation({
+        requestedInvoicePk: "49",
+        ok: true,
+        httpStatus: 200,
+        info: {
+          invoicePk: "49",
+          invoiceMsg: "open",
+          invoiceDateCredit: null,
+          isPaid: false,
+          raw: { invoice_pk: "49", invoice_msg: "open", isPaid: flag, is_paid: flag },
+        },
+      })
+      assert.equal(classified.outcome, "still_open", String(flag))
+    }
+    const strictTrue = classifyInvoiceDetailForReconciliation({
+      requestedInvoicePk: "49",
+      ok: true,
+      httpStatus: 200,
+      info: {
+        invoicePk: "49",
+        invoiceMsg: "open",
+        invoiceDateCredit: null,
+        isPaid: false,
+        raw: { invoice_pk: "49", invoice_msg: "open", isPaid: true },
+      },
+    })
+    assert.equal(strictTrue.outcome, "close_paid")
+  })
+
+  it("HTTP 500 de detalhe permanece retomável e não avança", () => {
+    const classified = classifyInvoiceDetailForReconciliation({
+      requestedInvoicePk: "50",
+      ok: false,
+      httpStatus: 500,
+      message: "upstream error",
+      info: null,
+    })
+    assert.equal(classified.outcome, "timeout_or_error")
+    assert.equal(reconciliationAdvancesCursor(classified.outcome), false)
+  })
+
+  it("pago e removido não fecha como pago", () => {
+    const classified = classifyInvoiceDetailForReconciliation({
+      requestedInvoicePk: "51",
+      ok: true,
+      httpStatus: 200,
+      info: {
+        invoicePk: "51",
+        invoiceMsg: "paid",
+        invoiceDateCredit: "2026-09-10",
+        raw: {
+          invoice_pk: "51",
+          invoice_msg: "paid",
+          invoice_date_credit: "2026-09-10",
+          invoice_deleted: true,
+          isPaid: true,
+        },
+      },
+    })
+    assert.equal(classified.outcome, "removed_or_cancelled")
+    assert.equal(
+      shouldWriteReconciliationClosePaid({ outcome: classified.outcome, currentStatus: "open" }),
+      false
+    )
+  })
 })

@@ -64,10 +64,19 @@ export default function CobrancaPage() {
       await load()
       return
     }
-    toast.success(
+    const status = String(json.discoveryStatus ?? "")
+    const summary =
       json.message ||
-        `Sync: ${json.created ?? 0} criados, ${json.updated ?? 0} atualizados, ${json.assigned ?? 0} atribuídos, ${json.closedPaid ?? 0} pagos.`
-    )
+      `Sync: ${json.created ?? 0} criados, ${json.updated ?? 0} atualizados, ${json.assigned ?? 0} atribuídos, ${json.closedPaid ?? 0} pagos.`
+    if (json.resumable || json.truncated || status === "paused" || status === "failed") {
+      toast.message(summary)
+    } else if (status === "pagination_ended") {
+      toast.message(summary)
+    } else if (status === "phases_completed") {
+      toast.success(summary)
+    } else {
+      toast.message(summary)
+    }
     await load()
   }
 

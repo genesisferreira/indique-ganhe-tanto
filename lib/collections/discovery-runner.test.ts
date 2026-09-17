@@ -982,5 +982,37 @@ describe("reconciliação retomável no runner existente", () => {
     assert.equal(repo.cases.get("92")?.status, "open")
     assert.equal(repo.paymentEvents.length, 0)
   })
+
+  it("missing_migration falha de forma retomável e não marca fases concluídas", async () => {
+    const base = createMemoryDiscoveryStore()
+    const store = {
+      ...base,
+      enterReconciliation: async () => ({ ok: false as const, code: "missing_migration" as const }),
+    }
+    const repo = createMemoryDiscoveryCaseRepo()
+    await repo.insertOpen({ invoice_pk: "93" })
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "missing-sql",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      fetchPage: async () => ({ ok: true, rows: [] as Array<{ invoicePk: string | null }>, total: 0 }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+      fetchInvoiceDetail: async ({ invoicePk }) => paidDetail(invoicePk),
+    })
+    assert.equal(result.ok, false)
+    assert.equal(result.status, "failed")
+    assert.equal(result.resumable, true)
+    assert.notEqual(result.status, "pagination_ended")
+    assert.notEqual(result.status, "phases_completed")
+    assert.match(result.message, /migration ausente/)
+    assert.equal(repo.cases.get("93")?.status, "open")
+    assert.equal(repo.paymentEvents.length, 0)
+  })
 })
 
