@@ -68,6 +68,7 @@ export type DiscoveryRunnerDeps<TRow extends { invoicePk: string | null } = { in
   maxPages?: number
   fetchPage: (input: {
     referenceDate: string
+    referenceInstant: string
     afterInvoicePk: string | null
     timeoutMs: number
   }) => Promise<DiscoveryFetchedPage<TRow>>
@@ -675,6 +676,7 @@ export async function runOverdueDiscoveryBatch<
     const fetchedOrTimeout = await awaitListPageOrTimeout(
       input.fetchPage({
         referenceDate: run.referenceDate,
+        referenceInstant: run.referenceInstant,
         afterInvoicePk: run.cursorLastInvoicePk,
         timeoutMs: queryTimeoutMs,
       }),

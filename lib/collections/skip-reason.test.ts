@@ -127,3 +127,43 @@ describe("TEST B — persistência 4 dias", () => {
     assert.equal(repo.cases.size, 0)
   })
 })
+
+describe("TEST P/Q/R/S/T — flags e histograma", () => {
+  it("TEST P — flags contraditórias de invoice_deleted são inconclusive", () => {
+    assert.equal(
+      classifyInvoiceDeletedFlag({ invoice_deleted: true, invoiceDeleted: false }).kind,
+      "inconclusive"
+    )
+  })
+
+  it("TEST Q — invoice_deleted true é removed_or_cancelled", () => {
+    assert.equal(
+      classifyUnmappedDiscoveryRow({
+        invoicePk: "1001",
+        invoiceDeleted: true,
+        raw: { invoice_deleted: true },
+      }),
+      "removed_or_cancelled"
+    )
+  })
+
+  it("TEST R — invoice_deleted false não prova cliente ativo", () => {
+    assert.equal(classifyInvoiceDeletedFlag({ invoice_deleted: false }).kind, "not_deleted")
+    const created = decideCollectionSyncAction({
+      invoice: overdue,
+      existing: null,
+      now,
+      minimumDaysOverdue: 5,
+    })
+    assert.equal(created.action, "create")
+  })
+
+  it("TEST S/T — histograma não tem cancelled_client e a soma bate", () => {
+    const histogram = emptyDiscoverySkipHistogram()
+    incrementDiscoverySkip(histogram, "removed_or_cancelled")
+    incrementDiscoverySkip(histogram, "not_old_enough")
+    assert.equal("cancelled_client" in histogram, false)
+    assert.equal("cancelled_contract" in histogram, false)
+    assert.equal(sumDiscoverySkipHistogram(histogram), 2)
+  })
+})

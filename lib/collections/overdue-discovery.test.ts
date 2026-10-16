@@ -2,8 +2,9 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
   buildOverdueInvoiceListWhere,
+  eligibilityReferenceDateUtcFromInstant,
   freezeInvoiceListReferenceDate,
-  overdueInvoiceDueDateCutoff,
+  queryCutoffExclusiveUtc,
 } from "@/lib/brbyte/overdue-invoice-list-query"
 import {
   computeDaysOverdue,
@@ -34,8 +35,8 @@ function invoice(daysOverdue: number, invoicePk: string) {
   }
 }
 
-function dueLessThanCutoff(dueDay: string, frozen: string): boolean {
-  const cutoff = overdueInvoiceDueDateCutoff(frozen, 5)
+function dueLessThanCutoff(dueDay: string, eligibilityReferenceDateUtc: string): boolean {
+  const cutoff = queryCutoffExclusiveUtc(eligibilityReferenceDateUtc, 5)
   return cutoff != null && dueDay < cutoff
 }
 
@@ -74,40 +75,37 @@ describe("TEST G — filtro ERP não substitui os 5 dias do CRM", () => {
     )
   })
 
-  it("antes da meia-noite civil a fatura que vence naquele dia não é descoberta", () => {
-    const beforeCivilMidnight = new Date("2026-09-17T01:30:00.000Z")
-    const frozen = freezeInvoiceListReferenceDate(beforeCivilMidnight)
-    assert.equal(frozen, "2026-09-16")
-    const where = buildOverdueInvoiceListWhere(frozen)
+  it("TEST B — UTC virou e São Paulo ainda não: vencimento 2026-09-12 entra", () => {
+    const instant = new Date("2026-09-17T01:30:00.000Z")
+    assert.equal(freezeInvoiceListReferenceDate(instant), "2026-09-16")
+    const eligibility = eligibilityReferenceDateUtcFromInstant(instant)
+    assert.equal(eligibility, "2026-09-17")
+    const where = buildOverdueInvoiceListWhere(eligibility ?? "", 5)
     assert.ok(where)
     const nested = where[4] as Array<{ field?: string; oper?: number; value?: unknown }>
     assert.equal(nested[2]?.field, "invoice_date_due")
     assert.equal(nested[2]?.oper, 1)
-    assert.equal(nested[2]?.value, "2026-09-12")
-    assert.equal(dueLessThanCutoff("2026-09-16", frozen), false)
-    assert.equal(dueLessThanCutoff("2026-09-12", frozen), false)
-    assert.equal(dueLessThanCutoff("2026-09-11", frozen), true)
+    assert.equal(nested[2]?.value, "2026-09-13")
+    assert.equal(dueLessThanCutoff("2026-09-12", eligibility ?? ""), true)
+    assert.equal(dueLessThanCutoff("2026-09-13", eligibility ?? ""), false)
     assert.equal(
       computeDaysOverdue({
-        invoiceDueDate: "2026-09-16T00:00:00.000Z",
-        now: beforeCivilMidnight,
+        invoiceDueDate: "2026-09-12T00:00:00.000Z",
+        now: instant,
       }),
-      1
+      5
     )
   })
 
-  it("computeDaysOverdue UTC pode atingir 5 dias quando o calendário civil ainda conta 4", () => {
+  it("TEST H — CRM UTC permanece a defesa; query não é mais restritiva", () => {
     const nowUtcNextDay = new Date("2026-09-21T01:30:00.000Z")
-    const frozen = freezeInvoiceListReferenceDate(nowUtcNextDay)
-    assert.equal(frozen, "2026-09-20")
+    const frozenSp = freezeInvoiceListReferenceDate(nowUtcNextDay)
+    const eligibility = eligibilityReferenceDateUtcFromInstant(nowUtcNextDay)
+    assert.equal(frozenSp, "2026-09-20")
+    assert.equal(eligibility, "2026-09-21")
     const due = "2026-09-16T00:00:00.000Z"
     const utcDays = computeDaysOverdue({ invoiceDueDate: due, now: nowUtcNextDay })
     assert.equal(utcDays, 5)
-    const civilDays = Math.floor(
-      (Date.parse(`${frozen}T00:00:00.000Z`) - Date.parse("2026-09-16T00:00:00.000Z")) /
-        86_400_000
-    )
-    assert.equal(civilDays, 4)
     assert.equal(
       shouldOpenCollectionCase({
         daysOverdue: utcDays,
@@ -116,15 +114,7 @@ describe("TEST G — filtro ERP não substitui os 5 dias do CRM", () => {
       }),
       true
     )
-    assert.equal(
-      shouldOpenCollectionCase({
-        daysOverdue: civilDays,
-        isPaid: false,
-        invoicePk: "inv-boundary",
-      }),
-      false
-    )
-    assert.equal(dueLessThanCutoff("2026-09-16", frozen), false)
+    assert.equal(dueLessThanCutoff("2026-09-16", eligibility ?? ""), true)
   })
 })
 

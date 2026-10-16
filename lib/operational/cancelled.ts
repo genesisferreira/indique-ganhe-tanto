@@ -1,6 +1,10 @@
 /**
  * Cancelamento de cliente/contrato no Controllr NÃO está comprovado
- * no código, tipos, fixtures ou documentação local.
+ * no código, tipos, fixtures, documentação local nem na UI já carregada.
+ *
+ * Sprint 3.1E-AB, Passo A: sessão Controllr em login (loginValid=false);
+ * BrByte.cfg só expõe formatos de data. Sem store/enum de status autenticado.
+ * Passo B não executado: sem sessão, sem consulta ERP.
  *
  * Evidências auditadas e insuficientes:
  * - invoice_deleted IS false (fatura removida — este sim está comprovado).
@@ -8,6 +12,7 @@
  *   outros valores podem ser bloqueio/suspensão ainda cobrável.
  * - nomenclaturaEstadoContrato existe em BrbyteContratoDto, sem enum de cancelamento.
  * - include_cancelled_customers nas settings permanece não operacional.
+ * - idade da fatura > 60 dias não prova cancelamento.
  *
  * Não inventar filtro de cliente/contrato. Fail-closed só com evidência explícita
  * de fatura removida (invoice_deleted === true).

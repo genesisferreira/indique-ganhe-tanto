@@ -16,8 +16,10 @@ import {
   buildOverdueInvoiceListWhere,
   buildOverdueInvoiceListWhereAfter,
   collectOverdueInvoiceListPages,
+  eligibilityReferenceDateUtcFromInstant,
   freezeInvoiceListReferenceDate,
   overdueInvoiceDueDateCutoff,
+  queryCutoffExclusiveUtc,
   overdueInvoiceListPageCursor,
   overdueInvoiceListQueryForms,
   parseInvoiceListReferenceDate,
@@ -231,21 +233,24 @@ describe("TEST E — independência do fuso do host", () => {
 })
 
 describe("TEST F — execução atravessando a meia-noite reutiliza a data congelada", () => {
-  it("páginas recebem a mesma referenceDate mesmo se um now posterior já seria outro dia civil", () => {
+  it("páginas recebem o mesmo corte UTC do referenceInstant congelado", () => {
     const beforeMidnight = new Date("2026-09-17T02:59:00.000Z")
     const afterMidnight = new Date("2026-09-17T03:00:00.000Z")
-    const frozen = freezeInvoiceListReferenceDate(beforeMidnight)
-    assert.equal(frozen, "2026-09-16")
-    assert.equal(freezeInvoiceListReferenceDate(afterMidnight), "2026-09-17")
+    const frozenInstant = beforeMidnight
+    const eligibility = eligibilityReferenceDateUtcFromInstant(frozenInstant)
+    assert.equal(eligibility, "2026-09-17")
+    assert.equal(eligibilityReferenceDateUtcFromInstant(afterMidnight), "2026-09-17")
     const pages = planOverdueInvoiceListPages({
-      referenceDate: frozen,
+      eligibilityReferenceDateUtc: eligibility ?? undefined,
       pageCount: 3,
     })
     assert.ok(pages)
     assert.deepEqual(
       pages.map((fields) => nestedDueValue(fields)),
-      ["2026-09-12", "2026-09-12", "2026-09-12"]
+      ["2026-09-13", "2026-09-13", "2026-09-13"]
     )
+    assert.equal(freezeInvoiceListReferenceDate(beforeMidnight), "2026-09-16")
+    assert.equal(freezeInvoiceListReferenceDate(afterMidnight), "2026-09-17")
   })
 })
 
@@ -347,8 +352,8 @@ describe("limites e falhas não viram execução completa", () => {
 })
 
 describe("TEST P — corte de 5 dias na query sem operador novo", () => {
-  it("due < ref-4 inclui 5 dias e exclui 4, com o mesmo oper LT", () => {
-    assert.equal(overdueInvoiceDueDateCutoff("2026-09-16", 5), "2026-09-12")
+  it("due < eligibilityUtc-(min-1) inclui 5 dias e exclui 4, com o mesmo oper LT", () => {
+    assert.equal(queryCutoffExclusiveUtc("2026-09-16", 5), "2026-09-12")
     assert.equal(overdueInvoiceDueDateCutoff("2026-10-16", 5), "2026-10-12")
     const where = buildOverdueInvoiceListWhere("2026-10-16", 5)
     assert.ok(where)
@@ -360,6 +365,77 @@ describe("TEST P — corte de 5 dias na query sem operador novo", () => {
     const blob = JSON.stringify(where)
     assert.equal(blob.includes("client_status"), false)
     assert.equal(blob.includes("oper\":5"), false)
+  })
+})
+
+describe("3.1E-AB corte UTC alinhado à elegibilidade", () => {
+  it("TEST A — mesma data UTC e São Paulo: 5 entra e 4 não", () => {
+    const instant = new Date("2026-09-16T15:00:00.000Z")
+    const eligibility = eligibilityReferenceDateUtcFromInstant(instant)
+    assert.equal(eligibility, "2026-09-16")
+    assert.equal(freezeInvoiceListReferenceDate(instant), "2026-09-16")
+    assert.equal(queryCutoffExclusiveUtc(eligibility ?? "", 5), "2026-09-12")
+    assert.equal("2026-09-11" < "2026-09-12", true)
+    assert.equal("2026-09-12" < "2026-09-12", false)
+  })
+
+  it("TEST B — UTC virou e São Paulo ainda não: 2026-09-12 entra", () => {
+    const instant = new Date("2026-09-17T01:30:00.000Z")
+    const eligibility = eligibilityReferenceDateUtcFromInstant(instant)
+    assert.equal(eligibility, "2026-09-17")
+    assert.equal(freezeInvoiceListReferenceDate(instant), "2026-09-16")
+    const cutoff = queryCutoffExclusiveUtc(eligibility ?? "", 5)
+    assert.equal(cutoff, "2026-09-13")
+    assert.equal("2026-09-12" < "2026-09-13", true)
+    const where = buildOverdueInvoiceListWhere(eligibility ?? "", 5)
+    const nested = where?.[4] as Array<{ value?: unknown }>
+    assert.equal(nested[2]?.value, "2026-09-13")
+  })
+
+  it("TEST C — virada de mês", () => {
+    const instant = new Date("2026-10-01T01:30:00.000Z")
+    const eligibility = eligibilityReferenceDateUtcFromInstant(instant)
+    assert.equal(eligibility, "2026-10-01")
+    assert.equal(queryCutoffExclusiveUtc(eligibility ?? "", 5), "2026-09-27")
+    assert.equal("2026-09-26" < "2026-09-27", true)
+    assert.equal("2026-09-27" < "2026-09-27", false)
+  })
+
+  it("TEST D — virada de ano", () => {
+    const instant = new Date("2027-01-01T01:30:00.000Z")
+    const eligibility = eligibilityReferenceDateUtcFromInstant(instant)
+    assert.equal(eligibility, "2027-01-01")
+    assert.equal(queryCutoffExclusiveUtc(eligibility ?? "", 5), "2026-12-28")
+  })
+
+  it("TEST E — minimumDaysOverdue configurado não fica hardcoded em 5", () => {
+    assert.equal(queryCutoffExclusiveUtc("2026-09-17", 7), "2026-09-11")
+    assert.equal(queryCutoffExclusiveUtc("2026-09-17", 5), "2026-09-13")
+  })
+
+  it("TEST F — mesma referenceInstant gera o mesmo corte", () => {
+    const instant = new Date("2026-09-17T01:30:00.000Z")
+    const first = queryCutoffExclusiveUtc(eligibilityReferenceDateUtcFromInstant(instant) ?? "", 5)
+    const second = queryCutoffExclusiveUtc(eligibilityReferenceDateUtcFromInstant(instant) ?? "", 5)
+    assert.equal(first, second)
+    assert.equal(first, "2026-09-13")
+  })
+
+  it("TEST G — operadores observados permanecem", () => {
+    const where = buildOverdueInvoiceListWhereAfter("2026-09-17", "310141", 5)
+    assert.deepEqual(where, [
+      { field: "invoice_deleted", oper: 7, value: false },
+      { field: "AND" },
+      { field: "invoice_date_due", oper: 8, value: null },
+      { field: "AND" },
+      [
+        { field: "invoice_date_credit", oper: 7, value: null },
+        { field: "AND" },
+        { field: "invoice_date_due", oper: 1, value: "2026-09-13" },
+      ],
+      { field: "AND" },
+      { field: "invoice_pk", oper: 2, value: 310141 },
+    ])
   })
 })
 

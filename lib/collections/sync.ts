@@ -223,11 +223,12 @@ export async function syncCollectionsFromControllr(input: {
     configuredTimeoutMs: COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
     minimumDaysOverdue: settings.minimumDaysOverdue,
     collectionsEnabled: settings.isEnabled,
-    fetchPage: async ({ referenceDate: frozenDate, afterInvoicePk, timeoutMs }) => {
+    fetchPage: async ({ referenceDate: frozenDate, referenceInstant, afterInvoicePk, timeoutMs }) => {
       const page = await listOverdueInvoicesPage({
         config,
         cookie: login.cookie,
         referenceDate: frozenDate,
+        referenceInstant,
         page: 1,
         afterInvoicePk,
         timeoutMs,

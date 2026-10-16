@@ -21,6 +21,7 @@ import {
   OVERDUE_INVOICE_LIST_PAGE_SIZE,
   buildOverdueInvoiceListFormFields,
   buildOverdueInvoiceListKeysetFormFields,
+  eligibilityReferenceDateUtcFromInstant,
   parseInvoiceListReferenceDate,
 } from "@/lib/brbyte/overdue-invoice-list-query"
 
@@ -230,6 +231,7 @@ export async function listOverdueInvoicesPage(input: {
   config: BrbyteCreateInterestConfig
   cookie: string
   referenceDate: string
+  referenceInstant?: Date | string | null
   page: number
   afterInvoicePk?: string | null
   timeoutMs?: number
@@ -249,7 +251,16 @@ export async function listOverdueInvoicesPage(input: {
   referenceDate: string
 }> {
   const referenceDate = parseInvoiceListReferenceDate(input.referenceDate)
-  if (!referenceDate) {
+  const eligibilityInstant =
+    input.referenceInstant instanceof Date
+      ? input.referenceInstant
+      : input.referenceInstant
+        ? new Date(input.referenceInstant)
+        : null
+  const eligibilityReferenceDateUtc = eligibilityInstant
+    ? eligibilityReferenceDateUtcFromInstant(eligibilityInstant)
+    : referenceDate
+  if (!referenceDate || !eligibilityReferenceDateUtc) {
     return {
       ok: false,
       rows: [],
@@ -266,12 +277,12 @@ export async function listOverdueInvoicesPage(input: {
   const fields =
     input.afterInvoicePk !== undefined
       ? buildOverdueInvoiceListKeysetFormFields({
-          referenceDate,
+          eligibilityReferenceDateUtc,
           afterInvoicePk: input.afterInvoicePk,
           minimumDaysOverdue: input.minimumDaysOverdue,
         })
       : buildOverdueInvoiceListFormFields({
-          referenceDate,
+          eligibilityReferenceDateUtc,
           page: input.page,
           minimumDaysOverdue: input.minimumDaysOverdue,
         })

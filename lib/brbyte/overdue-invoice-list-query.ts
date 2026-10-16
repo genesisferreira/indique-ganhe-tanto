@@ -128,15 +128,30 @@ function invoicePkWhereValue(pk: string): number | null {
 }
 
 /**
- * Corte civil: invoice_date_due < referenceDate - (minimumDaysOverdue - 1).
- * Com mínimo 5, due < ref-4 inclui exatamente 5 dias e exclui 4.
- * Mesmo operador LT já observado. Defesa final permanece no CRM (UTC).
+ * YYYY-MM-DD UTC do referenceInstant congelado.
+ * É o mesmo calendário de computeDaysOverdue. Não é data civil SP,
+ * data do ERP, data do navegador nem relógio do servidor.
  */
-export function overdueInvoiceDueDateCutoff(
-  referenceDate: string,
+export function eligibilityReferenceDateUtcFromInstant(instant: Date): string | null {
+  if (!(instant instanceof Date) || Number.isNaN(instant.getTime())) return null
+  const year = instant.getUTCFullYear()
+  const month = String(instant.getUTCMonth() + 1).padStart(2, "0")
+  const day = String(instant.getUTCDate()).padStart(2, "0")
+  return parseInvoiceListReferenceDate(`${year}-${month}-${day}`)
+}
+
+/**
+ * Corte exclusivo UTC: dueDate < eligibilityReferenceDateUtc - (minimumDaysOverdue - 1).
+ * Equivale a dueDate <= eligibilityReferenceDateUtc - minimumDaysOverdue.
+ * Com mínimo 5 e eligibility=2026-09-17, corte=2026-09-13:
+ * 2026-09-12 entra (5 dias); 2026-09-13 não entra (4 dias).
+ * Pré-filtro igual à elegibilidade UTC; nunca mais restritivo.
+ */
+export function queryCutoffExclusiveUtc(
+  eligibilityReferenceDateUtc: string,
   minimumDaysOverdue: number = COLLECTION_OVERDUE_THRESHOLD_DAYS
 ): string | null {
-  const frozen = parseInvoiceListReferenceDate(referenceDate)
+  const frozen = parseInvoiceListReferenceDate(eligibilityReferenceDateUtc)
   if (!frozen) return null
   const min =
     Number.isInteger(minimumDaysOverdue) && minimumDaysOverdue >= 1
@@ -151,12 +166,20 @@ export function overdueInvoiceDueDateCutoff(
   return `${yy}-${mm}-${dd}`
 }
 
+/** Alias: o argumento deve ser eligibilityReferenceDateUtc, não a data civil SP. */
+export function overdueInvoiceDueDateCutoff(
+  eligibilityReferenceDateUtc: string,
+  minimumDaysOverdue: number = COLLECTION_OVERDUE_THRESHOLD_DAYS
+): string | null {
+  return queryCutoffExclusiveUtc(eligibilityReferenceDateUtc, minimumDaysOverdue)
+}
+
 export function buildOverdueInvoiceListWhere(
-  referenceDate: string,
+  eligibilityReferenceDateUtc: string,
   minimumDaysOverdue: number = COLLECTION_OVERDUE_THRESHOLD_DAYS
 ): OverdueInvoiceListWhereNode[] | null {
-  const frozen = parseInvoiceListReferenceDate(referenceDate)
-  const cutoff = overdueInvoiceDueDateCutoff(referenceDate, minimumDaysOverdue)
+  const frozen = parseInvoiceListReferenceDate(eligibilityReferenceDateUtc)
+  const cutoff = queryCutoffExclusiveUtc(eligibilityReferenceDateUtc, minimumDaysOverdue)
   if (!frozen || !cutoff) return null
   return [
     { field: "invoice_deleted", oper: OVERDUE_INVOICE_LIST_OPER.IS, value: false },
@@ -176,11 +199,11 @@ export function buildOverdueInvoiceListWhere(
  * A combinação oper 2 com este recorte NÃO foi validada ao vivo.
  */
 export function buildOverdueInvoiceListWhereAfter(
-  referenceDate: string,
+  eligibilityReferenceDateUtc: string,
   afterInvoicePk: string | null,
   minimumDaysOverdue: number = COLLECTION_OVERDUE_THRESHOLD_DAYS
 ): OverdueInvoiceListWhereNode[] | null {
-  const base = buildOverdueInvoiceListWhere(referenceDate, minimumDaysOverdue)
+  const base = buildOverdueInvoiceListWhere(eligibilityReferenceDateUtc, minimumDaysOverdue)
   if (!base) return null
   if (afterInvoicePk == null) return base
   const pk = parseOverdueInvoicePk(afterInvoicePk)
@@ -194,12 +217,15 @@ export function buildOverdueInvoiceListWhereAfter(
 }
 
 export function buildOverdueInvoiceListKeysetFormFields(input: {
-  referenceDate: string
+  referenceDate?: string
+  eligibilityReferenceDateUtc?: string
   afterInvoicePk: string | null
   minimumDaysOverdue?: number
 }): Record<string, string> | null {
+  const eligibilityDate = input.eligibilityReferenceDateUtc ?? input.referenceDate
+  if (!eligibilityDate) return null
   const where = buildOverdueInvoiceListWhereAfter(
-    input.referenceDate,
+    eligibilityDate,
     input.afterInvoicePk,
     input.minimumDaysOverdue
   )
@@ -226,11 +252,14 @@ export function overdueInvoiceListPageCursor(
 }
 
 export function buildOverdueInvoiceListFormFields(input: {
-  referenceDate: string
+  referenceDate?: string
+  eligibilityReferenceDateUtc?: string
   page: number
   minimumDaysOverdue?: number
 }): Record<string, string> | null {
-  const where = buildOverdueInvoiceListWhere(input.referenceDate, input.minimumDaysOverdue)
+  const eligibilityDate = input.eligibilityReferenceDateUtc ?? input.referenceDate
+  if (!eligibilityDate) return null
+  const where = buildOverdueInvoiceListWhere(eligibilityDate, input.minimumDaysOverdue)
   const cursor = overdueInvoiceListPageCursor(input.page)
   if (!where || !cursor) return null
   return {
@@ -245,7 +274,8 @@ export function buildOverdueInvoiceListFormFields(input: {
 
 /** Uma única forma observada. Sem fallback de formato. */
 export function overdueInvoiceListQueryForms(input: {
-  referenceDate: string
+  referenceDate?: string
+  eligibilityReferenceDateUtc?: string
   page: number
   minimumDaysOverdue?: number
 }): Record<string, string>[] {
@@ -264,17 +294,20 @@ export function serializeOverdueInvoiceListForm(
 }
 
 export function planOverdueInvoiceListPages(input: {
-  referenceDate: string
+  referenceDate?: string
+  eligibilityReferenceDateUtc?: string
   pageCount: number
   minimumDaysOverdue?: number
 }): Record<string, string>[] | null {
   if (!Number.isInteger(input.pageCount) || input.pageCount < 1) return null
-  const frozen = parseInvoiceListReferenceDate(input.referenceDate)
+  const frozen = parseInvoiceListReferenceDate(
+    input.eligibilityReferenceDateUtc ?? input.referenceDate ?? ""
+  )
   if (!frozen) return null
   const pages: Record<string, string>[] = []
   for (let page = 1; page <= input.pageCount; page += 1) {
     const fields = buildOverdueInvoiceListFormFields({
-      referenceDate: frozen,
+      eligibilityReferenceDateUtc: frozen,
       page,
       minimumDaysOverdue: input.minimumDaysOverdue,
     })
