@@ -3,6 +3,7 @@ import { describe, it } from "node:test"
 import {
   buildOverdueInvoiceListWhere,
   freezeInvoiceListReferenceDate,
+  overdueInvoiceDueDateCutoff,
 } from "@/lib/brbyte/overdue-invoice-list-query"
 import {
   computeDaysOverdue,
@@ -33,8 +34,9 @@ function invoice(daysOverdue: number, invoicePk: string) {
   }
 }
 
-function dueLessThanReference(dueDay: string, frozen: string): boolean {
-  return dueDay < frozen
+function dueLessThanCutoff(dueDay: string, frozen: string): boolean {
+  const cutoff = overdueInvoiceDueDateCutoff(frozen, 5)
+  return cutoff != null && dueDay < cutoff
 }
 
 describe("TEST G — filtro ERP não substitui os 5 dias do CRM", () => {
@@ -81,9 +83,10 @@ describe("TEST G — filtro ERP não substitui os 5 dias do CRM", () => {
     const nested = where[4] as Array<{ field?: string; oper?: number; value?: unknown }>
     assert.equal(nested[2]?.field, "invoice_date_due")
     assert.equal(nested[2]?.oper, 1)
-    assert.equal(nested[2]?.value, "2026-09-16")
-    assert.equal(dueLessThanReference("2026-09-16", frozen), false)
-    assert.equal(dueLessThanReference("2026-09-15", frozen), true)
+    assert.equal(nested[2]?.value, "2026-09-12")
+    assert.equal(dueLessThanCutoff("2026-09-16", frozen), false)
+    assert.equal(dueLessThanCutoff("2026-09-12", frozen), false)
+    assert.equal(dueLessThanCutoff("2026-09-11", frozen), true)
     assert.equal(
       computeDaysOverdue({
         invoiceDueDate: "2026-09-16T00:00:00.000Z",
@@ -121,7 +124,7 @@ describe("TEST G — filtro ERP não substitui os 5 dias do CRM", () => {
       }),
       false
     )
-    assert.equal(dueLessThanReference("2026-09-16", frozen), true)
+    assert.equal(dueLessThanCutoff("2026-09-16", frozen), false)
   })
 })
 

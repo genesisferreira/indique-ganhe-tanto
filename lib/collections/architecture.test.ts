@@ -12,6 +12,7 @@ import {
   OVERDUE_DISCOVERY_BUSINESS_TIMEZONE,
   OVERDUE_INVOICE_LIST_SORT_FIELD,
 } from "@/lib/brbyte/overdue-invoice-list-query"
+import { DISCOVERY_SKIP_REASONS } from "@/lib/collections/skip-reason"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, "../..")
@@ -458,6 +459,35 @@ describe("3.1E-V garantia de progresso", () => {
       sync,
       /COLLECTION_DISCOVERY_LIST_TIMEOUT_MS \+ COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS/
     )
+  })
+})
+
+describe("3.1E-AA elegibilidade e observabilidade de skips", () => {
+  it("histograma sanitizado, corte de 5 dias e cancelamento não inventado", () => {
+    const skip = readFileSync(join(repoRoot, "lib/collections/skip-reason.ts"), "utf8")
+    const runner = readFileSync(join(repoRoot, "lib/collections/discovery-runner.ts"), "utf8")
+    const sync = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
+    const query = readFileSync(join(repoRoot, "lib/brbyte/overdue-invoice-list-query.ts"), "utf8")
+    const cancelled = readFileSync(join(repoRoot, "lib/operational/cancelled.ts"), "utf8")
+    const contract = readFileSync(join(repoRoot, "lib/collections/discovery-contract.ts"), "utf8")
+    assert.match(skip, /DISCOVERY_SKIP_REASONS/)
+    assert.match(skip, /not_old_enough/)
+    assert.match(skip, /paid_without_open_case/)
+    assert.match(skip, /inconclusive/)
+    assert.equal(
+      (DISCOVERY_SKIP_REASONS as readonly string[]).includes("cancelled_client_or_contract"),
+      false
+    )
+    assert.match(runner, /incrementDiscoverySkip/)
+    assert.match(sync, /skipReasons/)
+    assert.match(query, /overdueInvoiceDueDateCutoff/)
+    assert.match(query, /minimumDaysOverdue - 1/)
+    assert.match(query, /invoice_deleted/)
+    assert.match(cancelled, /CANCELLED_SCOPE_NOT_PROVEN/)
+    assert.match(contract, /overdue-invoice-list.keyset.v1/)
+    assert.match(contract, /scannedInvoices = rows_seen/)
+    assert.equal(skip.includes("invoice_pk"), true)
+    assert.equal(/create table[\s\S]*skip_reasons/i.test(runner), false)
   })
 })
 

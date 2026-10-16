@@ -1,6 +1,10 @@
 import { decideCollectionSyncAction } from "@/lib/collections/sync-decision"
 import type { CollectionSyncInvoice, ExistingCollectionCase } from "@/lib/collections/sync-decision"
 import { buildCollectionCaseWriteModel } from "@/lib/collections/sync-decision"
+import {
+  discoverySkipReasonFromDecision,
+  type DiscoverySkipReason,
+} from "@/lib/collections/skip-reason"
 import { COLLECTION_OPEN_STATUSES } from "@/types/collections"
 
 export type DiscoveryPersistAction = "skip" | "create" | "update_open"
@@ -78,6 +82,7 @@ export type DiscoveryPersistResult = {
   created: boolean
   updated: boolean
   skipped: boolean
+  skipReason: DiscoverySkipReason | null
   newlyAssigned: boolean
   unassigned: boolean
 }
@@ -113,11 +118,20 @@ export async function persistDiscoveredOverdueInvoice(input: {
   lease?: DiscoveryLease | null
   statementTimeoutMs?: number | null
 }): Promise<DiscoveryPersistResult & { staleLease: boolean }> {
+  const decision = decideCollectionSyncAction({
+    invoice: input.invoice,
+    existing: input.existing,
+    now: input.now,
+    minimumDaysOverdue: input.minimumDaysOverdue,
+    collectionsEnabled: input.collectionsEnabled,
+  })
+  const skipReason = discoverySkipReasonFromDecision(decision)
   const skipped: DiscoveryPersistResult & { staleLease: boolean } = {
     action: "skip",
     created: false,
     updated: false,
     skipped: true,
+    skipReason,
     newlyAssigned: false,
     unassigned: false,
     staleLease: false,
@@ -139,13 +153,19 @@ export async function persistDiscoveredOverdueInvoice(input: {
       statementTimeoutMs: input.statementTimeoutMs,
     })
     if (!fenced.ok) {
-      return { ...skipped, skipped: false, staleLease: fenced.code === "stale_lease" }
+      return {
+        ...skipped,
+        skipped: false,
+        skipReason: null,
+        staleLease: fenced.code === "stale_lease",
+      }
     }
     return {
       action: fenced.inserted ? "create" : "update_open",
       created: fenced.inserted,
       updated: !fenced.inserted,
       skipped: false,
+      skipReason: null,
       newlyAssigned: fenced.newlyAssigned,
       unassigned: fenced.unassigned,
       staleLease: false,
@@ -161,6 +181,7 @@ export async function persistDiscoveredOverdueInvoice(input: {
         created: false,
         updated: true,
         skipped: false,
+        skipReason: null,
         newlyAssigned: false,
         unassigned: false,
         staleLease: false,
@@ -180,6 +201,7 @@ export async function persistDiscoveredOverdueInvoice(input: {
       created: true,
       updated: false,
       skipped: false,
+      skipReason: null,
       newlyAssigned: assigned.newlyAssigned,
       unassigned: !assigned.assignmentId,
       staleLease: false,
@@ -200,6 +222,7 @@ export async function persistDiscoveredOverdueInvoice(input: {
     created: false,
     updated: true,
     skipped: false,
+    skipReason: null,
     newlyAssigned: assigned.newlyAssigned === true,
     unassigned: !assigned.assignmentId,
     staleLease: false,

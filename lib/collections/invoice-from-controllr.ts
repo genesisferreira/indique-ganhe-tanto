@@ -1,5 +1,6 @@
 import { extractInvoiceMonetaryFields } from "@/lib/brbyte/invoice-amount"
 import { computeDaysOverdue, isControllrInvoicePaid } from "@/lib/collections/eligibility"
+import { classifyInvoiceDeletedFlag } from "@/lib/collections/skip-reason"
 import type { CollectionSyncInvoice } from "@/lib/collections/sync-decision"
 import { sanitizeCustomerDocument, sanitizeCustomerName } from "@/lib/collections/sanitize"
 import type { BrbyteInvoiceListRow } from "@/types/brbyte"
@@ -28,8 +29,16 @@ export function presentCollectionInvoiceFromListRow(
   row: BrbyteInvoiceListRow
 ): CollectionSyncInvoice | null {
   const invoicePk = row.invoicePk?.trim() ?? ""
-  if (!invoicePk || row.invoiceDeleted) return null
   const raw = asRecord(row.raw) ?? {}
+  const deletedFlag = classifyInvoiceDeletedFlag(raw)
+  if (
+    !invoicePk ||
+    row.invoiceDeleted ||
+    deletedFlag.kind === "deleted" ||
+    deletedFlag.kind === "inconclusive"
+  ) {
+    return null
+  }
   const monetary = extractInvoiceMonetaryFields(raw)
   const invoiceMsg = firstText(raw, ["invoice_msg", "invoiceMsg"])
   const invoiceDateCredit = firstText(raw, [

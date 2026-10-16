@@ -17,6 +17,7 @@ import {
   buildOverdueInvoiceListWhereAfter,
   collectOverdueInvoiceListPages,
   freezeInvoiceListReferenceDate,
+  overdueInvoiceDueDateCutoff,
   overdueInvoiceListPageCursor,
   overdueInvoiceListQueryForms,
   parseInvoiceListReferenceDate,
@@ -95,7 +96,7 @@ describe("TEST A — where JSON observado preservado", () => {
       [
         { field: "invoice_date_credit", oper: 7, value: null },
         { field: "AND" },
-        { field: "invoice_date_due", oper: 1, value: "2026-09-16" },
+        { field: "invoice_date_due", oper: 1, value: "2026-09-12" },
       ],
     ])
     assert.equal(OVERDUE_INVOICE_LIST_OPER.LT, 1)
@@ -243,7 +244,7 @@ describe("TEST F — execução atravessando a meia-noite reutiliza a data conge
     assert.ok(pages)
     assert.deepEqual(
       pages.map((fields) => nestedDueValue(fields)),
-      ["2026-09-16", "2026-09-16", "2026-09-16"]
+      ["2026-09-12", "2026-09-12", "2026-09-12"]
     )
   })
 })
@@ -342,6 +343,23 @@ describe("limites e falhas não viram execução completa", () => {
     assert.equal(truncated.rows.length, OVERDUE_INVOICE_LIST_MAX_PAGES * 15)
     assert.equal(truncated.rows.length < 8562, true)
     assert.equal(overdueInvoiceListQueryForms({ referenceDate: "2026-09-16", page: 1 }).length, 1)
+  })
+})
+
+describe("TEST P — corte de 5 dias na query sem operador novo", () => {
+  it("due < ref-4 inclui 5 dias e exclui 4, com o mesmo oper LT", () => {
+    assert.equal(overdueInvoiceDueDateCutoff("2026-09-16", 5), "2026-09-12")
+    assert.equal(overdueInvoiceDueDateCutoff("2026-10-16", 5), "2026-10-12")
+    const where = buildOverdueInvoiceListWhere("2026-10-16", 5)
+    assert.ok(where)
+    const nested = where[4] as Array<{ field?: string; oper?: number; value?: unknown }>
+    assert.equal(nested[2]?.oper, OVERDUE_INVOICE_LIST_OPER.LT)
+    assert.equal(nested[2]?.value, "2026-10-12")
+    assert.equal("2026-10-11" < "2026-10-12", true)
+    assert.equal("2026-10-12" < "2026-10-12", false)
+    const blob = JSON.stringify(where)
+    assert.equal(blob.includes("client_status"), false)
+    assert.equal(blob.includes("oper\":5"), false)
   })
 })
 

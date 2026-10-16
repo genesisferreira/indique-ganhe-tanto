@@ -46,6 +46,19 @@ describe("presentCollectionInvoiceFromListRow", () => {
     assert.equal(presented?.isPaid, false)
     assert.equal(presented?.invoiceAmountDocument, 199.9)
   })
+
+  it("TEST G — flag invoice_deleted inválida não mapeia caso", () => {
+    const invalid: BrbyteInvoiceListRow = {
+      invoicePk: "inv-8",
+      contractPk: "ct-8",
+      invoiceDueDate: "2026-09-01",
+      invoiceDate: null,
+      invoicePeriod: null,
+      invoiceDeleted: false,
+      raw: { invoice_deleted: "maybe" },
+    }
+    assert.equal(presentCollectionInvoiceFromListRow(invalid), null)
+  })
 })
 
 describe("shouldInspectCollectionInvoice", () => {

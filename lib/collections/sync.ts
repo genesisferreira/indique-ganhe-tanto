@@ -23,6 +23,11 @@ import { runOverdueDiscoveryBatch } from "@/lib/collections/discovery-runner"
 import { createOpsDiscoveryStore } from "@/lib/collections/discovery-store-ops"
 import { classifyInvoiceDetailForReconciliation } from "@/lib/collections/reconciliation"
 import {
+  emptyDiscoverySkipHistogram,
+  sanitizeDiscoverySkipHistogram,
+  type DiscoverySkipHistogram,
+} from "@/lib/collections/skip-reason"
+import {
   collectionInvoiceNeedsDetailFetch,
   mergeInvoiceInfoIntoSyncInvoice,
   presentCollectionInvoiceFromListRow,
@@ -44,6 +49,8 @@ export type CollectionsSyncResult = {
   updated: number
   closedPaid: number
   skipped: number
+  skippedThisBatch: number
+  skipReasons: DiscoverySkipHistogram
   assigned: number
   unassigned: number
   truncated: boolean
@@ -114,6 +121,8 @@ export async function syncCollectionsFromControllr(input: {
     updated: 0,
     closedPaid: 0,
     skipped: 0,
+    skippedThisBatch: 0,
+    skipReasons: emptyDiscoverySkipHistogram(),
     assigned: 0,
     unassigned: 0,
     truncated: false,
@@ -222,6 +231,7 @@ export async function syncCollectionsFromControllr(input: {
         page: 1,
         afterInvoicePk,
         timeoutMs,
+        minimumDaysOverdue: settings.minimumDaysOverdue,
       })
       console.log(LOG_TAG, {
         scope: "discovery-page",
@@ -290,6 +300,7 @@ export async function syncCollectionsFromControllr(input: {
     },
   })
 
+  const skipReasons = sanitizeDiscoverySkipHistogram(batch.skipReasons)
   console.log(LOG_TAG, {
     scope: "discovery-batch",
     pauseStage: batch.pauseStage,
@@ -302,6 +313,8 @@ export async function syncCollectionsFromControllr(input: {
     remainingAfterListMs: batch.remainingAfterListMs,
     errorClass: batch.status === "failed" ? "failed" : batch.pauseStage,
     discoveryStatus: batch.status,
+    skippedThisBatch: batch.skippedThisBatch,
+    skipReasons,
   })
 
   return {
@@ -313,6 +326,8 @@ export async function syncCollectionsFromControllr(input: {
     created: batch.created,
     updated: batch.updated,
     skipped: batch.skipped,
+    skippedThisBatch: batch.skippedThisBatch,
+    skipReasons,
     assigned: batch.assigned,
     unassigned: batch.unassigned,
     closedPaid: batch.closedPaid,

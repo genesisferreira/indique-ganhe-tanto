@@ -33,6 +33,7 @@ import {
 import { collectionScanMayMutateCase } from "@/lib/collections/sync-source"
 import { outstandingAmountFromInvoice } from "@/lib/collections/eligibility"
 import type { CollectionSyncInvoice } from "@/lib/collections/sync-decision"
+import { sumDiscoverySkipHistogram } from "@/lib/collections/skip-reason"
 
 const now = new Date("2026-09-16T12:00:00.000Z")
 const referenceDate = "2026-09-16"
@@ -1449,6 +1450,171 @@ describe("3.1E-V garantia de progresso", () => {
     assert.equal(result.referenceInstant, seeded.referenceInstant)
     assert.equal(result.cursorLastInvoicePk, "24")
     assert.equal(result.created, 15)
+  })
+})
+
+describe("TEST H/I/J/K/L — histograma sanitizado de skips", () => {
+  const page15 = ["10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"]
+
+  it("casos criados não entram no histograma; soma = skippedThisBatch", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "hist-create",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      maxPages: 1,
+      fetchPage: async () => ({
+        ok: true,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 15,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.created, 15)
+    assert.equal(result.updated, 0)
+    assert.equal(result.skippedThisBatch, 0)
+    assert.equal(sumDiscoverySkipHistogram(result.skipReasons), 0)
+    assert.equal(result.skipReasons.not_old_enough, 0)
+  })
+
+  it("4 dias vira not_old_enough e a soma bate com skipped", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "hist-skip",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      maxPages: 1,
+      fetchPage: async () => ({
+        ok: true,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 15,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 4),
+    })
+    assert.equal(result.created, 0)
+    assert.equal(result.updated, 0)
+    assert.equal(result.skipped, 15)
+    assert.equal(result.skippedThisBatch, 15)
+    assert.equal(result.skipReasons.not_old_enough, 15)
+    assert.equal(sumDiscoverySkipHistogram(result.skipReasons), result.skippedThisBatch)
+    const blob = JSON.stringify(result.skipReasons)
+    assert.equal(blob.includes("Cliente"), false)
+    assert.equal(blob.includes("invoicePk"), false)
+  })
+
+  it("update real não entra no histograma", async () => {
+    const repo = createMemoryDiscoveryCaseRepo()
+    await runOverdueDiscoveryBatch({
+      store: createMemoryDiscoveryStore(),
+      repo,
+      owner: "hist-upd-1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      maxPages: 1,
+      fetchPage: async () => ({
+        ok: true,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 15,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    const second = await runOverdueDiscoveryBatch({
+      store: createMemoryDiscoveryStore(),
+      repo,
+      owner: "hist-upd-2",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      maxPages: 1,
+      fetchPage: async () => ({
+        ok: true,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 15,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(second.created, 0)
+    assert.equal(second.updated > 0, true)
+    assert.equal(second.skipReasons.not_old_enough, 0)
+    assert.equal(sumDiscoverySkipHistogram(second.skipReasons), second.skippedThisBatch)
+  })
+
+  it("timeout de listagem não vira skip e não avança cursor", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "hist-timeout",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      fetchPage: async () => ({
+        ok: false,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 15,
+        httpStatus: 200,
+        abortClass: "timeout",
+        bodyReadComplete: true,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.cursorLastInvoicePk, null)
+    assert.equal(result.created, 0)
+    assert.equal(result.skippedThisBatch, 0)
+    assert.equal(sumDiscoverySkipHistogram(result.skipReasons), 0)
+    assert.equal(result.pauseStage, "list_timeout_body")
+    assert.equal(result.status, "paused")
+  })
+
+  it("fatura removida não mapeada conta removed_or_cancelled", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "hist-deleted",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      maxPages: 1,
+      fetchPage: async () => ({
+        ok: true,
+        rows: [{ invoicePk: "10", invoiceDeleted: true, raw: { invoice_deleted: true } }],
+        total: 1,
+      }),
+      toInvoice: () => null,
+    })
+    assert.equal(result.created, 0)
+    assert.equal(result.skipReasons.removed_or_cancelled, 1)
+    assert.equal(sumDiscoverySkipHistogram(result.skipReasons), result.skippedThisBatch)
   })
 })
 

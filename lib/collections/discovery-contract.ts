@@ -115,6 +115,14 @@ export type CollectionDiscoveryRun = {
   reconcileSkippedCount: number
 }
 
+/**
+ * Contadores acumulados no checkpoint. Compatibilidade:
+ * - scannedInvoices = rows_seen = faturas com pk válido que atravessaram o loop,
+ *   inclusive quando persist() responde skipped sem INSERT/UPDATE.
+ * - skippedCount = skips do loop (mapeamento nulo + persist skipped).
+ * - createdCount / updatedCount = INSERT / UPDATE reais de caso.
+ * Não é contagem de casos gravados. Não renomear colunas SQL.
+ */
 export type CollectionDiscoveryCounters = {
   scannedPages: number
   scannedInvoices: number

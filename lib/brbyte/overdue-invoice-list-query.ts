@@ -3,6 +3,7 @@ import {
   collectInvoiceListPages,
   type CollectedInvoiceList,
 } from "@/lib/brbyte/invoice-list-pagination"
+import { COLLECTION_OVERDUE_THRESHOLD_DAYS } from "@/types/collections"
 
 /** Limit observado no Controllr para invoice/list de atrasados. pageSize=100 não está validado. */
 export const OVERDUE_INVOICE_LIST_PAGE_SIZE = 15
@@ -126,11 +127,37 @@ function invoicePkWhereValue(pk: string): number | null {
   return asNumber
 }
 
-export function buildOverdueInvoiceListWhere(
-  referenceDate: string
-): OverdueInvoiceListWhereNode[] | null {
+/**
+ * Corte civil: invoice_date_due < referenceDate - (minimumDaysOverdue - 1).
+ * Com mínimo 5, due < ref-4 inclui exatamente 5 dias e exclui 4.
+ * Mesmo operador LT já observado. Defesa final permanece no CRM (UTC).
+ */
+export function overdueInvoiceDueDateCutoff(
+  referenceDate: string,
+  minimumDaysOverdue: number = COLLECTION_OVERDUE_THRESHOLD_DAYS
+): string | null {
   const frozen = parseInvoiceListReferenceDate(referenceDate)
   if (!frozen) return null
+  const min =
+    Number.isInteger(minimumDaysOverdue) && minimumDaysOverdue >= 1
+      ? minimumDaysOverdue
+      : COLLECTION_OVERDUE_THRESHOLD_DAYS
+  const [year, month, day] = frozen.split("-").map(Number)
+  const utc = new Date(Date.UTC(year, month - 1, day))
+  utc.setUTCDate(utc.getUTCDate() - (min - 1))
+  const yy = utc.getUTCFullYear()
+  const mm = String(utc.getUTCMonth() + 1).padStart(2, "0")
+  const dd = String(utc.getUTCDate()).padStart(2, "0")
+  return `${yy}-${mm}-${dd}`
+}
+
+export function buildOverdueInvoiceListWhere(
+  referenceDate: string,
+  minimumDaysOverdue: number = COLLECTION_OVERDUE_THRESHOLD_DAYS
+): OverdueInvoiceListWhereNode[] | null {
+  const frozen = parseInvoiceListReferenceDate(referenceDate)
+  const cutoff = overdueInvoiceDueDateCutoff(referenceDate, minimumDaysOverdue)
+  if (!frozen || !cutoff) return null
   return [
     { field: "invoice_deleted", oper: OVERDUE_INVOICE_LIST_OPER.IS, value: false },
     { field: "AND" },
@@ -139,7 +166,7 @@ export function buildOverdueInvoiceListWhere(
     [
       { field: "invoice_date_credit", oper: OVERDUE_INVOICE_LIST_OPER.IS, value: null },
       { field: "AND" },
-      { field: "invoice_date_due", oper: OVERDUE_INVOICE_LIST_OPER.LT, value: frozen },
+      { field: "invoice_date_due", oper: OVERDUE_INVOICE_LIST_OPER.LT, value: cutoff },
     ],
   ]
 }
@@ -150,9 +177,10 @@ export function buildOverdueInvoiceListWhere(
  */
 export function buildOverdueInvoiceListWhereAfter(
   referenceDate: string,
-  afterInvoicePk: string | null
+  afterInvoicePk: string | null,
+  minimumDaysOverdue: number = COLLECTION_OVERDUE_THRESHOLD_DAYS
 ): OverdueInvoiceListWhereNode[] | null {
-  const base = buildOverdueInvoiceListWhere(referenceDate)
+  const base = buildOverdueInvoiceListWhere(referenceDate, minimumDaysOverdue)
   if (!base) return null
   if (afterInvoicePk == null) return base
   const pk = parseOverdueInvoicePk(afterInvoicePk)
@@ -168,10 +196,12 @@ export function buildOverdueInvoiceListWhereAfter(
 export function buildOverdueInvoiceListKeysetFormFields(input: {
   referenceDate: string
   afterInvoicePk: string | null
+  minimumDaysOverdue?: number
 }): Record<string, string> | null {
   const where = buildOverdueInvoiceListWhereAfter(
     input.referenceDate,
-    input.afterInvoicePk
+    input.afterInvoicePk,
+    input.minimumDaysOverdue
   )
   if (!where) return null
   return {
@@ -198,8 +228,9 @@ export function overdueInvoiceListPageCursor(
 export function buildOverdueInvoiceListFormFields(input: {
   referenceDate: string
   page: number
+  minimumDaysOverdue?: number
 }): Record<string, string> | null {
-  const where = buildOverdueInvoiceListWhere(input.referenceDate)
+  const where = buildOverdueInvoiceListWhere(input.referenceDate, input.minimumDaysOverdue)
   const cursor = overdueInvoiceListPageCursor(input.page)
   if (!where || !cursor) return null
   return {
@@ -216,6 +247,7 @@ export function buildOverdueInvoiceListFormFields(input: {
 export function overdueInvoiceListQueryForms(input: {
   referenceDate: string
   page: number
+  minimumDaysOverdue?: number
 }): Record<string, string>[] {
   const fields = buildOverdueInvoiceListFormFields(input)
   return fields ? [fields] : []
@@ -234,6 +266,7 @@ export function serializeOverdueInvoiceListForm(
 export function planOverdueInvoiceListPages(input: {
   referenceDate: string
   pageCount: number
+  minimumDaysOverdue?: number
 }): Record<string, string>[] | null {
   if (!Number.isInteger(input.pageCount) || input.pageCount < 1) return null
   const frozen = parseInvoiceListReferenceDate(input.referenceDate)
@@ -243,6 +276,7 @@ export function planOverdueInvoiceListPages(input: {
     const fields = buildOverdueInvoiceListFormFields({
       referenceDate: frozen,
       page,
+      minimumDaysOverdue: input.minimumDaysOverdue,
     })
     if (!fields) return null
     pages.push(fields)

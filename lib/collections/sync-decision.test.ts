@@ -46,6 +46,34 @@ describe("G) payment retry não duplica fechamento", () => {
     if (decision.action === "skip") assert.equal(decision.reason, "already_paid")
   })
 
+  it("4 dias → skip not_old_enough; 5 dias sem caso → create", () => {
+    const four = decideCollectionSyncAction({
+      invoice: { ...overdueInvoice, invoiceDueDate: "2026-09-07T00:00:00.000Z" },
+      existing: null,
+      now,
+      minimumDaysOverdue: 5,
+    })
+    const five = decideCollectionSyncAction({
+      invoice: { ...overdueInvoice, invoiceDueDate: "2026-09-06T00:00:00.000Z" },
+      existing: null,
+      now,
+      minimumDaysOverdue: 5,
+    })
+    assert.equal(four.action, "skip")
+    if (four.action === "skip") assert.equal(four.reason, "not_old_enough")
+    assert.equal(five.action, "create")
+  })
+
+  it("pago sem caso → paid_without_open_case", () => {
+    const decision = decideCollectionSyncAction({
+      invoice: { ...overdueInvoice, isPaid: true, invoiceMsg: "paid", invoiceDateCredit: "2026-09-10" },
+      existing: null,
+      now,
+    })
+    assert.equal(decision.action, "skip")
+    if (decision.action === "skip") assert.equal(decision.reason, "paid_without_open_case")
+  })
+
   it("open + pago → close_paid", () => {
     const decision = decideCollectionSyncAction({
       invoice: { ...overdueInvoice, isPaid: true, invoiceMsg: "paid", invoiceDateCredit: "2026-09-10" },

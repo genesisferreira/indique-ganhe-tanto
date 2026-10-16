@@ -32,6 +32,14 @@ import {
   shouldWriteReconciliationClosePaid,
   type ReconciliationDetailResult,
 } from "@/lib/collections/reconciliation"
+import {
+  classifyUnmappedDiscoveryRow,
+  emptyDiscoverySkipHistogram,
+  incrementDiscoverySkip,
+  sanitizeDiscoverySkipHistogram,
+  sumDiscoverySkipHistogram,
+  type DiscoverySkipHistogram,
+} from "@/lib/collections/skip-reason"
 import type { CollectionSyncInvoice, ExistingCollectionCase } from "@/lib/collections/sync-decision"
 
 export type DiscoveryFetchedPage<TRow extends { invoicePk: string | null } = { invoicePk: string | null }> = {
@@ -109,6 +117,8 @@ export type DiscoveryBatchResult = {
   persistenceDurationMs: number | null
   remainingBeforeListMs: number | null
   remainingAfterListMs: number | null
+  skippedThisBatch: number
+  skipReasons: DiscoverySkipHistogram
 }
 
 const LIST_WAIT_TIMEOUT = Symbol("list-wait-timeout")
@@ -150,6 +160,9 @@ function resultFromRun(
   liveCounters?: CollectionDiscoveryCounters
 ): DiscoveryBatchResult {
   const source = liveCounters ?? countersFromRun(run)
+  const skipReasons = sanitizeDiscoverySkipHistogram(
+    extra.skipReasons ?? emptyDiscoverySkipHistogram()
+  )
   return {
     status: run.status,
     runId: run.id,
@@ -178,6 +191,8 @@ function resultFromRun(
     remainingBeforeListMs: extra.remainingBeforeListMs ?? null,
     remainingAfterListMs: extra.remainingAfterListMs ?? null,
     ...extra,
+    skipReasons,
+    skippedThisBatch: extra.skippedThisBatch ?? sumDiscoverySkipHistogram(skipReasons),
   }
 }
 
@@ -235,6 +250,8 @@ export async function runOverdueDiscoveryBatch<
       persistenceDurationMs: null,
       remainingBeforeListMs: null,
       remainingAfterListMs: null,
+      skippedThisBatch: 0,
+      skipReasons: emptyDiscoverySkipHistogram(),
     }
   }
 
@@ -245,6 +262,7 @@ export async function runOverdueDiscoveryBatch<
   let counters = countersFromRun(run)
   let lastPageDurationMs = 8_000
   let pagesThisBatch = 0
+  const skipReasons = emptyDiscoverySkipHistogram()
 
   const fail = async (
     errorClass: string,
@@ -279,6 +297,8 @@ export async function runOverdueDiscoveryBatch<
         pauseStage: errorClass === "zero_progress_loop" ? "zero_progress_loop" : extra.pauseStage ?? null,
         consecutiveNoProgress: consecutive,
         ...extra,
+        skipReasons,
+        skippedThisBatch: sumDiscoverySkipHistogram(skipReasons),
       },
       counters
     )
@@ -303,7 +323,15 @@ export async function runOverdueDiscoveryBatch<
     const paused = released.ok ? released.run : { ...run, status: "paused" as const, consecutiveNoProgress: consecutive }
     return resultFromRun(
       paused,
-      { ok: true, resumable: true, message, consecutiveNoProgress: consecutive, ...extra },
+      {
+        ok: true,
+        resumable: true,
+        message,
+        consecutiveNoProgress: consecutive,
+        ...extra,
+        skipReasons,
+        skippedThisBatch: sumDiscoverySkipHistogram(skipReasons),
+      },
       counters
     )
   }
@@ -348,6 +376,8 @@ export async function runOverdueDiscoveryBatch<
       resumable: false,
       truncated: false,
       message,
+      skipReasons,
+      skippedThisBatch: sumDiscoverySkipHistogram(skipReasons),
     })
   }
 
@@ -448,6 +478,8 @@ export async function runOverdueDiscoveryBatch<
             truncated: false,
             message:
               "Fases operacionais desta execução encerraram neste recorte. Conclusão operacional não prova cobertura global.",
+            skipReasons,
+            skippedThisBatch: sumDiscoverySkipHistogram(skipReasons),
           },
           counters
         )
@@ -736,6 +768,7 @@ export async function runOverdueDiscoveryBatch<
       const invoice = input.toInvoice(row)
       const pk = invoice ? parseOverdueInvoicePk(invoice.invoicePk) : null
       if (!invoice || !pk) {
+        incrementDiscoverySkip(skipReasons, classifyUnmappedDiscoveryRow(row))
         counters.skippedCount += 1
         continue
       }
@@ -772,7 +805,10 @@ export async function runOverdueDiscoveryBatch<
         }
         if (persisted.created) counters.createdCount += 1
         if (persisted.updated) counters.updatedCount += 1
-        if (persisted.skipped) counters.skippedCount += 1
+        if (persisted.skipped) {
+          incrementDiscoverySkip(skipReasons, persisted.skipReason)
+          counters.skippedCount += 1
+        }
         if (persisted.newlyAssigned) counters.assignedCount += 1
         if (persisted.created && persisted.unassigned) counters.unassignedCount += 1
       } catch {

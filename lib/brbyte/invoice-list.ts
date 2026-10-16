@@ -233,6 +233,7 @@ export async function listOverdueInvoicesPage(input: {
   page: number
   afterInvoicePk?: string | null
   timeoutMs?: number
+  minimumDaysOverdue?: number
 }): Promise<{
   ok: boolean
   rows: ReturnType<typeof extractInvoiceListRows>
@@ -267,10 +268,12 @@ export async function listOverdueInvoicesPage(input: {
       ? buildOverdueInvoiceListKeysetFormFields({
           referenceDate,
           afterInvoicePk: input.afterInvoicePk,
+          minimumDaysOverdue: input.minimumDaysOverdue,
         })
       : buildOverdueInvoiceListFormFields({
           referenceDate,
           page: input.page,
+          minimumDaysOverdue: input.minimumDaysOverdue,
         })
   if (!fields) {
     return {

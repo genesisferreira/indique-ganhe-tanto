@@ -29,8 +29,17 @@ export type ExistingCollectionCase = {
   invoicePk: string | null
 }
 
+export type CollectionSyncSkipReason =
+  | "missing_identity"
+  | "not_old_enough"
+  | "insufficient_financial_data"
+  | "paid_without_open_case"
+  | "already_paid"
+  | "already_closed"
+  | "collections_disabled"
+
 export type CollectionSyncDecision =
-  | { action: "skip"; reason: "no_invoice_pk" | "not_overdue" | "paid_no_case" | "already_paid" | "already_closed" }
+  | { action: "skip"; reason: CollectionSyncSkipReason }
   | { action: "create" }
   | { action: "update_open" }
   | { action: "reopen" }
@@ -44,30 +53,40 @@ export function decideCollectionSyncAction(input: {
   collectionsEnabled?: boolean
 }): CollectionSyncDecision {
   if (!collectionCaseIdentityKey({ invoicePk: input.invoice.invoicePk })) {
-    return { action: "skip", reason: "no_invoice_pk" }
+    return { action: "skip", reason: "missing_identity" }
   }
   const daysOverdue = computeDaysOverdue({
     invoiceDueDate: input.invoice.invoiceDueDate,
     now: input.now,
   })
-  const eligible = shouldOpenCollectionCase({
-    daysOverdue,
-    isPaid: input.invoice.isPaid,
-    invoicePk: input.invoice.invoicePk,
-    minimumDaysOverdue: input.minimumDaysOverdue,
-    collectionsEnabled: input.collectionsEnabled,
-  })
 
   if (input.invoice.isPaid) {
-    if (!input.existing) return { action: "skip", reason: "paid_no_case" }
-    if (input.existing.status === "paid" || input.existing.status === "closed") {
+    if (!input.existing) return { action: "skip", reason: "paid_without_open_case" }
+    if (input.existing.status === "paid") {
       return { action: "skip", reason: "already_paid" }
+    }
+    if (input.existing.status === "closed") {
+      return { action: "skip", reason: "already_closed" }
     }
     return { action: "close_paid" }
   }
 
-  if (!eligible) {
-    return { action: "skip", reason: "not_overdue" }
+  if (input.collectionsEnabled === false) {
+    return { action: "skip", reason: "collections_disabled" }
+  }
+  if (daysOverdue == null) {
+    return { action: "skip", reason: "insufficient_financial_data" }
+  }
+  if (
+    !shouldOpenCollectionCase({
+      daysOverdue,
+      isPaid: false,
+      invoicePk: input.invoice.invoicePk,
+      minimumDaysOverdue: input.minimumDaysOverdue,
+      collectionsEnabled: true,
+    })
+  ) {
+    return { action: "skip", reason: "not_old_enough" }
   }
 
   if (!input.existing) return { action: "create" }
