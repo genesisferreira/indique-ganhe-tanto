@@ -4,15 +4,17 @@ import { describe, it } from "node:test"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
+  COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
   COLLECTION_DISCOVERY_LIVE_QUERY_COMBINATION_VALIDATED,
   COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH,
+  COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
   COLLECTION_DISCOVERY_PAGE_SIZE,
   COLLECTION_DISCOVERY_PAGINATION_STRATEGY,
+  COLLECTION_DISCOVERY_PLATFORM_MARGIN_MS,
   COLLECTION_DISCOVERY_QUERY_CONTRACT_VERSION,
   COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_MS,
   COLLECTION_DISCOVERY_TIME_BUDGET_MS,
   COLLECTION_DISCOVERY_TIMEZONE,
-  COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
   collectionDiscoveryCappedTimeoutMs,
   collectionDiscoveryListTimeoutMs,
   sanitizeDiscoveryErrorClass,
@@ -1106,6 +1108,51 @@ describe("3.1E-V garantia de progresso", () => {
     assert.equal(result.pauseStage, "page_limit")
   })
 
+  it("login 24s + listagem 41s persiste a página inteira dentro do orçamento 105s", async () => {
+    assert.equal(
+      COLLECTION_DISCOVERY_TIME_BUDGET_MS + COLLECTION_DISCOVERY_PLATFORM_MARGIN_MS,
+      COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_MS
+    )
+    assert.equal(24_000 + 41_000 + COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS < COLLECTION_DISCOVERY_TIME_BUDGET_MS, true)
+    const store = createMemoryDiscoveryStore([pausedExistingRun()])
+    const repo = createMemoryDiscoveryCaseRepo()
+    let nowMs = 24_000
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "observed-fit",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      runId: pausedExistingRun().id,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: COLLECTION_DISCOVERY_TIME_BUDGET_MS,
+      configuredTimeoutMs: COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
+      maxPages: 1,
+      fetchPage: async ({ timeoutMs }) => {
+        assert.equal(timeoutMs >= 41_000, true)
+        nowMs += 41_000
+        return { ok: true, rows: page15.map((invoicePk) => ({ invoicePk })), total: 8668 }
+      },
+      prepareInvoice: async (value) => {
+        nowMs += 400
+        return value
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.runId, pausedExistingRun().id)
+    assert.equal(result.ok, true)
+    assert.equal(result.cursorLastInvoicePk, "24")
+    assert.equal(result.created, 15)
+    assert.equal(result.progressMade, true)
+    assert.equal(result.consecutiveNoProgress, 0)
+    assert.equal(nowMs < COLLECTION_DISCOVERY_TIME_BUDGET_MS, true)
+  })
+
   it("login+listagem equivalentes à run real não repetem em silêncio", async () => {
     const store = createMemoryDiscoveryStore([pausedExistingRun()])
     const repo = createMemoryDiscoveryCaseRepo()
@@ -1370,17 +1417,22 @@ describe("3.1E-V garantia de progresso", () => {
   })
 
   it("run paused existente permanece compatível sem novo runId", async () => {
-    const seeded = pausedExistingRun()
+    const seeded = {
+      ...pausedExistingRun(),
+      referenceInstant: "2026-10-16T12:59:07.000Z",
+      referenceDate: "2026-10-16",
+    }
     const store = createMemoryDiscoveryStore([seeded])
     const repo = createMemoryDiscoveryCaseRepo()
+    const frozenNow = new Date(seeded.referenceInstant)
     const result = await runOverdueDiscoveryBatch({
       store,
       repo,
       owner: "compat",
       actorProfileId: "actor-1",
-      now,
-      referenceInstant: now,
-      referenceDate,
+      now: frozenNow,
+      referenceInstant: frozenNow,
+      referenceDate: seeded.referenceDate,
       runId: seeded.id,
       minimumDaysOverdue: 5,
       collectionsEnabled: true,

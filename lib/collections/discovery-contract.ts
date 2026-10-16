@@ -17,15 +17,23 @@ export const COLLECTION_DISCOVERY_TIMEZONE = OVERDUE_DISCOVERY_BUSINESS_TIMEZONE
 export const COLLECTION_DISCOVERY_LIVE_QUERY_COMBINATION_VALIDATED = false
 
 /**
- * Orçamento derivado do maxDuration da rota Node no Vercel (60s, padrão Pro),
- * não do desenho 240s em batch-sync-design.ts (nunca ligado ao runner).
+ * Hobby + Fluid Compute no projeto v0-indique-ganhe-tanto:
+ * default/teto da plataforma = 300s (Function Max Duration placeholder 300).
+ * A rota declara 120s; o deadline lógico fica abaixo, com margem explícita.
+ * Não usa o desenho 240s de batch-sync-design.ts.
  */
-export const COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_S = 60
+export const COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_S = 120
 export const COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_MS =
   COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_S * 1000
-export const COLLECTION_DISCOVERY_TIME_BUDGET_MS = 45_000
+export const COLLECTION_DISCOVERY_PLATFORM_MARGIN_MS = 15_000
+export const COLLECTION_DISCOVERY_TIME_BUDGET_MS =
+  COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_MS - COLLECTION_DISCOVERY_PLATFORM_MARGIN_MS
 export const COLLECTION_DISCOVERY_LEASE_MS =
   COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_MS
+/** Login observado ~24s; cap explícito para não comer a reserva de list+persist. */
+export const COLLECTION_DISCOVERY_LOGIN_TIMEOUT_MS = 30_000
+/** Listagem observada ~41s; cap acima disso e abaixo do deadline lógico. */
+export const COLLECTION_DISCOVERY_LIST_TIMEOUT_MS = 50_000
 export const COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH = 4
 export const COLLECTION_DISCOVERY_PAGE_SIZE = OVERDUE_INVOICE_LIST_PAGE_SIZE
 export const COLLECTION_DISCOVERY_SORT_FIELD = OVERDUE_INVOICE_LIST_SORT_FIELD
@@ -39,7 +47,7 @@ export const COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS =
  */
 export const COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS = 8_000
 /** Folga mínima para o release depois da última escrita da página. */
-export const COLLECTION_DISCOVERY_RELEASE_SLACK_MS = 1_000
+export const COLLECTION_DISCOVERY_RELEASE_SLACK_MS = 2_000
 export const COLLECTION_DISCOVERY_MIN_QUERY_TIMEOUT_MS = 1_000
 export const COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS = 2
 

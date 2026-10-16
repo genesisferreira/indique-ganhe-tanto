@@ -1,6 +1,7 @@
 import { parseOverdueInvoicePk } from "@/lib/brbyte/overdue-invoice-list-query"
 import {
   COLLECTION_DISCOVERY_LEASE_MS,
+  COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
   COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS,
   COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH,
   COLLECTION_DISCOVERY_PAGE_SIZE,
@@ -187,7 +188,7 @@ export async function runOverdueDiscoveryBatch<
   const startedAtMs = input.startedAtMs ?? clock()
   const budgetMs = input.budgetMs ?? COLLECTION_DISCOVERY_TIME_BUDGET_MS
   const maxPages = input.maxPages ?? COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH
-  const configuredTimeoutMs = input.configuredTimeoutMs ?? 30_000
+  const configuredTimeoutMs = input.configuredTimeoutMs ?? COLLECTION_DISCOVERY_LIST_TIMEOUT_MS
   const claim = await input.store.claimOrStart({
     owner: input.owner,
     now: input.now,

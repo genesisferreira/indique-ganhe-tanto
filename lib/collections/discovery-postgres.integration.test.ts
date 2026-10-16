@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { after, before, beforeEach, describe, it } from "node:test"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -439,6 +440,11 @@ describe("PostgreSQL real — descoberta retomável", { timeout: 180_000 }, () =
       `select has_function_privilege('authenticated', 'public.claim_collection_discovery_run(text,integer,text,timestamptz,date,text,text,uuid)', 'execute') as ok`
     )
     assert.equal(execAuth.ok, false)
+    const execAnon = await rpc(
+      client,
+      `select has_function_privilege('anon', 'public.release_collection_discovery_run(uuid,text,integer,text,text)', 'execute') as ok`
+    )
+    assert.equal(execAnon.ok, false)
     const publicExecute = await rpc(
       client,
       `select count(*)::int as n
@@ -1377,7 +1383,8 @@ describe("PostgreSQL real — descoberta retomável", { timeout: 180_000 }, () =
         startedAtMs: 0,
         clock: () => nowMs,
         budgetMs: 45_000,
-        configuredTimeoutMs: 80,
+        configuredTimeoutMs: 30_000,
+        maxPages: 1,
         fetchPage: async ({ referenceDate, afterInvoicePk, timeoutMs }) => {
           nowMs += 11_300
           const page = await listOverdueInvoicesPage({
@@ -1531,5 +1538,117 @@ describe("PostgreSQL real — descoberta retomável", { timeout: 180_000 }, () =
     const advancedPayload = advanced.payload as Record<string, any>
     assert.equal(advancedPayload.ok, true)
     assert.equal(advancedPayload.run.consecutiveNoProgress, 0)
+  })
+
+  it("upgrade de run paused preexistente recebe consecutive_no_progress=0", async () => {
+    await closeResumableRuns()
+    const created = await claim(client, "upgrade-owner")
+    assert.equal(created.ok, true)
+    const runId = created.run.id
+    const released = await rpc(
+      client,
+      `select public.release_collection_discovery_run($1,$2,$3,'paused','page_limit') as payload`,
+      [runId, "upgrade-owner", created.run.leaseGeneration]
+    )
+    assert.equal((released.payload as Record<string, any>).ok, true)
+    await client.query(
+      `alter table public.collection_discovery_runs drop column if exists consecutive_no_progress`
+    )
+    const patch = readFileSync(
+      join(here, "../../supabase/patch-collection-discovery-progress-guarantee.sql"),
+      "utf8"
+    )
+    await client.query(patch)
+    const upgraded = await rpc(
+      client,
+      `select consecutive_no_progress as n, status, lease_generation as gen
+       from public.collection_discovery_runs where id = $1`,
+      [runId]
+    )
+    assert.equal(upgraded.n, 0)
+    assert.equal(upgraded.status, "paused")
+    const reclaimed = await claim(client, "upgrade-owner-2", 60_000, runId)
+    assert.equal(reclaimed.ok, true)
+    assert.equal(reclaimed.run.consecutiveNoProgress, 0)
+    assert.equal(Number(reclaimed.run.leaseGeneration) >= 1, true)
+  })
+
+  it("segunda pausa sem progresso incrementa e não cria nova run", async () => {
+    await closeResumableRuns()
+    const created = await claim(client, "loop-owner")
+    const runId = created.run.id
+    const first = await rpc(
+      client,
+      `select public.release_collection_discovery_run($1,$2,$3,'paused','list_timeout_body:1') as payload`,
+      [runId, "loop-owner", created.run.leaseGeneration]
+    )
+    assert.equal((first.payload as Record<string, any>).run.consecutiveNoProgress, 1)
+    const reclaimed = await claim(client, "loop-owner-2", 60_000, runId)
+    const second = await rpc(
+      client,
+      `select public.release_collection_discovery_run($1,$2,$3,'failed','zero_progress_loop') as payload`,
+      [runId, "loop-owner-2", reclaimed.run.leaseGeneration]
+    )
+    const secondPayload = second.payload as Record<string, any>
+    assert.equal(secondPayload.ok, true)
+    assert.equal(secondPayload.run.consecutiveNoProgress, 2)
+    assert.equal(secondPayload.run.status, "failed")
+    await assert.rejects(
+      () =>
+        client.query(
+          `insert into public.collection_discovery_runs (
+             query_contract_version, reference_instant, reference_date,
+             discovery_timezone, pagination_strategy, status, lease_generation
+           ) values ($1, $2::timestamptz, $3::date, $4, $5, 'paused', 1)`,
+          [CONTRACT, "2026-09-16T12:00:00.000Z", "2026-09-16", TZ, STRATEGY]
+        ),
+      /unique|duplicate/i
+    )
+  })
+
+  it("worker antigo não incrementa consecutive_no_progress", async () => {
+    await closeResumableRuns()
+    const claimed = await claim(client, "old-progress", 1_000)
+    const runId = claimed.run.id
+    const gen1 = claimed.run.leaseGeneration
+    await client.query(
+      `update public.collection_discovery_runs
+       set lease_until = timezone('utc', now()) - interval '5 seconds'
+       where id = $1`,
+      [runId]
+    )
+    const recovered = await claim(client, "new-progress", 60_000, runId)
+    assert.equal(recovered.ok, true)
+    const stale = await rpc(
+      client,
+      `select public.release_collection_discovery_run($1,$2,$3,'paused','list_timeout_body:1') as payload`,
+      [runId, "old-progress", gen1]
+    )
+    assert.equal((stale.payload as Record<string, any>).ok, false)
+    assert.equal((stale.payload as Record<string, any>).code, "stale_lease")
+    const row = await rpc(
+      client,
+      `select consecutive_no_progress as n from public.collection_discovery_runs where id = $1`,
+      [runId]
+    )
+    assert.equal(row.n, 0)
+  })
+
+  it("reaplicação do patch de progresso é idempotente", async () => {
+    const patch = readFileSync(
+      join(here, "../../supabase/patch-collection-discovery-progress-guarantee.sql"),
+      "utf8"
+    )
+    await client.query(patch)
+    await client.query(patch)
+    const col = await rpc(
+      client,
+      `select count(*)::int as n
+       from information_schema.columns
+       where table_schema = 'public'
+         and table_name = 'collection_discovery_runs'
+         and column_name = 'consecutive_no_progress'`
+    )
+    assert.equal(col.n, 1)
   })
 })

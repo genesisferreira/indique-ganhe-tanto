@@ -314,7 +314,7 @@ describe("3.1E-K descoberta retomável", () => {
 
   it("rota de sync permanece autorizada e sem cron", () => {
     const route = readFileSync(join(repoRoot, "app/api/admin/collections/sync/route.ts"), "utf8")
-    assert.match(route, /maxDuration = 60/)
+    assert.match(route, /maxDuration = 120/)
     assert.match(route, /authorizeOperationalRequest/)
     assert.match(route, /action: "sync"/)
     const vercel = readFileSync(join(repoRoot, "vercel.json"), "utf8")
@@ -418,13 +418,16 @@ describe("3.1E-O timeout HTTP cobre o corpo", () => {
     assert.match(request, /CONTROLLR_HTTP_SYNC_PARSE_NOT_PREEMPTIVE = true/)
     assert.match(invoiceInfo, /timeoutMs: remainingMs/)
     assert.match(runner, /collectionDiscoveryCappedTimeoutMs/)
-    assert.match(contract, /COLLECTION_DISCOVERY_TIME_BUDGET_MS = 45_000/)
-    assert.match(contract, /COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_S = 60/)
+    assert.match(contract, /COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_S = 120/)
+    assert.match(contract, /COLLECTION_DISCOVERY_PLATFORM_MARGIN_MS = 15_000/)
+    assert.match(contract, /COLLECTION_DISCOVERY_LOGIN_TIMEOUT_MS = 30_000/)
+    assert.match(contract, /COLLECTION_DISCOVERY_LIST_TIMEOUT_MS = 50_000/)
     assert.match(contract, /COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH = 4/)
     assert.match(contract, /COLLECTION_DISCOVERY_LEASE_MS/)
     assert.match(contract, /COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS = 8_000/)
     assert.match(contract, /COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS = 2/)
     assert.equal(contract.includes("COLLECTION_DISCOVERY_TIME_BUDGET_MS = 90"), false)
+    assert.equal(contract.includes("COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_S = 60"), false)
   })
 })
 
@@ -435,6 +438,8 @@ describe("3.1E-V garantia de progresso", () => {
       "utf8"
     )
     assert.match(patch, /consecutive_no_progress/)
+    assert.match(patch, /consecutive_no_progress \+ 1/)
+    assert.match(patch, /Desbloqueio humano/)
     assert.match(patch, /zero_progress_loop/)
     assert.match(patch, /grant execute on function public\.release_collection_discovery_run/)
     assert.match(patch, /to service_role/)
@@ -446,7 +451,13 @@ describe("3.1E-V garantia de progresso", () => {
     assert.match(runner, /pauseNoProgress/)
     assert.match(runner, /awaitListPageOrTimeout/)
     const route = readFileSync(join(repoRoot, "app/api/admin/collections/sync/route.ts"), "utf8")
-    assert.match(route, /maxDuration = 60/)
+    assert.match(route, /maxDuration = 120/)
+    const sync = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
+    assert.match(sync, /COLLECTION_DISCOVERY_LOGIN_TIMEOUT_MS/)
+    assert.match(
+      sync,
+      /COLLECTION_DISCOVERY_LIST_TIMEOUT_MS \+ COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS/
+    )
   })
 })
 

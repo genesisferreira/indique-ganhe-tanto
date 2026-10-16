@@ -1,14 +1,18 @@
 /**
  * PostgreSQL local descartável em 127.0.0.1:55434.
  * Não usa DATABASE_URL nem credenciais do projeto.
+ * Lab em %LOCALAPPDATA% (ou IGT_PG_LAB_ROOT), nunca em D: nem OneDrive.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = join(here, "../..")
-const labRoot = "D:\\igt-pg-3-1e-l"
+const labRoot =
+  process.env.IGT_PG_LAB_ROOT ||
+  join(process.env.LOCALAPPDATA || homedir(), "igt-pg-collections-lab")
 const dataDir = join(labRoot, "data-m")
 export const CONN_FILE = join(labRoot, "connection.json")
 
@@ -29,10 +33,15 @@ function assertLocal(target) {
 }
 
 async function loadPg() {
-  const EmbeddedPostgres = (
-    await import(pathToFileURL(join(labRoot, "node_modules/embedded-postgres/dist/index.js")).href)
-  ).default
-  const pgMod = await import(pathToFileURL(join(labRoot, "node_modules/pg/lib/index.js")).href)
+  const embeddedPath = join(labRoot, "node_modules/embedded-postgres/dist/index.js")
+  const pgPath = join(labRoot, "node_modules/pg/lib/index.js")
+  if (!existsSync(embeddedPath) || !existsSync(pgPath)) {
+    throw new Error(
+      `Lab PostgreSQL sem dependências em ${labRoot}. Instale com npm init -y && npm install embedded-postgres pg`
+    )
+  }
+  const EmbeddedPostgres = (await import(pathToFileURL(embeddedPath).href)).default
+  const pgMod = await import(pathToFileURL(pgPath).href)
   const Client = pgMod.default?.Client ?? pgMod.Client
   return { EmbeddedPostgres, Client }
 }

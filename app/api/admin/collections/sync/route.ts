@@ -6,7 +6,7 @@ import { COLLECTION_SECTOR_CODE } from "@/types/collections"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
-export const maxDuration = 60
+export const maxDuration = 120
 
 /**
  * Sync manual admin em lotes retomáveis. NÃO é cron. NÃO altera vercel.json.

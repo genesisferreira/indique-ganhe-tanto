@@ -1,11 +1,17 @@
--- Sprint 3.1E-V — garantia de progresso da descoberta retomável
+-- Sprint 3.1E-V/W — garantia de progresso da descoberta retomável
 --
--- consecutive_no_progress sobrevive ao claim (last_error_class continua
--- sendo limpo). Release deriva o contador do sufixo sanitizado :N em
--- last_error_class. Advance zera o contador após página confirmada.
+-- consecutive_no_progress:
+--   DEFAULT 0 (run paused pré-existente permanece retomável);
+--   claim NÃO zera o contador;
+--   release fenced incrementa em pausa sem progresso;
+--   advance zera só com lease vigente após página confirmada.
+-- Worker antigo recebe stale_lease e não incrementa/reseta.
+-- zero_progress_loop marca failed; a linha retomável permanece
+-- (índice único). Desbloqueio humano: status=paused,
+-- consecutive_no_progress=0, last_error_class=null. Sem DROP da run.
 --
 -- NÃO aplica em produção nesta sprint. Sem payload ERP. Sem cron.
--- Compatível com run paused existente (DEFAULT 0, mesmo runId).
+-- Reaplicação: ADD COLUMN IF NOT EXISTS + CREATE OR REPLACE.
 --
 -- Pré-requisito: patch-collection-discovery-reconciliation.sql
 -- Acesso: service_role. Rollback: DROP COLUMN após encerrar runs.
@@ -23,7 +29,7 @@ alter table public.collection_discovery_runs
   check (consecutive_no_progress >= 0);
 
 comment on column public.collection_discovery_runs.consecutive_no_progress is
-  'Lotes seguidos sem avanço de cursor/página. Claim não zera. Sem IDs nem payload ERP.';
+  'Lotes seguidos sem avanço de cursor/página. Claim não zera. Incremento fenced no release. Sem IDs nem payload ERP.';
 
 create or replace function public.collection_discovery_run_to_json(
   r public.collection_discovery_runs
@@ -135,29 +141,25 @@ set search_path = public
 as $$
 declare
   v_row public.collection_discovery_runs;
-  v_suffix text;
-  v_consecutive integer;
+  v_no_progress boolean := false;
 begin
   if p_status not in ('paused', 'failed', 'pagination_ended', 'phases_completed') then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
   end if;
 
-  v_consecutive := null;
-  if p_last_error_class = 'zero_progress_loop' then
-    v_consecutive := 2;
-  elsif p_last_error_class ~ ':[0-9]+$' then
-    v_suffix := (regexp_match(p_last_error_class, ':([0-9]+)$'))[1];
-    if v_suffix is not null then
-      v_consecutive := v_suffix::integer;
-    end if;
-  end if;
+  v_no_progress :=
+    p_last_error_class = 'zero_progress_loop'
+    or p_last_error_class ~ '^(pre_list_budget|post_list_no_reserve|list_timeout_headers|list_timeout_body)(:|$)';
 
   update public.collection_discovery_runs
   set status = p_status,
       lease_owner = null,
       lease_until = null,
       last_error_class = coalesce(p_last_error_class, last_error_class),
-      consecutive_no_progress = coalesce(v_consecutive, consecutive_no_progress)
+      consecutive_no_progress = case
+        when v_no_progress then consecutive_no_progress + 1
+        else consecutive_no_progress
+      end
   where id = p_run_id
     and lease_owner = p_owner
     and lease_generation = p_generation

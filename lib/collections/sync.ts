@@ -11,6 +11,9 @@ import {
   isControllrInvoicePaid,
 } from "@/lib/collections/eligibility"
 import {
+  COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
+  COLLECTION_DISCOVERY_LOGIN_TIMEOUT_MS,
+  COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
   COLLECTION_DISCOVERY_TIME_BUDGET_MS,
   collectionDiscoveryCappedTimeoutMs,
   collectionDiscoveryRemainingBudgetMs,
@@ -153,7 +156,9 @@ export async function syncCollectionsFromControllr(input: {
       nowMs: clock(),
       budgetMs,
     }),
-    configuredTimeoutMs: config.timeoutMs,
+    configuredTimeoutMs: Math.min(config.timeoutMs, COLLECTION_DISCOVERY_LOGIN_TIMEOUT_MS),
+    persistReleaseMarginMs:
+      COLLECTION_DISCOVERY_LIST_TIMEOUT_MS + COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
   })
   if (loginTimeout == null) {
     return {
@@ -206,7 +211,7 @@ export async function syncCollectionsFromControllr(input: {
     clock,
     startedAtMs,
     budgetMs,
-    configuredTimeoutMs: config.timeoutMs,
+    configuredTimeoutMs: COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
     minimumDaysOverdue: settings.minimumDaysOverdue,
     collectionsEnabled: settings.isEnabled,
     fetchPage: async ({ referenceDate: frozenDate, afterInvoicePk, timeoutMs }) => {
