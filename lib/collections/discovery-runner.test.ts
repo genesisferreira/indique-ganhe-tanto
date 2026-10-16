@@ -1591,6 +1591,36 @@ describe("TEST H/I/J/K/L — histograma sanitizado de skips", () => {
     assert.equal(result.status, "paused")
   })
 
+  it("contrato cancelado conta cancelled_contract e não cria caso", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "hist-cancelled",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      maxPages: 1,
+      fetchPage: async () => ({
+        ok: true,
+        rows: [{ invoicePk: "11" }],
+        total: 1,
+      }),
+      toInvoice: (row) => ({
+        ...invoice(String(row.invoicePk), 12),
+        contractStatus: 5,
+      }),
+    })
+    assert.equal(result.created, 0)
+    assert.equal(result.updated, 0)
+    assert.equal(result.skipReasons.cancelled_contract, 1)
+    assert.equal(sumDiscoverySkipHistogram(result.skipReasons), result.skippedThisBatch)
+  })
+
   it("fatura removida não mapeada conta removed_or_cancelled", async () => {
     const store = createMemoryDiscoveryStore()
     const repo = createMemoryDiscoveryCaseRepo()

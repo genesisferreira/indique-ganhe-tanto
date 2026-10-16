@@ -5,8 +5,9 @@ import type { CollectionSyncDecision } from "@/lib/collections/sync-decision"
  * Motivos estáveis de skip na descoberta. Sem PII, invoice_pk, case_id,
  * payload ERP ou valores financeiros.
  *
- * cancelled_client_or_contract não entra: o código local não prova o campo
- * de cancelamento de cliente/contrato (CANCELLED_SCOPE_NOT_PROVEN).
+ * cancelled_client não entra: ACL_CLIENT não prova cancelamento definitivo
+ * (CANCELLED_SCOPE_NOT_PROVEN). cancelled_contract entra só para
+ * contract_status integer 5 (CANCELED / Cancelado).
  * existing_open_unchanged não entra: caso open existente segue update_open.
  */
 export const DISCOVERY_SKIP_REASONS = [
@@ -15,6 +16,7 @@ export const DISCOVERY_SKIP_REASONS = [
   "already_paid",
   "already_closed",
   "removed_or_cancelled",
+  "cancelled_contract",
   "missing_identity",
   "insufficient_financial_data",
   "paid_open_deferred",
@@ -34,6 +36,7 @@ export function emptyDiscoverySkipHistogram(): DiscoverySkipHistogram {
     already_paid: 0,
     already_closed: 0,
     removed_or_cancelled: 0,
+    cancelled_contract: 0,
     missing_identity: 0,
     insufficient_financial_data: 0,
     paid_open_deferred: 0,

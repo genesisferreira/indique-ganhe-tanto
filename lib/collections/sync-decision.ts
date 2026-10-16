@@ -7,6 +7,7 @@ import {
   shouldOpenCollectionCase,
 } from "@/lib/collections/eligibility"
 import { buildAuditedErpSnapshot } from "@/lib/collections/sanitize"
+import { classifyClientContractCancellation } from "@/lib/operational/cancelled"
 import type { CollectionCaseStatus } from "@/types/collections"
 
 export type CollectionSyncInvoice = {
@@ -21,6 +22,8 @@ export type CollectionSyncInvoice = {
   isPaid: boolean
   invoiceAmountDocument: number | null
   invoiceAmountPaid: number | null
+  clientStatus?: unknown
+  contractStatus?: unknown
 }
 
 export type ExistingCollectionCase = {
@@ -37,6 +40,8 @@ export type CollectionSyncSkipReason =
   | "already_paid"
   | "already_closed"
   | "collections_disabled"
+  | "cancelled_contract"
+  | "inconclusive"
 
 export type CollectionSyncDecision =
   | { action: "skip"; reason: CollectionSyncSkipReason }
@@ -69,6 +74,17 @@ export function decideCollectionSyncAction(input: {
       return { action: "skip", reason: "already_closed" }
     }
     return { action: "close_paid" }
+  }
+
+  const cancellation = classifyClientContractCancellation({
+    clientStatus: input.invoice.clientStatus,
+    contractStatus: input.invoice.contractStatus,
+  })
+  if (cancellation.skipAsCancelled) {
+    return { action: "skip", reason: "cancelled_contract" }
+  }
+  if (cancellation.skipAsInconclusive) {
+    return { action: "skip", reason: "inconclusive" }
   }
 
   if (input.collectionsEnabled === false) {

@@ -3,6 +3,7 @@ import { computeDaysOverdue, isControllrInvoicePaid } from "@/lib/collections/el
 import { classifyInvoiceDeletedFlag } from "@/lib/collections/skip-reason"
 import type { CollectionSyncInvoice } from "@/lib/collections/sync-decision"
 import { sanitizeCustomerDocument, sanitizeCustomerName } from "@/lib/collections/sanitize"
+import { coalesceControllrStatus } from "@/lib/operational/cancelled"
 import type { BrbyteInvoiceListRow } from "@/types/brbyte"
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -75,6 +76,8 @@ export function presentCollectionInvoiceFromListRow(
     isPaid: isControllrInvoicePaid({ invoiceMsg, invoiceDateCredit }),
     invoiceAmountDocument: monetary.invoiceAmountDocument,
     invoiceAmountPaid: monetary.invoiceAmountPaid,
+    clientStatus: coalesceControllrStatus(raw, ["client_status", "clientStatus"]),
+    contractStatus: coalesceControllrStatus(raw, ["contract_status", "contractStatus"]),
   }
 }
 

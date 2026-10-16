@@ -45,6 +45,28 @@ describe("presentCollectionInvoiceFromListRow", () => {
     assert.equal(presented?.customerDocument, "***8901")
     assert.equal(presented?.isPaid, false)
     assert.equal(presented?.invoiceAmountDocument, 199.9)
+    assert.equal(presented?.contractStatus, undefined)
+    assert.equal(presented?.clientStatus, undefined)
+  })
+
+  it("propaga contract_status e client_status inteiros do raw da lista", () => {
+    const row: BrbyteInvoiceListRow = {
+      invoicePk: "inv-10",
+      contractPk: "ct-10",
+      invoiceDueDate: "2026-09-01",
+      invoiceDate: null,
+      invoicePeriod: null,
+      invoiceDeleted: false,
+      raw: {
+        invoice_msg: "open",
+        invoice_amount_document: 50,
+        contract_status: 5,
+        client_status: 1,
+      },
+    }
+    const presented = presentCollectionInvoiceFromListRow(row)
+    assert.equal(presented?.contractStatus, 5)
+    assert.equal(presented?.clientStatus, 1)
   })
 
   it("TEST G — flag invoice_deleted inválida não mapeia caso", () => {

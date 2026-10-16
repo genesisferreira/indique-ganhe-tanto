@@ -118,6 +118,24 @@ describe("TEST G — filtro ERP não substitui os 5 dias do CRM", () => {
   })
 })
 
+describe("contrato Bloqueado permanece no recorte; Cancelado sai no CRM", () => {
+  it("contract_status 4 cria; 5 não cria", () => {
+    const blocked = decideCollectionSyncAction({
+      invoice: { ...invoice(12, "inv-blocked"), contractStatus: 4 },
+      existing: null,
+      now,
+    })
+    const cancelled = decideCollectionSyncAction({
+      invoice: { ...invoice(12, "inv-cancelled"), contractStatus: 5 },
+      existing: null,
+      now,
+    })
+    assert.equal(blocked.action, "create")
+    assert.equal(cancelled.action, "skip")
+    if (cancelled.action === "skip") assert.equal(cancelled.reason, "cancelled_contract")
+  })
+})
+
 describe("TEST H — ausência na lista de atrasados não é pagamento", () => {
   it("caso existente fora do recorte não fecha, não zera dívida e não marca pago", () => {
     const scanned = new Set(["inv-seen"])

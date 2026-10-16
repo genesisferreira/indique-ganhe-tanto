@@ -3,6 +3,12 @@ import { describe, it } from "node:test"
 import { decideCollectionSyncAction } from "@/lib/collections/sync-decision"
 import {
   CANCELLED_SCOPE_NOT_PROVEN,
+  CONTRACT_CANCELLED_PROVEN,
+  CONTRACT_STATUS_INCONCLUSIVE,
+  CONTROLLR_CLIENT_STATUS_CODE,
+  CONTROLLR_CLIENT_STATUS_LABEL,
+  CONTROLLR_CONTRACT_STATUS_CODE,
+  CONTROLLR_CONTRACT_STATUS_LABEL,
   classifyClientContractCancellation,
   probeControllrCancellation,
   shouldExcludeCancelledFromCollections,
@@ -22,15 +28,17 @@ const eligible = {
   invoiceAmountPaid: 0,
 }
 
-describe("Y) cancelamento ERP não confirmado não inventa filtro", () => {
-  it("probe nunca marca cancelled", () => {
+const now = new Date("2026-09-11T00:00:00.000Z")
+
+describe("Y) setting include_cancelled não opera exclusão de cliente", () => {
+  it("probe de cliente nunca marca cancelled", () => {
     const probe = probeControllrCancellation({ status: "Cancelado", cancelled: true })
     assert.equal(probe.confirmed, false)
     assert.equal(probe.cancelled, false)
     assert.equal(probe.scope, CANCELLED_SCOPE_NOT_PROVEN)
   })
 
-  it("include_cancelled true ou false não exclui (filtro não operacional)", () => {
+  it("include_cancelled true ou false não exclui cliente (filtro não operacional)", () => {
     assert.deepEqual(
       shouldExcludeCancelledFromCollections({ includeCancelledCustomers: false }),
       { exclude: false, operational: false, scope: CANCELLED_SCOPE_NOT_PROVEN }
@@ -42,15 +50,18 @@ describe("Y) cancelamento ERP não confirmado não inventa filtro", () => {
   })
 })
 
-describe("TEST E — cancelamento de cliente/contrato não comprovado", () => {
-  it("client_status não inventa skip cancelled", () => {
-    const classified = classifyClientContractCancellation({ clientStatus: 1, contractStatus: "Cancelado" })
+describe("TEST E — client_status não prova cancelamento", () => {
+  it("client_status Desabilitado não inventa skip cancelled", () => {
+    const classified = classifyClientContractCancellation({
+      clientStatus: CONTROLLR_CLIENT_STATUS_CODE.DISABLED,
+    })
     assert.equal(classified.skipAsCancelled, false)
     assert.equal(classified.scope, CANCELLED_SCOPE_NOT_PROVEN)
+    assert.equal(CONTROLLR_CLIENT_STATUS_LABEL[1], "Desabilitado")
     const decision = decideCollectionSyncAction({
-      invoice: eligible,
+      invoice: { ...eligible, clientStatus: CONTROLLR_CLIENT_STATUS_CODE.DISABLED },
       existing: null,
-      now: new Date("2026-09-11T00:00:00.000Z"),
+      now,
       minimumDaysOverdue: 5,
     })
     assert.equal(decision.action, "create")
@@ -58,7 +69,7 @@ describe("TEST E — cancelamento de cliente/contrato não comprovado", () => {
 })
 
 describe("TEST F — bloqueio/suspensão não é cancelamento", () => {
-  it("blocked/suspended não autorizam skip", () => {
+  it("blocked/suspended sem enum de contrato não autorizam skip", () => {
     const classified = classifyClientContractCancellation({
       blocked: true,
       suspended: true,
@@ -70,13 +81,20 @@ describe("TEST F — bloqueio/suspensão não é cancelamento", () => {
 })
 
 describe("TEST I/J/K/N/O — bloqueio, suspensão e idade não cancelam", () => {
-  const now = new Date("2026-09-11T00:00:00.000Z")
-
-  it("TEST I — bloqueado com fatura elegível permanece create", () => {
-    const classified = classifyClientContractCancellation({ blocked: true, clientStatus: "bloqueado" })
+  it("TEST I — contrato Bloqueado=4 com fatura elegível permanece create", () => {
+    assert.equal(CONTROLLR_CONTRACT_STATUS_LABEL[4], "Bloqueado")
+    const classified = classifyClientContractCancellation({
+      contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.BLOCKED,
+      clientStatus: CONTROLLR_CLIENT_STATUS_CODE.DISABLED,
+    })
     assert.equal(classified.skipAsCancelled, false)
+    assert.equal(classified.scope, CONTRACT_CANCELLED_PROVEN)
     const decision = decideCollectionSyncAction({
-      invoice: eligible,
+      invoice: {
+        ...eligible,
+        contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.BLOCKED,
+        clientStatus: CONTROLLR_CLIENT_STATUS_CODE.DISABLED,
+      },
       existing: null,
       now,
       minimumDaysOverdue: 5,
@@ -84,15 +102,34 @@ describe("TEST I/J/K/N/O — bloqueio, suspensão e idade não cancelam", () => 
     assert.equal(decision.action, "create")
   })
 
-  it("TEST J — suspenso não é cancelado", () => {
-    const classified = classifyClientContractCancellation({ suspended: true })
-    assert.equal(classified.blockedOrSuspendedIsCancelled, false)
-    assert.equal(classified.skipAsCancelled, false)
+  it("TEST J — Alertado/Pendente não são cancelados", () => {
+    const alerted = classifyClientContractCancellation({
+      contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.ALERTED,
+    })
+    const pending = classifyClientContractCancellation({
+      contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.PENDING,
+    })
+    assert.equal(alerted.blockedOrSuspendedIsCancelled, false)
+    assert.equal(alerted.skipAsCancelled, false)
+    assert.equal(pending.skipAsCancelled, false)
+    const decision = decideCollectionSyncAction({
+      invoice: { ...eligible, contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.ALERTED },
+      existing: null,
+      now,
+      minimumDaysOverdue: 5,
+    })
+    assert.equal(decision.action, "create")
   })
 
   it("TEST K — bloqueado pago não cria caso", () => {
     const decision = decideCollectionSyncAction({
-      invoice: { ...eligible, isPaid: true, invoiceMsg: "paid", invoiceDateCredit: "2026-09-10" },
+      invoice: {
+        ...eligible,
+        isPaid: true,
+        invoiceMsg: "paid",
+        invoiceDateCredit: "2026-09-10",
+        contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.BLOCKED,
+      },
       existing: null,
       now,
     })
@@ -116,26 +153,95 @@ describe("TEST I/J/K/N/O — bloqueio, suspensão e idade não cancelam", () => 
     assert.equal(decision.action, "create")
   })
 
-  it("TEST O — status desconhecido não inventa cancelamento", () => {
-    const classified = classifyClientContractCancellation({ clientStatus: "???", contractStatus: 123 })
+  it("TEST O — status de contrato desconhecido vira inconclusive", () => {
+    const classified = classifyClientContractCancellation({
+      clientStatus: "???",
+      contractStatus: 123,
+    })
     assert.equal(classified.skipAsCancelled, false)
-    assert.equal(classified.scope, CANCELLED_SCOPE_NOT_PROVEN)
+    assert.equal(classified.skipAsInconclusive, true)
+    assert.equal(classified.scope, CONTRACT_STATUS_INCONCLUSIVE)
+    const decision = decideCollectionSyncAction({
+      invoice: { ...eligible, contractStatus: 123 },
+      existing: null,
+      now,
+      minimumDaysOverdue: 5,
+    })
+    assert.equal(decision.action, "skip")
+    if (decision.action === "skip") assert.equal(decision.reason, "inconclusive")
   })
 })
 
-describe("TEST L/M — cancelamento textual não comprovado não exclui", () => {
-  it("rótulo Cancelado sem enum comprovado ainda cria caso", () => {
+describe("TEST L/M — cancelamento textual não é o enum 5", () => {
+  it("rótulo Cancelado sem integer 5 não exclui como cancelled_contract", () => {
     const classified = classifyClientContractCancellation({
       clientStatus: "Cancelado",
       contractStatus: "Cancelado",
     })
     assert.equal(classified.skipAsCancelled, false)
+    assert.equal(classified.skipAsInconclusive, true)
     const decision = decideCollectionSyncAction({
-      invoice: eligible,
+      invoice: { ...eligible, contractStatus: "Cancelado" },
       existing: { id: "case-1", status: "open", invoicePk: "inv-1" },
-      now: new Date("2026-09-11T00:00:00.000Z"),
+      now,
       minimumDaysOverdue: 5,
     })
-    assert.equal(decision.action, "update_open")
+    assert.equal(decision.action, "skip")
+    if (decision.action === "skip") assert.equal(decision.reason, "inconclusive")
+  })
+})
+
+describe("contrato Cancelado=5", () => {
+  it("contrato Ativado=1 permanece elegível", () => {
+    assert.equal(CONTROLLR_CONTRACT_STATUS_LABEL[1], "Ativado")
+    const decision = decideCollectionSyncAction({
+      invoice: { ...eligible, contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.ACTIVATED },
+      existing: null,
+      now,
+      minimumDaysOverdue: 5,
+    })
+    assert.equal(decision.action, "create")
+  })
+
+  it("contrato Cancelado=5 não cria nem atualiza caso", () => {
+    assert.equal(CONTROLLR_CONTRACT_STATUS_LABEL[5], "Cancelado")
+    const classified = classifyClientContractCancellation({
+      contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.CANCELED,
+    })
+    assert.equal(classified.cancelled, true)
+    assert.equal(classified.skipAsCancelled, true)
+    assert.equal(classified.skipReason, "cancelled_contract")
+    assert.equal(classified.scope, CONTRACT_CANCELLED_PROVEN)
+    const create = decideCollectionSyncAction({
+      invoice: { ...eligible, contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.CANCELED },
+      existing: null,
+      now,
+      minimumDaysOverdue: 5,
+    })
+    assert.equal(create.action, "skip")
+    if (create.action === "skip") assert.equal(create.reason, "cancelled_contract")
+    const update = decideCollectionSyncAction({
+      invoice: { ...eligible, contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.CANCELED },
+      existing: { id: "case-1", status: "open", invoicePk: "inv-1" },
+      now,
+      minimumDaysOverdue: 5,
+    })
+    assert.equal(update.action, "skip")
+    if (update.action === "skip") assert.equal(update.reason, "cancelled_contract")
+  })
+
+  it("contrato cancelado pago segue a regra de pagamento, não fecha por cancelamento", () => {
+    const decision = decideCollectionSyncAction({
+      invoice: {
+        ...eligible,
+        isPaid: true,
+        invoiceMsg: "paid",
+        invoiceDateCredit: "2026-09-10",
+        contractStatus: CONTROLLR_CONTRACT_STATUS_CODE.CANCELED,
+      },
+      existing: { id: "case-1", status: "open", invoicePk: "inv-1" },
+      now,
+    })
+    assert.equal(decision.action, "close_paid")
   })
 })

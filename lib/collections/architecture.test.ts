@@ -478,13 +478,25 @@ describe("3.1E-AA elegibilidade e observabilidade de skips", () => {
       (DISCOVERY_SKIP_REASONS as readonly string[]).includes("cancelled_client_or_contract"),
       false
     )
+    assert.equal(
+      (DISCOVERY_SKIP_REASONS as readonly string[]).includes("cancelled_client"),
+      false
+    )
+    assert.equal(
+      (DISCOVERY_SKIP_REASONS as readonly string[]).includes("cancelled_contract"),
+      true
+    )
     assert.match(runner, /incrementDiscoverySkip/)
     assert.match(sync, /skipReasons/)
     assert.match(query, /queryCutoffExclusiveUtc/)
     assert.match(query, /eligibilityReferenceDateUtcFromInstant/)
     assert.match(query, /minimumDaysOverdue - 1/)
     assert.match(query, /invoice_deleted/)
+    assert.equal(query.includes("contract_status"), false)
     assert.match(cancelled, /CANCELLED_SCOPE_NOT_PROVEN/)
+    assert.match(cancelled, /CONTRACT_CANCELLED_PROVEN/)
+    assert.match(cancelled, /CANCELED: 5/)
+    assert.match(cancelled, /BLOCKED: 4/)
     assert.match(contract, /overdue-invoice-list.keyset.v1/)
     assert.match(contract, /scannedInvoices = rows_seen/)
     assert.equal(skip.includes("invoice_pk"), true)
