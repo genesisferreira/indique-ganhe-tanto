@@ -240,6 +240,8 @@ export async function listOverdueInvoicesPage(input: {
   payload: Record<string, unknown> | null
   httpStatus: number | null
   message?: string
+  abortClass?: "timeout" | "external_abort" | "transport"
+  bodyReadComplete?: boolean
   page: number
   start: number
   limit: number
@@ -313,6 +315,8 @@ export async function listOverdueInvoicesPage(input: {
             : null,
       httpStatus: result.status,
       message: result.message ?? "Falha ao listar faturas atrasadas no Controllr.",
+      abortClass: result.abortClass,
+      bodyReadComplete: result.bodyReadComplete,
       page,
       start,
       limit,

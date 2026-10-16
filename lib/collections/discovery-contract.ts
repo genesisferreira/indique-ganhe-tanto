@@ -33,7 +33,38 @@ export const COLLECTION_DISCOVERY_SORT_DIR = OVERDUE_INVOICE_LIST_SORT_DIR
 export const COLLECTION_DISCOVERY_BUDGET_MARGIN_MS = 5_000
 export const COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS =
   COLLECTION_DISCOVERY_BUDGET_MARGIN_MS
+/**
+ * Reserva conservadora para persistir até pageSize=15 + advance + release
+ * depois de uma listagem já limitada. Não inclui nova consulta ERP.
+ */
+export const COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS = 8_000
+/** Folga mínima para o release depois da última escrita da página. */
+export const COLLECTION_DISCOVERY_RELEASE_SLACK_MS = 1_000
 export const COLLECTION_DISCOVERY_MIN_QUERY_TIMEOUT_MS = 1_000
+export const COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS = 2
+
+export type DiscoveryPauseStage =
+  | "pre_list_budget"
+  | "post_list_no_reserve"
+  | "list_timeout_headers"
+  | "list_timeout_body"
+  | "partial_page"
+  | "page_limit"
+  | "page_confirmed_budget"
+  | "recon_budget"
+  | "zero_progress_loop"
+
+const PAUSE_STAGE_SET: ReadonlySet<string> = new Set([
+  "pre_list_budget",
+  "post_list_no_reserve",
+  "list_timeout_headers",
+  "list_timeout_body",
+  "partial_page",
+  "page_limit",
+  "page_confirmed_budget",
+  "recon_budget",
+  "zero_progress_loop",
+])
 
 export type CollectionDiscoveryStatus =
   | "running"
@@ -66,6 +97,7 @@ export type CollectionDiscoveryRun = {
   errorCount: number
   reportedTotal: number | null
   lastErrorClass: string | null
+  consecutiveNoProgress: number
   coverageProven: false
   uniqueOrderProven: false
   phase: CollectionDiscoveryPhase
@@ -125,6 +157,59 @@ export function sanitizeDiscoveryErrorClass(value: string | null | undefined): s
     return "sanitized_error"
   }
   return trimmed
+}
+
+export function formatDiscoveryPauseClass(
+  stage: DiscoveryPauseStage,
+  consecutiveNoProgress: number
+): string {
+  if (stage === "zero_progress_loop") return "zero_progress_loop"
+  return `${stage}:${Math.max(0, Math.floor(consecutiveNoProgress))}`
+}
+
+export function parseDiscoveryPauseClass(value: string | null | undefined): {
+  stage: DiscoveryPauseStage | null
+  consecutive: number
+} {
+  if (!value) return { stage: null, consecutive: 0 }
+  if (value === "zero_progress_loop") {
+    return { stage: "zero_progress_loop", consecutive: COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS }
+  }
+  const match = /^([a-z_]+):(\d+)$/.exec(value)
+  if (match && PAUSE_STAGE_SET.has(match[1])) {
+    return {
+      stage: match[1] as DiscoveryPauseStage,
+      consecutive: Number(match[2]),
+    }
+  }
+  if (PAUSE_STAGE_SET.has(value)) {
+    return { stage: value as DiscoveryPauseStage, consecutive: 1 }
+  }
+  return { stage: null, consecutive: 0 }
+}
+
+export function readConsecutiveNoProgress(run: {
+  consecutiveNoProgress?: number | null
+  lastErrorClass?: string | null
+}): number {
+  const stored = Number(run.consecutiveNoProgress ?? 0)
+  if (Number.isFinite(stored) && stored > 0) return Math.floor(stored)
+  return parseDiscoveryPauseClass(run.lastErrorClass).consecutive
+}
+
+/**
+ * Timeout da listagem: reserva persist+advance+release antes de consultar.
+ * null = não iniciar a listagem.
+ */
+export function collectionDiscoveryListTimeoutMs(input: {
+  remainingMs: number
+  configuredTimeoutMs: number
+}): number | null {
+  return collectionDiscoveryCappedTimeoutMs({
+    remainingMs: input.remainingMs,
+    configuredTimeoutMs: input.configuredTimeoutMs,
+    persistReleaseMarginMs: COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
+  })
 }
 
 export function collectionDiscoveryRemainingBudgetMs(input: {

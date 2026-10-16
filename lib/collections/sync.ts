@@ -167,10 +167,30 @@ export async function syncCollectionsFromControllr(input: {
     }
   }
 
+  const loginStarted = clock()
   const login = await brbyteAdminLogin({ ...config, timeoutMs: loginTimeout })
+  const loginDurationMs = Math.max(0, clock() - loginStarted)
   if ("error" in login) {
+    console.log(LOG_TAG, {
+      scope: "discovery-login",
+      loginDurationMs,
+      remainingAfterLoginMs: collectionDiscoveryRemainingBudgetMs({
+        startedAtMs,
+        nowMs: clock(),
+        budgetMs,
+      }),
+    })
     return { ...empty, ok: false, degraded: true, message: login.error }
   }
+  console.log(LOG_TAG, {
+    scope: "discovery-login",
+    loginDurationMs,
+    remainingAfterLoginMs: collectionDiscoveryRemainingBudgetMs({
+      startedAtMs,
+      nowMs: clock(),
+      budgetMs,
+    }),
+  })
 
   const now = input.now ?? new Date()
   const referenceDate = freezeInvoiceListReferenceDate(now)
@@ -203,6 +223,8 @@ export async function syncCollectionsFromControllr(input: {
         httpStatus: page.httpStatus,
         count: page.rows.length,
         total: page.total,
+        abortClass: page.abortClass ?? null,
+        bodyReadComplete: page.bodyReadComplete ?? null,
       })
       return {
         ok: page.ok,
@@ -210,6 +232,8 @@ export async function syncCollectionsFromControllr(input: {
         total: page.total,
         httpStatus: page.httpStatus,
         message: page.message,
+        abortClass: page.abortClass,
+        bodyReadComplete: page.bodyReadComplete,
       }
     },
     toInvoice: (row) => presentCollectionInvoiceFromListRow(row),
@@ -259,6 +283,20 @@ export async function syncCollectionsFromControllr(input: {
         payload: info.payload,
       })
     },
+  })
+
+  console.log(LOG_TAG, {
+    scope: "discovery-batch",
+    pauseStage: batch.pauseStage,
+    progressMade: batch.progressMade,
+    consecutiveNoProgress: batch.consecutiveNoProgress,
+    loginDurationMs,
+    listDurationMs: batch.listDurationMs,
+    persistenceDurationMs: batch.persistenceDurationMs,
+    remainingBeforeListMs: batch.remainingBeforeListMs,
+    remainingAfterListMs: batch.remainingAfterListMs,
+    errorClass: batch.status === "failed" ? "failed" : batch.pauseStage,
+    discoveryStatus: batch.status,
   })
 
   return {

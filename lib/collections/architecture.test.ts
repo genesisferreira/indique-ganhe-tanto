@@ -422,7 +422,31 @@ describe("3.1E-O timeout HTTP cobre o corpo", () => {
     assert.match(contract, /COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_S = 60/)
     assert.match(contract, /COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH = 4/)
     assert.match(contract, /COLLECTION_DISCOVERY_LEASE_MS/)
+    assert.match(contract, /COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS = 8_000/)
+    assert.match(contract, /COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS = 2/)
     assert.equal(contract.includes("COLLECTION_DISCOVERY_TIME_BUDGET_MS = 90"), false)
+  })
+})
+
+describe("3.1E-V garantia de progresso", () => {
+  it("patch local não expõe PII e não altera assinaturas RPC existentes", () => {
+    const patch = readFileSync(
+      join(repoRoot, "supabase/patch-collection-discovery-progress-guarantee.sql"),
+      "utf8"
+    )
+    assert.match(patch, /consecutive_no_progress/)
+    assert.match(patch, /zero_progress_loop/)
+    assert.match(patch, /grant execute on function public\.release_collection_discovery_run/)
+    assert.match(patch, /to service_role/)
+    assert.equal(/grant execute[\s\S]*release_collection_discovery_run[\s\S]*to authenticated/i.test(patch), false)
+    assert.equal(patch.includes("cookie"), false)
+    assert.equal(/password|authorization|bearer|secret/i.test(patch), false)
+    const runner = readFileSync(join(repoRoot, "lib/collections/discovery-runner.ts"), "utf8")
+    assert.match(runner, /collectionDiscoveryListTimeoutMs/)
+    assert.match(runner, /pauseNoProgress/)
+    assert.match(runner, /awaitListPageOrTimeout/)
+    const route = readFileSync(join(repoRoot, "app/api/admin/collections/sync/route.ts"), "utf8")
+    assert.match(route, /maxDuration = 60/)
   })
 })
 

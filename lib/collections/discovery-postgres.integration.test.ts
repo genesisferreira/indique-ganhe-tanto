@@ -1184,6 +1184,7 @@ describe("PostgreSQL real — descoberta retomável", { timeout: 180_000 }, () =
         reconcileScannedCount: Number(row.reconcileScannedCount ?? 0),
         reconcileClosedCount: Number(row.reconcileClosedCount ?? 0),
         reconcileSkippedCount: Number(row.reconcileSkippedCount ?? 0),
+        consecutiveNoProgress: Number(row.consecutiveNoProgress ?? 0),
       } as CollectionDiscoveryRun
     }
 
@@ -1500,5 +1501,35 @@ describe("PostgreSQL real — descoberta retomável", { timeout: 180_000 }, () =
     } finally {
       globalThis.fetch = originalFetch
     }
+  })
+
+  it("consecutive_no_progress sobrevive ao claim e zera no advance", async () => {
+    await closeResumableRuns()
+    const created = await claim(client, "progress-owner")
+    assert.equal(created.ok, true)
+    const runId = created.run.id
+    const generation = created.run.leaseGeneration
+    const paused = await rpc(
+      client,
+      `select public.release_collection_discovery_run($1,$2,$3,'paused','list_timeout_body:1') as payload`,
+      [runId, "progress-owner", generation]
+    )
+    const pausedPayload = paused.payload as Record<string, any>
+    assert.equal(pausedPayload.ok, true)
+    assert.equal(pausedPayload.run.consecutiveNoProgress, 1)
+    const reclaimed = await claim(client, "progress-owner-2", 60_000, runId)
+    assert.equal(reclaimed.ok, true)
+    assert.equal(reclaimed.run.consecutiveNoProgress, 1)
+    assert.equal(reclaimed.run.lastErrorClass, null)
+    const advanced = await rpc(
+      client,
+      `select public.advance_collection_discovery_checkpoint(
+         $1,$2,$3,'24',1,15,15,0,0,0,0,0,80,null
+       ) as payload`,
+      [runId, "progress-owner-2", reclaimed.run.leaseGeneration]
+    )
+    const advancedPayload = advanced.payload as Record<string, any>
+    assert.equal(advancedPayload.ok, true)
+    assert.equal(advancedPayload.run.consecutiveNoProgress, 0)
   })
 })

@@ -74,6 +74,7 @@ export type DiscoveryStore = {
       "paused" | "failed" | "pagination_ended" | "phases_completed"
     >
     lastErrorClass?: string | null
+    consecutiveNoProgress?: number
   }): Promise<DiscoveryWriteResult>
 }
 
@@ -81,6 +82,7 @@ function cloneRun(run: CollectionDiscoveryRun): CollectionDiscoveryRun {
   return {
     ...emptyDiscoveryReconciliationFields(),
     ...run,
+    consecutiveNoProgress: Number(run.consecutiveNoProgress ?? 0),
     phase: run.phase === "reconciliation" ? "reconciliation" : "discovery",
     reconcileCursorInvoicePk: run.reconcileCursorInvoicePk ?? null,
     reconcileScannedCount: Number(run.reconcileScannedCount ?? 0),
@@ -174,6 +176,7 @@ export function createMemoryDiscoveryStore(seed: CollectionDiscoveryRun[] = []):
             leaseUntil,
             leaseGeneration: existing.leaseGeneration + 1,
             lastErrorClass: null,
+            consecutiveNoProgress: Number(existing.consecutiveNoProgress ?? 0),
             coverageProven: false,
             uniqueOrderProven: false,
           }
@@ -194,6 +197,7 @@ export function createMemoryDiscoveryStore(seed: CollectionDiscoveryRun[] = []):
           leaseGeneration: 1,
           ...emptyDiscoveryCounters(),
           lastErrorClass: null,
+          consecutiveNoProgress: 0,
           coverageProven: false,
           uniqueOrderProven: false,
           ...emptyDiscoveryReconciliationFields(),
@@ -214,6 +218,7 @@ export function createMemoryDiscoveryStore(seed: CollectionDiscoveryRun[] = []):
           cursorLastInvoicePk: input.cursorLastInvoicePk,
           ...input.counters,
           lastErrorClass: input.lastErrorClass ?? run.lastErrorClass,
+          consecutiveNoProgress: 0,
           coverageProven: false,
           uniqueOrderProven: false,
         }
@@ -283,6 +288,8 @@ export function createMemoryDiscoveryStore(seed: CollectionDiscoveryRun[] = []):
           leaseOwner: null,
           leaseUntil: null,
           lastErrorClass: input.lastErrorClass ?? run.lastErrorClass,
+          consecutiveNoProgress:
+            input.consecutiveNoProgress ?? run.consecutiveNoProgress ?? 0,
           coverageProven: false,
           uniqueOrderProven: false,
         }

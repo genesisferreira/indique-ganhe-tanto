@@ -12,7 +12,9 @@ import {
   COLLECTION_DISCOVERY_ROUTE_MAX_DURATION_MS,
   COLLECTION_DISCOVERY_TIME_BUDGET_MS,
   COLLECTION_DISCOVERY_TIMEZONE,
+  COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
   collectionDiscoveryCappedTimeoutMs,
+  collectionDiscoveryListTimeoutMs,
   sanitizeDiscoveryErrorClass,
 } from "@/lib/collections/discovery-contract"
 import { validateDiscoveryCheckpoint } from "@/lib/collections/discovery-checkpoint"
@@ -434,6 +436,7 @@ describe("checkpoint incompatível não retoma em silêncio", () => {
       errorCount: 0,
       reportedTotal: 40,
       lastErrorClass: null,
+      consecutiveNoProgress: 0,
       coverageProven: false as const,
       uniqueOrderProven: false as const,
       phase: "discovery" as const,
@@ -481,15 +484,27 @@ describe("TEST I — segurança", () => {
       join(repoRoot, "supabase/patch-collection-discovery-reconciliation.sql"),
       "utf8"
     )
+    const progressSql = readFileSync(
+      join(repoRoot, "supabase/patch-collection-discovery-progress-guarantee.sql"),
+      "utf8"
+    )
     assert.equal(sql.includes("cookie"), false)
     assert.equal(/password|authorization|bearer|secret/i.test(sql), false)
     assert.equal(reconSql.includes("cookie"), false)
     assert.equal(/password|authorization|bearer|secret/i.test(reconSql), false)
+    assert.equal(progressSql.includes("cookie"), false)
+    assert.equal(/password|authorization|bearer|secret/i.test(progressSql), false)
     const route = readFileSync(join(repoRoot, "app/api/admin/collections/sync/route.ts"), "utf8")
     assert.match(route, /authorizeOperationalRequest/)
     assert.match(route, /action: "sync"/)
     const sync = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
     const logStart = sync.indexOf('scope: "discovery-page"')
+    const batchLog = sync.indexOf('scope: "discovery-batch"')
+    assert.equal(batchLog > 0, true)
+    const batchChunk = sync.slice(batchLog, batchLog + 520)
+    assert.equal(batchChunk.includes("cookie"), false)
+    assert.equal(batchChunk.includes("invoicePk"), false)
+    assert.equal(batchChunk.includes("login.cookie"), false)
     assert.equal(logStart > 0, true)
     assert.equal(sync.slice(logStart, logStart + 180).includes("cookie"), false)
     assert.equal(sync.includes("login.cookie"), true)
@@ -577,7 +592,7 @@ describe("orçamento de duração com relógio controlado", () => {
       configuredTimeoutMs: 5_000,
       fetchPage: async ({ timeoutMs }) => {
         assert.equal(timeoutMs <= 5_000, true)
-        nowMs += 12_000
+        nowMs += 3_000
         return {
           ok: true,
           rows: page.map((invoicePk) => ({ invoicePk })),
@@ -622,7 +637,7 @@ describe("orçamento de duração com relógio controlado", () => {
       },
       toInvoice: (row) => invoice(String(row.invoicePk), 12),
     })
-    assert.equal(seenTimeout, 15_000)
+    assert.equal(seenTimeout, 20_000 - COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS)
     assert.equal(result.status, "pagination_ended")
   })
 
@@ -724,11 +739,11 @@ describe("orçamento de duração com relógio controlado", () => {
       startedAtMs: 0,
       clock: () => nowMs,
       budgetMs: 45_000,
-      configuredTimeoutMs: 5_000,
+      configuredTimeoutMs: 30_000,
       maxPages: 4,
       fetchPage: async () => {
         fetches += 1
-        nowMs += 30_000
+        nowMs += 22_000
         return { ok: true, rows: page.map((invoicePk) => ({ invoicePk })), total: 30 }
       },
       toInvoice: (row) => invoice(String(row.invoicePk), 12),
@@ -1013,6 +1028,375 @@ describe("reconciliação retomável no runner existente", () => {
     assert.match(result.message, /migration ausente/)
     assert.equal(repo.cases.get("93")?.status, "open")
     assert.equal(repo.paymentEvents.length, 0)
+  })
+})
+
+describe("3.1E-V garantia de progresso", () => {
+  const page15 = ["10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"]
+
+  function pausedExistingRun() {
+    return {
+      id: "22222222-2222-4222-8222-222222222222",
+      queryContractVersion: COLLECTION_DISCOVERY_QUERY_CONTRACT_VERSION,
+      referenceInstant: now.toISOString(),
+      referenceDate,
+      discoveryTimezone: COLLECTION_DISCOVERY_TIMEZONE,
+      paginationStrategy: COLLECTION_DISCOVERY_PAGINATION_STRATEGY,
+      cursorLastInvoicePk: null,
+      status: "paused" as const,
+      leaseOwner: null,
+      leaseUntil: null,
+      leaseGeneration: 1,
+      scannedPages: 0,
+      scannedInvoices: 0,
+      createdCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
+      assignedCount: 0,
+      unassignedCount: 0,
+      errorCount: 0,
+      reportedTotal: null,
+      lastErrorClass: null,
+      consecutiveNoProgress: 0,
+      coverageProven: false as const,
+      uniqueOrderProven: false as const,
+      phase: "discovery" as const,
+      reconcileCursorInvoicePk: null,
+      reconcileScannedCount: 0,
+      reconcileClosedCount: 0,
+      reconcileSkippedCount: 0,
+    }
+  }
+
+  it("login rápido + listagem rápida persiste a página e avança o cursor", async () => {
+    assert.equal(
+      collectionDiscoveryListTimeoutMs({ remainingMs: 20_000, configuredTimeoutMs: 30_000 }),
+      12_000
+    )
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    let nowMs = 0
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "fast",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 30_000,
+      maxPages: 1,
+      fetchPage: async () => {
+        nowMs += 800
+        return { ok: true, rows: page15.map((invoicePk) => ({ invoicePk })), total: 80 }
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.ok, true)
+    assert.equal(result.status, "paused")
+    assert.equal(result.cursorLastInvoicePk, "24")
+    assert.equal(result.created, 15)
+    assert.equal(result.progressMade, true)
+    assert.equal(result.consecutiveNoProgress, 0)
+    assert.equal(result.pauseStage, "page_limit")
+  })
+
+  it("login+listagem equivalentes à run real não repetem em silêncio", async () => {
+    const store = createMemoryDiscoveryStore([pausedExistingRun()])
+    const repo = createMemoryDiscoveryCaseRepo()
+    let fetches = 0
+    let nowMs = 24_000
+    const slowPage = async () => {
+      fetches += 1
+      nowMs += 41_000
+      return {
+        ok: true,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 8668,
+      }
+    }
+    const first = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "real-1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      runId: pausedExistingRun().id,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 30_000,
+      fetchPage: slowPage,
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(first.cursorLastInvoicePk, null)
+    assert.equal(first.created, 0)
+    assert.equal(first.progressMade, false)
+    assert.equal(first.pauseStage, "list_timeout_body")
+    assert.equal(first.consecutiveNoProgress, 1)
+    assert.equal(first.status, "paused")
+
+    nowMs = 24_000
+    const second = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "real-2",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      runId: pausedExistingRun().id,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 30_000,
+      fetchPage: slowPage,
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(second.runId, first.runId)
+    assert.equal(second.status, "failed")
+    assert.equal(second.pauseStage, "zero_progress_loop")
+    assert.equal(second.resumable, false)
+    assert.equal(second.created, 0)
+    assert.equal(second.cursorLastInvoicePk, null)
+
+    const beforeThird = fetches
+    const third = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "real-3",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      runId: pausedExistingRun().id,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      fetchPage: slowPage,
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(fetches, beforeThird)
+    assert.equal(third.pauseStage, "zero_progress_loop")
+    assert.equal(third.resumable, false)
+  })
+
+  it("sem orçamento antes da consulta pausa sem chamar ERP", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    let fetches = 0
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "pre-list",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => 44_500,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 30_000,
+      fetchPage: async () => {
+        fetches += 1
+        return { ok: true, rows: [{ invoicePk: "10" }], total: 1 }
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(fetches, 0)
+    assert.equal(result.pauseStage, "pre_list_budget")
+    assert.equal(result.cursorLastInvoicePk, null)
+    assert.equal(result.created, 0)
+  })
+
+  it("listagem perto do limite persiste a página com a reserva", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    let nowMs = 0
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "near-limit",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 30_000,
+      maxPages: 1,
+      fetchPage: async ({ timeoutMs }) => {
+        nowMs += timeoutMs - 50
+        return { ok: true, rows: page15.map((invoicePk) => ({ invoicePk })), total: 15 }
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.cursorLastInvoicePk, "24")
+    assert.equal(result.created, 15)
+    assert.equal(result.progressMade, true)
+    assert.equal(result.pauseStage, "page_limit")
+  })
+
+  it("página parcial não avança cursor e retomada é idempotente", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    let nowMs = 0
+    const first = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "partial-1",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 20_000,
+      configuredTimeoutMs: 5_000,
+      fetchPage: async () => {
+        nowMs += 3_000
+        return { ok: true, rows: page15.map((invoicePk) => ({ invoicePk })), total: 15 }
+      },
+      prepareInvoice: async (value) => {
+        nowMs += 4_000
+        return value
+      },
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(first.pauseStage, "partial_page")
+    assert.equal(first.cursorLastInvoicePk, null)
+    assert.equal(first.created >= 1, true)
+    assert.equal(first.created < 15, true)
+    const createdFirst = first.created
+    nowMs = 0
+    const second = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "partial-2",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      startedAtMs: 0,
+      clock: () => nowMs,
+      budgetMs: 45_000,
+      configuredTimeoutMs: 5_000,
+      fetchPage: async () => ({
+        ok: true,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 15,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(second.runId, first.runId)
+    assert.equal(repo.createdEvents.length, 15)
+    assert.equal(second.cursorLastInvoicePk, "24")
+  })
+
+  it("timeout aguardando headers não atribui HTTP de sucesso ao ERP", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "headers",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      fetchPage: async () => ({
+        ok: false,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 15,
+        httpStatus: null,
+        abortClass: "timeout",
+        bodyReadComplete: false,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.pauseStage, "list_timeout_headers")
+    assert.equal(result.created, 0)
+    assert.equal(result.cursorLastInvoicePk, null)
+    assert.equal(repo.cases.size, 0)
+  })
+
+  it("timeout durante o corpo não persiste", async () => {
+    const store = createMemoryDiscoveryStore()
+    const repo = createMemoryDiscoveryCaseRepo()
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "body",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      fetchPage: async () => ({
+        ok: false,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 15,
+        httpStatus: 200,
+        abortClass: "timeout",
+        bodyReadComplete: true,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.pauseStage, "list_timeout_body")
+    assert.equal(result.created, 0)
+    assert.equal(repo.cases.size, 0)
+  })
+
+  it("run paused existente permanece compatível sem novo runId", async () => {
+    const seeded = pausedExistingRun()
+    const store = createMemoryDiscoveryStore([seeded])
+    const repo = createMemoryDiscoveryCaseRepo()
+    const result = await runOverdueDiscoveryBatch({
+      store,
+      repo,
+      owner: "compat",
+      actorProfileId: "actor-1",
+      now,
+      referenceInstant: now,
+      referenceDate,
+      runId: seeded.id,
+      minimumDaysOverdue: 5,
+      collectionsEnabled: true,
+      maxPages: 1,
+      fetchPage: async () => ({
+        ok: true,
+        rows: page15.map((invoicePk) => ({ invoicePk })),
+        total: 15,
+      }),
+      toInvoice: (row) => invoice(String(row.invoicePk), 12),
+    })
+    assert.equal(result.runId, seeded.id)
+    assert.equal(result.referenceDate, seeded.referenceDate)
+    assert.equal(result.referenceInstant, seeded.referenceInstant)
+    assert.equal(result.cursorLastInvoicePk, "24")
+    assert.equal(result.created, 15)
   })
 })
 

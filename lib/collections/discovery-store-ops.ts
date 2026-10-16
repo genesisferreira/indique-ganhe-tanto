@@ -55,6 +55,7 @@ function asRun(value: unknown): CollectionDiscoveryRun | null {
         ? null
         : Number(row.reportedTotal),
     lastErrorClass: asString(row.lastErrorClass),
+    consecutiveNoProgress: Number(row.consecutiveNoProgress ?? 0),
     coverageProven: false,
     uniqueOrderProven: false,
     phase: row.phase === "reconciliation" ? "reconciliation" : defaults.phase,

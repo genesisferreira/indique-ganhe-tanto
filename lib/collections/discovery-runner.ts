@@ -1,18 +1,24 @@
 import { parseOverdueInvoicePk } from "@/lib/brbyte/overdue-invoice-list-query"
 import {
   COLLECTION_DISCOVERY_LEASE_MS,
+  COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS,
   COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH,
   COLLECTION_DISCOVERY_PAGE_SIZE,
   COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS,
+  COLLECTION_DISCOVERY_RELEASE_SLACK_MS,
   COLLECTION_DISCOVERY_TIME_BUDGET_MS,
   collectionDiscoveryCappedTimeoutMs,
+  collectionDiscoveryListTimeoutMs,
   collectionDiscoveryRemainingBudgetMs,
   collectionDiscoveryShouldStopForTime,
+  formatDiscoveryPauseClass,
+  readConsecutiveNoProgress,
   sanitizeDiscoveryErrorClass,
   type CollectionDiscoveryCounters,
   type CollectionDiscoveryPhase,
   type CollectionDiscoveryRun,
   type CollectionDiscoveryStatus,
+  type DiscoveryPauseStage,
 } from "@/lib/collections/discovery-contract"
 import { validateDiscoveryPageProgression } from "@/lib/collections/discovery-page"
 import {
@@ -33,6 +39,8 @@ export type DiscoveryFetchedPage<TRow extends { invoicePk: string | null } = { i
   total: number | null
   httpStatus?: number | null
   message?: string
+  abortClass?: "timeout" | "external_abort" | "transport"
+  bodyReadComplete?: boolean
 }
 
 export type DiscoveryRunnerDeps<TRow extends { invoicePk: string | null } = { invoicePk: string | null }> = {
@@ -93,6 +101,32 @@ export type DiscoveryBatchResult = {
   reconcileCursorInvoicePk: string | null
   closedPaid: number
   message: string
+  pauseStage: DiscoveryPauseStage | null
+  progressMade: boolean
+  consecutiveNoProgress: number
+  listDurationMs: number | null
+  persistenceDurationMs: number | null
+  remainingBeforeListMs: number | null
+  remainingAfterListMs: number | null
+}
+
+const LIST_WAIT_TIMEOUT = Symbol("list-wait-timeout")
+
+async function awaitListPageOrTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number
+): Promise<T | typeof LIST_WAIT_TIMEOUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<typeof LIST_WAIT_TIMEOUT>((resolve) => {
+        timer = setTimeout(() => resolve(LIST_WAIT_TIMEOUT), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 function countersFromRun(run: CollectionDiscoveryRun): CollectionDiscoveryCounters {
@@ -135,6 +169,13 @@ function resultFromRun(
     phase: run.phase,
     reconcileCursorInvoicePk: run.reconcileCursorInvoicePk,
     closedPaid: run.reconcileClosedCount,
+    pauseStage: extra.pauseStage ?? null,
+    progressMade: extra.progressMade ?? false,
+    consecutiveNoProgress: extra.consecutiveNoProgress ?? run.consecutiveNoProgress ?? 0,
+    listDurationMs: extra.listDurationMs ?? null,
+    persistenceDurationMs: extra.persistenceDurationMs ?? null,
+    remainingBeforeListMs: extra.remainingBeforeListMs ?? null,
+    remainingAfterListMs: extra.remainingAfterListMs ?? null,
     ...extra,
   }
 }
@@ -186,6 +227,13 @@ export async function runOverdueDiscoveryBatch<
       reconcileCursorInvoicePk: null,
       closedPaid: 0,
       message,
+      pauseStage: null,
+      progressMade: false,
+      consecutiveNoProgress: 0,
+      listDurationMs: null,
+      persistenceDurationMs: null,
+      remainingBeforeListMs: null,
+      remainingAfterListMs: null,
     }
   }
 
@@ -197,31 +245,93 @@ export async function runOverdueDiscoveryBatch<
   let lastPageDurationMs = 8_000
   let pagesThisBatch = 0
 
-  const fail = async (errorClass: string, message: string) => {
+  const fail = async (
+    errorClass: string,
+    message: string,
+    extra: Partial<DiscoveryBatchResult> = {}
+  ) => {
     const sanitized = sanitizeDiscoveryErrorClass(errorClass)
+    const consecutive =
+      extra.consecutiveNoProgress ??
+      (errorClass === "zero_progress_loop"
+        ? COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS
+        : readConsecutiveNoProgress(run))
     await input.store.release({
       runId: run.id,
       owner,
       generation,
       status: "failed",
       lastErrorClass: sanitized,
+      consecutiveNoProgress: consecutive,
     })
     return resultFromRun(
-      { ...run, status: "failed", lastErrorClass: sanitized },
-      { ok: false, resumable: true, message },
+      {
+        ...run,
+        status: "failed",
+        lastErrorClass: sanitized,
+        consecutiveNoProgress: consecutive,
+      },
+      {
+        ok: false,
+        resumable: errorClass !== "zero_progress_loop",
+        message,
+        pauseStage: errorClass === "zero_progress_loop" ? "zero_progress_loop" : extra.pauseStage ?? null,
+        consecutiveNoProgress: consecutive,
+        ...extra,
+      },
       counters
     )
   }
 
-  const pause = async (message: string) => {
+  const pause = async (
+    message: string,
+    extra: Partial<DiscoveryBatchResult> & {
+      lastErrorClass?: string | null
+      consecutiveNoProgress?: number
+    } = {}
+  ) => {
+    const consecutive = extra.consecutiveNoProgress ?? readConsecutiveNoProgress(run)
     const released = await input.store.release({
       runId: run.id,
       owner,
       generation,
       status: "paused",
+      lastErrorClass: extra.lastErrorClass,
+      consecutiveNoProgress: consecutive,
     })
-    const paused = released.ok ? released.run : { ...run, status: "paused" as const }
-    return resultFromRun(paused, { ok: true, resumable: true, message }, counters)
+    const paused = released.ok ? released.run : { ...run, status: "paused" as const, consecutiveNoProgress: consecutive }
+    return resultFromRun(
+      paused,
+      { ok: true, resumable: true, message, consecutiveNoProgress: consecutive, ...extra },
+      counters
+    )
+  }
+
+  const pauseNoProgress = async (
+    stage: DiscoveryPauseStage,
+    message: string,
+    extra: Partial<DiscoveryBatchResult> = {}
+  ) => {
+    const consecutive = readConsecutiveNoProgress(run) + 1
+    if (consecutive >= COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS) {
+      return fail(
+        "zero_progress_loop",
+        "Dois lotes seguidos sem progresso. Não retomar em silêncio. Não criar outra run; confirme o orçamento da função antes de retomar a mesma execução.",
+        {
+          pauseStage: "zero_progress_loop",
+          progressMade: false,
+          consecutiveNoProgress: consecutive,
+          ...extra,
+        }
+      )
+    }
+    return pause(message, {
+      lastErrorClass: formatDiscoveryPauseClass(stage, consecutive),
+      pauseStage: stage,
+      progressMade: false,
+      consecutiveNoProgress: consecutive,
+      ...extra,
+    })
   }
 
   const endPaginationWithoutRecon = async (message: string) => {
@@ -464,9 +574,25 @@ export async function runOverdueDiscoveryBatch<
     )
   }
 
+  if (readConsecutiveNoProgress(run) >= COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS) {
+    return fail(
+      "zero_progress_loop",
+      "Dois lotes seguidos sem progresso. Não retomar em silêncio. Não criar outra run; confirme o orçamento da função antes de retomar a mesma execução.",
+      {
+        pauseStage: "zero_progress_loop",
+        progressMade: false,
+        consecutiveNoProgress: COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS,
+      }
+    )
+  }
+
   if (run.phase === "reconciliation") {
     return runReconciliation()
   }
+
+  const cursorAtClaim = run.cursorLastInvoicePk
+  const pagesAtClaim = counters.scannedPages
+  const invoicesAtClaim = counters.scannedInvoices
 
   while (pagesThisBatch < maxPages) {
     const remainingBeforeFetch = collectionDiscoveryRemainingBudgetMs({
@@ -474,67 +600,95 @@ export async function runOverdueDiscoveryBatch<
       nowMs: clock(),
       budgetMs,
     })
+    const remainingBeforeListMs = remainingBeforeFetch
     if (
       collectionDiscoveryShouldStopForTime({
         remainingMs: remainingBeforeFetch,
         lastPageDurationMs,
       })
     ) {
-      const released = await input.store.release({
-        runId: run.id,
-        owner,
-        generation,
-        status: "paused",
-      })
-      const paused = released.ok ? released.run : { ...run, status: "paused" as const }
-      return resultFromRun(
-        paused,
-        {
-          ok: true,
-          resumable: true,
-          message:
-            "Lote pausado por orçamento de duração. Retome a mesma execução; cobertura global não comprovada.",
-        },
-        counters
+      if (pagesThisBatch === 0 && counters.scannedInvoices === invoicesAtClaim) {
+        return pauseNoProgress(
+          "pre_list_budget",
+          "Lote pausado por orçamento de duração. Consulta ERP não iniciada.",
+          { remainingBeforeListMs }
+        )
+      }
+      return pause(
+        "Lote pausado por orçamento de duração. Retome a mesma execução; cobertura global não comprovada.",
+        { pauseStage: "page_confirmed_budget", progressMade: true, remainingBeforeListMs }
       )
     }
 
-    const queryTimeoutMs = collectionDiscoveryCappedTimeoutMs({
+    const queryTimeoutMs = collectionDiscoveryListTimeoutMs({
       remainingMs: remainingBeforeFetch,
       configuredTimeoutMs,
     })
     if (queryTimeoutMs == null) {
-      const released = await input.store.release({
-        runId: run.id,
-        owner,
-        generation,
-        status: "paused",
-      })
-      const paused = released.ok ? released.run : { ...run, status: "paused" as const }
-      return resultFromRun(
-        paused,
-        {
-          ok: true,
-          resumable: true,
-          message:
-            "Lote pausado: orçamento restante insuficiente para consulta com margem de persistência/release.",
-        },
-        counters
+      if (pagesThisBatch === 0 && counters.scannedInvoices === invoicesAtClaim) {
+        return pauseNoProgress(
+          "pre_list_budget",
+          "Lote pausado: orçamento restante insuficiente para consulta com reserva de persistência/release.",
+          { remainingBeforeListMs }
+        )
+      }
+      return pause(
+        "Lote pausado: orçamento restante insuficiente para consulta com reserva de persistência/release.",
+        { pauseStage: "page_confirmed_budget", progressMade: true, remainingBeforeListMs }
       )
     }
 
     const pageStarted = clock()
-    const fetched = await input.fetchPage({
-      referenceDate: run.referenceDate,
-      afterInvoicePk: run.cursorLastInvoicePk,
-      timeoutMs: queryTimeoutMs,
+    const fetchedOrTimeout = await awaitListPageOrTimeout(
+      input.fetchPage({
+        referenceDate: run.referenceDate,
+        afterInvoicePk: run.cursorLastInvoicePk,
+        timeoutMs: queryTimeoutMs,
+      }),
+      queryTimeoutMs
+    )
+    const listDurationMs = Math.max(1, clock() - pageStarted)
+    lastPageDurationMs = listDurationMs
+    const remainingAfterListMs = collectionDiscoveryRemainingBudgetMs({
+      startedAtMs,
+      nowMs: clock(),
+      budgetMs,
     })
-    lastPageDurationMs = Math.max(1, clock() - pageStarted)
+
+    if (fetchedOrTimeout === LIST_WAIT_TIMEOUT) {
+      return pauseNoProgress(
+        "list_timeout_headers",
+        "Timeout aguardando a listagem. Nenhuma resposta HTTP atribuída ao ERP. Sem persistência.",
+        { remainingBeforeListMs, remainingAfterListMs, listDurationMs }
+      )
+    }
+    const fetched = fetchedOrTimeout
 
     if (!fetched.ok) {
+      if (fetched.abortClass === "timeout" || fetched.abortClass === "external_abort") {
+        const stage: DiscoveryPauseStage = fetched.bodyReadComplete
+          ? "list_timeout_body"
+          : "list_timeout_headers"
+        return pauseNoProgress(
+          stage,
+          fetched.bodyReadComplete
+            ? "Timeout durante o corpo da listagem. Nenhuma persistência."
+            : "Timeout aguardando a listagem. Nenhuma resposta HTTP atribuída ao ERP. Sem persistência.",
+          { remainingBeforeListMs, remainingAfterListMs, listDurationMs }
+        )
+      }
       return fail(
         "page_error",
-        "Falha na página da descoberta. Cursor não avançou. Sem retry automático."
+        "Falha na página da descoberta. Cursor não avançou. Sem retry automático.",
+        { remainingBeforeListMs, remainingAfterListMs, listDurationMs }
+      )
+    }
+
+    if (listDurationMs > queryTimeoutMs) {
+      return pauseNoProgress(
+        "list_timeout_body",
+        "Timeout durante o corpo da listagem. Nenhuma persistência.",
+        { remainingBeforeListMs, remainingAfterListMs, listDurationMs }
       )
     }
 
@@ -545,7 +699,8 @@ export async function runOverdueDiscoveryBatch<
     if (!progression.ok) {
       return fail(
         progression.code,
-        "Página inválida ou sem progressão de invoice_pk. Não marca encerramento da paginação."
+        "Página inválida ou sem progressão de invoice_pk. Não marca encerramento da paginação.",
+        { remainingBeforeListMs, remainingAfterListMs, listDurationMs }
       )
     }
 
@@ -556,15 +711,24 @@ export async function runOverdueDiscoveryBatch<
       )
     }
 
+    if (remainingAfterListMs < COLLECTION_DISCOVERY_RELEASE_SLACK_MS) {
+      return pauseNoProgress(
+        "post_list_no_reserve",
+        "Listagem válida sem reserva restante para persistir. Página não gravada; cursor não avançou.",
+        { remainingBeforeListMs, remainingAfterListMs, listDurationMs }
+      )
+    }
+
     const lease = { runId: run.id, owner, generation }
     let processedAll = true
+    const persistStarted = clock()
     for (const row of fetched.rows) {
       const remainingForPersist = collectionDiscoveryRemainingBudgetMs({
         startedAtMs,
         nowMs: clock(),
         budgetMs,
       })
-      if (remainingForPersist < COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS) {
+      if (remainingForPersist < COLLECTION_DISCOVERY_RELEASE_SLACK_MS) {
         processedAll = false
         break
       }
@@ -599,7 +763,7 @@ export async function runOverdueDiscoveryBatch<
           lease,
           statementTimeoutMs: Math.max(
             1,
-            remainingForPersist - COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS
+            remainingForPersist - COLLECTION_DISCOVERY_RELEASE_SLACK_MS
           ),
         })
         if (persisted.staleLease) {
@@ -618,24 +782,36 @@ export async function runOverdueDiscoveryBatch<
         )
       }
     }
+    const persistenceDurationMs = Math.max(0, clock() - persistStarted)
 
     if (!processedAll) {
-      const released = await input.store.release({
-        runId: run.id,
-        owner,
-        generation,
-        status: "paused",
-      })
-      const paused = released.ok ? released.run : { ...run, status: "paused" as const }
-      return resultFromRun(
-        paused,
+      const progressMade =
+        counters.scannedInvoices > invoicesAtClaim ||
+        counters.createdCount > 0 ||
+        counters.updatedCount > 0
+      if (!progressMade) {
+        return pauseNoProgress(
+          "partial_page",
+          "Lote pausado no meio da página. Cursor não avançou; reprocessamento da página é idempotente.",
+          {
+            remainingBeforeListMs,
+            remainingAfterListMs,
+            listDurationMs,
+            persistenceDurationMs,
+          }
+        )
+      }
+      return pause(
+        "Lote pausado no meio da página. Cursor não avançou; reprocessamento da página é idempotente.",
         {
-          ok: true,
-          resumable: true,
-          message:
-            "Lote pausado no meio da página. Cursor não avançou; reprocessamento da página é idempotente.",
-        },
-        counters
+          lastErrorClass: formatDiscoveryPauseClass("partial_page", 0),
+          pauseStage: "partial_page",
+          progressMade: true,
+          remainingBeforeListMs,
+          remainingAfterListMs,
+          listDurationMs,
+          persistenceDurationMs,
+        }
       )
     }
 
@@ -664,17 +840,13 @@ export async function runOverdueDiscoveryBatch<
     }
   }
 
-  const released = await input.store.release({
-    runId: run.id,
-    owner,
-    generation,
-    status: "paused",
-  })
-  const paused = released.ok ? released.run : { ...run, status: "paused" as const }
-  return resultFromRun(paused, {
-    ok: true,
-    resumable: true,
-    message:
-      "Lote pausado no limite de páginas. Retome a mesma execução; cobertura global não comprovada.",
-  })
+  return pause(
+    "Lote pausado no limite de páginas. Retome a mesma execução; cobertura global não comprovada.",
+    {
+      lastErrorClass: formatDiscoveryPauseClass("page_limit", 0),
+      pauseStage: "page_limit",
+      progressMade:
+        run.cursorLastInvoicePk !== cursorAtClaim || counters.scannedPages > pagesAtClaim,
+    }
+  )
 }
