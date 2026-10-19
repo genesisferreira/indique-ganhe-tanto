@@ -15,15 +15,71 @@ export function isControllrInvoicePaid(input: {
   return msg === "paid" && Boolean(input.invoiceDateCredit?.trim())
 }
 
-export function parseInvoiceDueDate(value: string | null | undefined): Date | null {
-  if (!value?.trim()) return null
-  const parsed = Date.parse(value.trim())
-  if (!Number.isFinite(parsed)) return null
-  return new Date(parsed)
+function utcCivilDate(year: number, month: number, day: number): Date | null {
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  ) {
+    return null
+  }
+  const utc = new Date(Date.UTC(year, month - 1, day))
+  if (
+    utc.getUTCFullYear() !== year ||
+    utc.getUTCMonth() !== month - 1 ||
+    utc.getUTCDate() !== day
+  ) {
+    return null
+  }
+  return utc
 }
 
 /**
- * Dias de atraso server-side a partir de invoice_due_date (UTC date).
+ * Vencimento fail-closed. Aceita somente:
+ * - YYYY-MM-DD (civil UTC);
+ * - YYYY-MM-DD HH:mm:ss ou YYYY-MM-DDTHH:mm:ss sem fuso (civil UTC, hora ignorada —
+ *   formato observado nos filtros Controllr de invoice_date_due);
+ * - ISO-8601 com Z ou offset.
+ * Ausente, tipo inválido, calendário impossível ou texto ambíguo → null.
+ * Não usa emissão, crédito, pagamento, atualização nem a data atual.
+ */
+export function parseInvoiceDueDate(value: string | null | undefined): Date | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+
+  const civil = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed)
+  if (civil) {
+    return utcCivilDate(Number(civil[1]), Number(civil[2]), Number(civil[3]))
+  }
+
+  const civilTime =
+    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(trimmed)
+  if (civilTime) {
+    const hour = Number(civilTime[4])
+    const minute = Number(civilTime[5])
+    const second = Number(civilTime[6])
+    if (hour > 23 || minute > 59 || second > 59) return null
+    return utcCivilDate(Number(civilTime[1]), Number(civilTime[2]), Number(civilTime[3]))
+  }
+
+  const withZone =
+    /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(
+      trimmed
+    )
+  if (!withZone) return null
+  const parsed = Date.parse(trimmed)
+  if (!Number.isFinite(parsed)) return null
+  const instant = new Date(parsed)
+  return utcCivilDate(
+    instant.getUTCFullYear(),
+    instant.getUTCMonth() + 1,
+    instant.getUTCDate()
+  )
+}
+
+/**
+ * Dias de atraso server-side a partir de invoice_date_due (UTC date).
  * O ERP não envia days_overdue — este cálculo é a fonte operacional.
  * A descoberta de atrasados usa calendário civil America/Sao_Paulo; esta regra
  * permanece em UTC e pode divergir perto da meia-noite. Não misturar as duas.

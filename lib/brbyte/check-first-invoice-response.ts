@@ -94,7 +94,14 @@ function parseInvoiceListRow(row: Record<string, unknown>): BrbyteInvoiceListRow
     invoicePk: readPkValue(row.invoice_pk ?? row.invoicePk),
     contractPk: readPkValue(row.contract_pk ?? row.contractPk),
     invoiceDueDate: readPkValue(
-      row.invoice_due_date ?? row.invoiceDueDate ?? row.due_date
+      // Campo comprovado em /invoice_ctl/invoice/list: filtro/store
+      // `invoice_date_due` (Sprint 3.1E-I/H, invoice_invoice.js grid_fields
+      // sem mapping). invoice_due_date/invoiceDueDate/due_date permanecem
+      // só para consumidores já existentes (1ª mensalidade), depois do campo real.
+      row.invoice_date_due ??
+        row.invoice_due_date ??
+        row.invoiceDueDate ??
+        row.due_date
     ),
     invoiceDate: readPkValue(
       row.invoice_date ?? row.invoiceDate ?? row.invoice_date_issue
