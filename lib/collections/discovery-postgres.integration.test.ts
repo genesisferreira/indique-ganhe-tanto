@@ -119,6 +119,46 @@ async function persist(
   return row.payload as Record<string, any>
 }
 
+async function supersedeRun(
+  c: PgClient,
+  runId: string,
+  expectedStatus: string,
+  generation: number,
+  reason = "due_date_parser_bug"
+) {
+  const row = await rpc(
+    c,
+    `select public.supersede_collection_discovery_run($1::uuid,$2,$3,$4) as payload`,
+    [runId, expectedStatus, generation, reason]
+  )
+  return row.payload as Record<string, any>
+}
+
+async function insertPausedDefective(extra: Record<string, unknown> = {}) {
+  const row = await rpc(
+    client,
+    `insert into public.collection_discovery_runs (
+       query_contract_version, reference_instant, reference_date,
+       discovery_timezone, pagination_strategy, cursor_last_invoice_pk,
+       status, lease_owner, lease_until, lease_generation,
+       scanned_pages, scanned_invoices, created_count, updated_count, skipped_count,
+       assigned_count, unassigned_count, error_count, reported_total,
+       last_error_class, consecutive_no_progress, coverage_proven, unique_order_proven,
+       phase, reconcile_cursor_invoice_pk
+     ) values (
+       $1, $2::timestamptz, $3::date, $4, $5, '24000',
+       'paused', null, null, 5,
+       16, 240, 0, 0, 240,
+       0, 0, 0, 240,
+       'page_limit:0', 0, false, false,
+       'discovery', '23991'
+     )
+     returning *`,
+    [CONTRACT, "2026-10-16T12:00:00.000Z", "2026-10-16", TZ, STRATEGY]
+  )
+  return { ...row, ...extra }
+}
+
 async function closeResumableRuns() {
   await client.query(
     `update public.collection_discovery_runs
@@ -1650,5 +1690,386 @@ describe("PostgreSQL real — descoberta retomável", { timeout: 180_000 }, () =
          and column_name = 'consecutive_no_progress'`
     )
     assert.equal(col.n, 1)
+  })
+
+  it("upgrade com run paused existente: supersede preserva auditoria e libera slot", async () => {
+    const seeded = await insertPausedDefective()
+    const createdAt = seeded.created_at
+    const patch = readFileSync(
+      join(here, "../../supabase/patch-collection-discovery-supersede.sql"),
+      "utf8"
+    )
+    await client.query(patch)
+    await client.query(patch)
+
+    const casesBefore = await rpc(client, "select count(*)::int as n from public.collection_cases")
+    const eventsBefore = await rpc(
+      client,
+      "select count(*)::int as n from public.collection_case_events"
+    )
+    const assignsBefore = await rpc(
+      client,
+      "select count(*)::int as n from public.sector_work_assignments"
+    )
+
+    const result = await supersedeRun(client, String(seeded.id), "paused", 5)
+    assert.equal(result.ok, true)
+    assert.equal(result.code, "superseded")
+    assert.equal(result.run.status, "superseded")
+    assert.equal(result.run.lastErrorClass, "due_date_parser_bug")
+    assert.equal(result.run.cursorLastInvoicePk, "24000")
+    assert.equal(result.run.reconcileCursorInvoicePk, "23991")
+    assert.equal(result.run.scannedPages, 16)
+    assert.equal(result.run.scannedInvoices, 240)
+    assert.equal(result.run.createdCount, 0)
+    assert.equal(result.run.updatedCount, 0)
+    assert.equal(result.run.skippedCount, 240)
+    assert.equal(result.run.assignedCount, 0)
+    assert.equal(result.run.leaseGeneration, 5)
+    assert.equal(String(result.run.referenceInstant).startsWith("2026-10-16"), true)
+    assert.equal(String(result.run.referenceDate).startsWith("2026-10-16"), true)
+    assert.equal(result.run.coverageProven, false)
+    assert.equal(result.run.uniqueOrderProven, false)
+    assert.equal(result.run.leaseOwner, null)
+    assert.equal(result.run.leaseUntil, null)
+
+    const casesMid = await rpc(client, "select count(*)::int as n from public.collection_cases")
+    const eventsMid = await rpc(
+      client,
+      "select count(*)::int as n from public.collection_case_events"
+    )
+    const assignsMid = await rpc(
+      client,
+      "select count(*)::int as n from public.sector_work_assignments"
+    )
+    assert.equal(casesMid.n, casesBefore.n)
+    assert.equal(eventsMid.n, eventsBefore.n)
+    assert.equal(assignsMid.n, assignsBefore.n)
+
+    const stored = await rpc(
+      client,
+      `select status, cursor_last_invoice_pk, scanned_pages, scanned_invoices,
+              created_count, updated_count, skipped_count, lease_generation,
+              reference_instant, reference_date, created_at, coverage_proven,
+              unique_order_proven, reconcile_cursor_invoice_pk, last_error_class
+       from public.collection_discovery_runs where id = $1`,
+      [seeded.id]
+    )
+    assert.equal(stored.status, "superseded")
+    assert.equal(stored.cursor_last_invoice_pk, "24000")
+    assert.equal(stored.scanned_pages, 16)
+    assert.equal(stored.scanned_invoices, 240)
+    assert.equal(stored.created_count, 0)
+    assert.equal(stored.lease_generation, 5)
+    assert.equal(String(stored.created_at), String(createdAt))
+    assert.equal(stored.coverage_proven, false)
+    assert.equal(stored.unique_order_proven, false)
+    assert.equal(stored.last_error_class, "due_date_parser_bug")
+    assert.equal(stored.reconcile_cursor_invoice_pk, "23991")
+
+    const idempotent = await supersedeRun(client, String(seeded.id), "paused", 5)
+    assert.equal(idempotent.ok, true)
+    assert.equal(idempotent.code, "already_superseded")
+    assert.equal(idempotent.run.cursorLastInvoicePk, "24000")
+    assert.equal(idempotent.run.leaseGeneration, 5)
+
+    const claimOld = await claim(client, "must-not-resume", 60_000, String(seeded.id))
+    assert.equal(claimOld.ok, false)
+    assert.equal(claimOld.code, "run_not_resumable")
+
+    const created = await claim(client, "fresh-worker", 60_000, null)
+    assert.equal(created.ok, true)
+    assert.equal(created.created, true)
+    assert.notEqual(created.run.id, String(seeded.id))
+    assert.equal(created.run.cursorLastInvoicePk, null)
+    assert.equal(created.run.scannedPages, 0)
+    assert.equal(String(created.run.referenceDate).startsWith("2026-09-16"), true)
+    assert.notEqual(String(created.run.referenceInstant), String(result.run.referenceInstant))
+    assert.equal(created.run.coverageProven, false)
+    assert.equal(created.run.uniqueOrderProven, false)
+
+    const persistOnce = await persist(
+      client,
+      created.run.id,
+      "fresh-worker",
+      created.run.leaseGeneration,
+      "88001"
+    )
+    assert.equal(persistOnce.ok, true)
+    const persistAgain = await persist(
+      client,
+      created.run.id,
+      "fresh-worker",
+      created.run.leaseGeneration,
+      "88001"
+    )
+    assert.equal(persistAgain.ok, true)
+    const invoiceCount = await rpc(
+      client,
+      `select count(*)::int as n from public.collection_cases where invoice_pk = '88001'`
+    )
+    assert.equal(invoiceCount.n, 1)
+
+    const casesAfter = await rpc(client, "select count(*)::int as n from public.collection_cases")
+    const eventsAfter = await rpc(
+      client,
+      "select count(*)::int as n from public.collection_case_events"
+    )
+    const assignsAfter = await rpc(
+      client,
+      "select count(*)::int as n from public.sector_work_assignments"
+    )
+    assert.equal(Number(casesAfter.n) - Number(casesBefore.n), 1)
+    assert.equal(Number(eventsAfter.n) >= Number(eventsBefore.n), true)
+    assert.equal(Number(assignsAfter.n) >= Number(assignsBefore.n), true)
+
+    const chk = await rpc(
+      client,
+      `select pg_get_constraintdef(oid) as def
+       from pg_constraint
+       where conname = 'collection_discovery_runs_status_chk'`
+    )
+    assert.match(String(chk.def), /superseded/)
+    assert.match(String(chk.def), /paused/)
+    const idx = await rpc(
+      client,
+      `select pg_get_indexdef(i.oid) as def
+       from pg_class t
+       join pg_index x on x.indrelid = t.oid
+       join pg_class i on i.oid = x.indexrelid
+       where t.relname = 'collection_discovery_runs'
+         and i.relname = 'collection_discovery_runs_resumable_uidx'`
+    )
+    assert.match(String(idx.def), /running/)
+    assert.match(String(idx.def), /paused/)
+    assert.match(String(idx.def), /failed/)
+    assert.equal(/superseded/.test(String(idx.def)), false)
+  })
+
+  it("supersede recusa running, lease ativa, owner, generation antiga e estados terminais", async () => {
+    const claimed = await claim(client, "live-owner", 60_000)
+    const runningBlocked = await supersedeRun(
+      client,
+      claimed.run.id,
+      "paused",
+      claimed.run.leaseGeneration
+    )
+    assert.equal(runningBlocked.ok, false)
+    assert.equal(runningBlocked.code, "busy")
+
+    await client.query(
+      `update public.collection_discovery_runs
+       set status = 'paused', lease_owner = 'live-owner',
+           lease_until = timezone('utc', now()) + interval '2 minutes'
+       where id = $1`,
+      [claimed.run.id]
+    )
+    const leaseBlocked = await supersedeRun(
+      client,
+      claimed.run.id,
+      "paused",
+      claimed.run.leaseGeneration
+    )
+    assert.equal(leaseBlocked.ok, false)
+    assert.equal(leaseBlocked.code, "active_lease")
+
+    await client.query(
+      `update public.collection_discovery_runs
+       set lease_until = null
+       where id = $1`,
+      [claimed.run.id]
+    )
+    const ownerBlocked = await supersedeRun(
+      client,
+      claimed.run.id,
+      "paused",
+      claimed.run.leaseGeneration
+    )
+    assert.equal(ownerBlocked.ok, false)
+    assert.equal(ownerBlocked.code, "active_lease")
+
+    await client.query(
+      `update public.collection_discovery_runs
+       set lease_owner = null
+       where id = $1`,
+      [claimed.run.id]
+    )
+    const staleGen = await supersedeRun(
+      client,
+      claimed.run.id,
+      "paused",
+      Number(claimed.run.leaseGeneration) - 1
+    )
+    assert.equal(staleGen.ok, false)
+    assert.equal(staleGen.code, "generation_mismatch")
+
+    const stillPaused = await rpc(
+      client,
+      `select status, cursor_last_invoice_pk from public.collection_discovery_runs where id = $1`,
+      [claimed.run.id]
+    )
+    assert.equal(stillPaused.status, "paused")
+
+    const ended = await rpc(
+      client,
+      `insert into public.collection_discovery_runs (
+         query_contract_version, reference_instant, reference_date,
+         discovery_timezone, pagination_strategy, status, lease_generation
+       ) values ($1, $2::timestamptz, $3::date, $4, $5, 'pagination_ended', 5)
+       returning id`,
+      [CONTRACT, "2026-10-16T12:00:00.000Z", "2026-10-16", TZ, STRATEGY]
+    )
+    const endedBlocked = await supersedeRun(client, String(ended.id), "paused", 5)
+    assert.equal(endedBlocked.ok, false)
+    assert.equal(endedBlocked.code, "already_terminal")
+
+    const completed = await rpc(
+      client,
+      `insert into public.collection_discovery_runs (
+         query_contract_version, reference_instant, reference_date,
+         discovery_timezone, pagination_strategy, status, lease_generation
+       ) values ($1, $2::timestamptz, $3::date, $4, $5, 'phases_completed', 5)
+       returning id`,
+      [CONTRACT, "2026-10-16T12:00:00.000Z", "2026-10-16", TZ, STRATEGY]
+    )
+    const completedBlocked = await supersedeRun(client, String(completed.id), "paused", 5)
+    assert.equal(completedBlocked.ok, false)
+    assert.equal(completedBlocked.code, "already_terminal")
+
+    const freeText = await supersedeRun(
+      client,
+      claimed.run.id,
+      "paused",
+      claimed.run.leaseGeneration,
+      "manual rewrite"
+    )
+    assert.equal(freeText.ok, false)
+    assert.equal(freeText.code, "invalid_input")
+
+    const mismatch = await supersedeRun(
+      client,
+      claimed.run.id,
+      "failed",
+      claimed.run.leaseGeneration
+    )
+    assert.equal(mismatch.ok, false)
+    assert.equal(mismatch.code, "status_mismatch")
+
+    await client.query(
+      `update public.collection_discovery_runs
+       set status = 'failed', lease_owner = null, lease_until = null
+       where id = $1`,
+      [claimed.run.id]
+    )
+    const failedOk = await supersedeRun(
+      client,
+      claimed.run.id,
+      "failed",
+      claimed.run.leaseGeneration
+    )
+    assert.equal(failedOk.ok, true)
+    assert.equal(failedOk.code, "superseded")
+    assert.equal(failedOk.run.status, "superseded")
+  })
+
+  it("duas conexões não divergem ao superseder a mesma run", async () => {
+    const seeded = await insertPausedDefective()
+    const a = await newClient()
+    const b = await newClient()
+    const [left, right] = await Promise.all([
+      supersedeRun(a, String(seeded.id), "paused", 5),
+      supersedeRun(b, String(seeded.id), "paused", 5),
+    ])
+    const codes = [left.code, right.code].sort()
+    assert.equal(left.ok && right.ok, true)
+    assert.equal(codes.includes("superseded"), true)
+    assert.equal(codes.includes("already_superseded"), true)
+    const stored = await rpc(
+      client,
+      `select status, cursor_last_invoice_pk, scanned_invoices, lease_generation, last_error_class
+       from public.collection_discovery_runs where id = $1`,
+      [seeded.id]
+    )
+    assert.equal(stored.status, "superseded")
+    assert.equal(stored.cursor_last_invoice_pk, "24000")
+    assert.equal(stored.scanned_invoices, 240)
+    assert.equal(stored.lease_generation, 5)
+    assert.equal(stored.last_error_class, "due_date_parser_bug")
+  })
+
+  it("authenticated/anon/public não executam supersede; service_role e RLS permanecem", async () => {
+    const seeded = await insertPausedDefective()
+    const auth = await newClient()
+    await auth.query("set role authenticated")
+    await assert.rejects(
+      () =>
+        auth.query(
+          `select public.supersede_collection_discovery_run($1::uuid,$2,$3,$4)`,
+          [seeded.id, "paused", 5, "due_date_parser_bug"]
+        ),
+      /permission denied/i
+    )
+    await auth.query("reset role")
+
+    const execAuth = await rpc(
+      client,
+      `select has_function_privilege(
+         'authenticated',
+         'public.supersede_collection_discovery_run(uuid,text,integer,text)',
+         'execute'
+       ) as ok`
+    )
+    assert.equal(execAuth.ok, false)
+    const execAnon = await rpc(
+      client,
+      `select has_function_privilege(
+         'anon',
+         'public.supersede_collection_discovery_run(uuid,text,integer,text)',
+         'execute'
+       ) as ok`
+    )
+    assert.equal(execAnon.ok, false)
+    const publicExecute = await rpc(
+      client,
+      `select count(*)::int as n
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace,
+            aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+       where n.nspname = 'public'
+         and p.proname = 'supersede_collection_discovery_run'
+         and a.grantee = 0
+         and a.privilege_type = 'EXECUTE'`
+    )
+    assert.equal(publicExecute.n, 0)
+    const execService = await rpc(
+      client,
+      `select has_function_privilege(
+         'service_role',
+         'public.supersede_collection_discovery_run(uuid,text,integer,text)',
+         'execute'
+       ) as ok`
+    )
+    assert.equal(execService.ok, true)
+    const path = await rpc(
+      client,
+      `select prosecdef, proconfig
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'supersede_collection_discovery_run'`
+    )
+    assert.equal(path.prosecdef, true)
+    assert.equal(JSON.stringify(path.proconfig).includes("search_path=public"), true)
+    const rls = await rpc(
+      client,
+      `select relrowsecurity from pg_class where relname = 'collection_discovery_runs'`
+    )
+    assert.equal(rls.relrowsecurity, true)
+    const tableAuth = await rpc(
+      client,
+      `select has_table_privilege('authenticated', 'public.collection_discovery_runs', 'select') as sel,
+              has_table_privilege('authenticated', 'public.collection_discovery_runs', 'update') as upd`
+    )
+    assert.equal(tableAuth.sel, false)
+    assert.equal(tableAuth.upd, false)
   })
 })

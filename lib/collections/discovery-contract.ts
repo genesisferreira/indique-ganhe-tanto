@@ -80,6 +80,18 @@ export type CollectionDiscoveryStatus =
   | "failed"
   | "pagination_ended"
   | "phases_completed"
+  | "superseded"
+
+/** Motivos controlados da RPC supersede_collection_discovery_run. Texto livre é recusado. */
+export const COLLECTION_DISCOVERY_SUPERSEDE_REASON_DUE_DATE_PARSER_BUG =
+  "due_date_parser_bug" as const
+
+export const COLLECTION_DISCOVERY_SUPERSEDE_REASONS = [
+  COLLECTION_DISCOVERY_SUPERSEDE_REASON_DUE_DATE_PARSER_BUG,
+] as const
+
+export type CollectionDiscoverySupersedeReason =
+  (typeof COLLECTION_DISCOVERY_SUPERSEDE_REASONS)[number]
 
 export type CollectionDiscoveryPhase = "discovery" | "reconciliation"
 

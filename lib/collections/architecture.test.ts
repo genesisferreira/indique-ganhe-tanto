@@ -504,6 +504,81 @@ describe("3.1E-AA elegibilidade e observabilidade de skips", () => {
   })
 })
 
+describe("3.1E-AH supersede auditável", () => {
+  it("RPC fenced, fora do índice resumível, ausente do runner e do Sync", () => {
+    const patch = readFileSync(
+      join(repoRoot, "supabase/patch-collection-discovery-supersede.sql"),
+      "utf8"
+    )
+    const lab = readFileSync(join(repoRoot, "scripts/local-pg-collections-lab/run.mjs"), "utf8")
+    const runner = readFileSync(join(repoRoot, "lib/collections/discovery-runner.ts"), "utf8")
+    const sync = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
+    const route = readFileSync(
+      join(repoRoot, "app/api/admin/collections/sync/route.ts"),
+      "utf8"
+    )
+    const store = readFileSync(join(repoRoot, "lib/collections/discovery-store.ts"), "utf8")
+    const ops = readFileSync(join(repoRoot, "lib/collections/discovery-store-ops.ts"), "utf8")
+    const contract = readFileSync(
+      join(repoRoot, "lib/collections/discovery-contract.ts"),
+      "utf8"
+    )
+    const checkpoint = readFileSync(
+      join(repoRoot, "lib/collections/discovery-checkpoint.ts"),
+      "utf8"
+    )
+    const internal = readFileSync(
+      join(repoRoot, "lib/collections/discovery-supersede-ops.ts"),
+      "utf8"
+    )
+    const page = readFileSync(join(repoRoot, "app/cobranca/page.tsx"), "utf8")
+
+    assert.match(patch, /supersede_collection_discovery_run/)
+    assert.match(patch, /status = 'superseded'/)
+    assert.match(patch, /pg_advisory_xact_lock\(872145, 31\)/)
+    assert.match(patch, /due_date_parser_bug/)
+    assert.match(patch, /p_expected_status/)
+    assert.match(patch, /p_expected_lease_generation/)
+    assert.match(patch, /already_superseded/)
+    assert.match(patch, /grant execute on function public\.supersede_collection_discovery_run/)
+    assert.match(patch, /to service_role/)
+    assert.match(patch, /set search_path = public/)
+    assert.match(patch, /where status in \('running', 'paused', 'failed'\)/)
+    assert.match(
+      patch,
+      /status in \('pagination_ended', 'phases_completed', 'superseded'\)/
+    )
+    assert.equal(/grant execute[\s\S]*supersede_collection_discovery_run[\s\S]*to authenticated/i.test(patch), false)
+    assert.equal(patch.includes("insert into public.collection_cases"), false)
+    assert.equal(patch.includes("update public.collection_cases"), false)
+    assert.equal(patch.includes("delete from public.collection_cases"), false)
+    assert.equal(patch.includes("collection_case_events"), false)
+    assert.equal(patch.includes("assign_sector_work_item"), false)
+    assert.equal(patch.includes("coverage_proven = true"), false)
+    assert.equal(patch.includes("unique_order_proven = true"), false)
+    assert.equal(patch.includes("cursor_last_invoice_pk = null"), false)
+    assert.equal(/scanned_pages\s*=\s*0/.test(patch), false)
+    assert.match(lab, /patch-collection-discovery-supersede\.sql/)
+
+    assert.match(contract, /superseded/)
+    assert.match(contract, /due_date_parser_bug/)
+    assert.match(checkpoint, /run\.status === "superseded"/)
+    assert.match(internal, /import "server-only"/)
+    assert.match(internal, /supersede_collection_discovery_run/)
+    assert.match(internal, /Não é chamada pelo runner/)
+
+    assert.equal(runner.includes("supersede_collection_discovery_run"), false)
+    assert.equal(runner.includes('status: "superseded"'), false)
+    assert.equal(sync.includes("supersede_collection_discovery_run"), false)
+    assert.equal(sync.includes("superseded"), false)
+    assert.equal(route.includes("supersede_collection_discovery_run"), false)
+    assert.equal(ops.includes("supersede_collection_discovery_run"), false)
+    assert.equal(store.includes("supersedeCollectionDiscoveryRun"), false)
+    assert.equal(page.includes("supersede_collection_discovery_run"), false)
+    assert.equal(page.includes("due_date_parser_bug"), false)
+  })
+})
+
 describe("código 3.1 sem service_role no browser", () => {
   it("libs novas não expõem service role", () => {
     const dirs = [

@@ -102,6 +102,7 @@ export async function startCollectionsLab() {
     "supabase/patch-collection-discovery-fenced-persist.sql",
     "supabase/patch-collection-discovery-reconciliation.sql",
     "supabase/patch-collection-discovery-progress-guarantee.sql",
+    "supabase/patch-collection-discovery-supersede.sql",
   ]
   for (const rel of files) {
     const sql = readFileSync(join(REPO_ROOT, rel), "utf8")

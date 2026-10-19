@@ -58,7 +58,11 @@ export function validateDiscoveryCheckpoint(
       return { ok: false, code: "invalid_cursor" }
     }
   }
-  if (run.status === "pagination_ended" || run.status === "phases_completed") {
+  if (
+    run.status === "pagination_ended" ||
+    run.status === "phases_completed" ||
+    run.status === "superseded"
+  ) {
     return { ok: false, code: "run_not_resumable" }
   }
   if (!isResumableDiscoveryStatus(run.status)) {
