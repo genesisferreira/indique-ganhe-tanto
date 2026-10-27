@@ -9,7 +9,7 @@ import { COLLECTION_SECTOR_CODE } from "@/types/collections"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 /** Login operacional + listagem até 60s + parse + margem da plataforma. Sync permanece em 120. */
-export const maxDuration = 90
+export const maxDuration = 120
 
 /**
  * Probe Admin Master: só POST aciona UM POST de listagem no Controllr

@@ -23,7 +23,7 @@ const probeActor = {
 }
 
 describe("invoice-list-probe wiring", () => {
-  it("GET não executa o probe", () => {
+  it("GET nÃ£o executa o probe", () => {
     const route = read("app/api/admin/collections/invoice-list-probe/route.ts")
     const getBlock = route.slice(
       route.indexOf("export async function GET"),
@@ -35,7 +35,7 @@ describe("invoice-list-probe wiring", () => {
     assert.match(getBlock, /405/)
   })
 
-  it("POST autorizado executa uma única tentativa", () => {
+  it("POST autorizado executa uma Ãºnica tentativa", () => {
     const route = read("app/api/admin/collections/invoice-list-probe/route.ts")
     const runner = read("lib/brbyte/invoice-list-probe.ts")
     const postBlock = route.slice(route.indexOf("export async function POST"))
@@ -73,7 +73,7 @@ describe("invoice-list-probe wiring", () => {
     assert.match(result, /dir: "ASC"/)
   })
 
-  it("POST sem Admin Master é bloqueado", () => {
+  it("POST sem Admin Master Ã© bloqueado", () => {
     const route = read("app/api/admin/collections/invoice-list-probe/route.ts")
     assert.match(route, /action: "sync"/)
     const master = authorizeOperationalSectorAccess({
@@ -94,7 +94,7 @@ describe("invoice-list-probe wiring", () => {
     assert.equal(consulta.ok, false)
   })
 
-  it("resposta sanitizada não inclui fatura nem credencial", () => {
+  it("resposta sanitizada nÃ£o inclui fatura nem credencial", () => {
     const result = read("lib/brbyte/invoice-list-probe-result.ts")
     const runner = read("lib/brbyte/invoice-list-probe.ts")
     assert.equal(result.includes("extractInvoiceListRows"), false)
@@ -104,7 +104,7 @@ describe("invoice-list-probe wiring", () => {
     assert.equal(runner.includes("login.cookie"), true)
   })
 
-  it("UI Cobrança não dispara o probe", () => {
+  it("UI CobranÃ§a nÃ£o dispara o probe", () => {
     const page = read("app/cobranca/page.tsx")
     assert.equal(page.includes("invoice-list-probe"), false)
   })
@@ -112,10 +112,16 @@ describe("invoice-list-probe wiring", () => {
   it("modo health reutiliza a rota e eleva maxDuration sem tocar no Sync", () => {
     const route = read("app/api/admin/collections/invoice-list-probe/route.ts")
     const sync = read("app/api/admin/collections/sync/route.ts")
-    assert.match(route, /maxDuration = 90/)
+    const healthResult = read("lib/brbyte/invoice-list-health-probe-result.ts")
+    const oldProbe = read("lib/brbyte/invoice-list-probe.ts")
+    assert.match(route, /maxDuration = 120/)
     assert.match(route, /runOverdueFirstPageHealthProbe/)
     assert.match(route, /OVERDUE_FIRST_PAGE_HEALTH_MODE/)
+    assert.match(route, /runInvoiceListProbe/)
     assert.match(sync, /maxDuration = 120/)
+    assert.match(healthResult, /OVERDUE_FIRST_PAGE_HEALTH_TIMEOUT_MAX_MS = 60_000/)
+    assert.match(healthResult, /OVERDUE_FIRST_PAGE_HEALTH_ATTEMPTS = 1/)
+    assert.equal(oldProbe.includes("listOverdueInvoices"), false)
   })
 
 })

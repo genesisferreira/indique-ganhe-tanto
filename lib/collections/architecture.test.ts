@@ -1,6 +1,6 @@
 /**
- * Arquitetura — Sprint 3.1 Cobrança + Retenção.
- * Teste textual/puro: não conecta em banco e não executa SQL.
+ * Arquitetura â€” Sprint 3.1 CobranÃ§a + RetenÃ§Ã£o.
+ * Teste textual/puro: nÃ£o conecta em banco e nÃ£o executa SQL.
  */
 
 import assert from "node:assert/strict"
@@ -71,7 +71,7 @@ describe("patch collections retention foundation", () => {
     assert.match(norm, /create table if not exists public\.operational_case_contact_attempts/)
   })
 
-  it("P) histórico append-only", () => {
+  it("P) histÃ³rico append-only", () => {
     assert.match(norm, /collection_case_events is append-only/)
     assert.match(norm, /retention_case_events is append-only/)
     assert.match(norm, /before update or delete on public\.collection_case_events/)
@@ -83,7 +83,7 @@ describe("patch collections retention foundation", () => {
     assert.match(norm, /constraint retention_cases_linked_collection_key unique/)
   })
 
-  it("status de negócio fora do motor", () => {
+  it("status de negÃ³cio fora do motor", () => {
     assert.equal(/alter table public\.sector_work_assignments/.test(norm), false)
     assert.match(norm, /status text not null default 'open'/)
   })
@@ -102,16 +102,16 @@ describe("patch collections retention foundation", () => {
     assert.equal(/mark_first_invoice_paid/.test(norm), false)
   })
 
-  it("U) motor 2.2 não é reescrito", () => {
+  it("U) motor 2.2 nÃ£o Ã© reescrito", () => {
     assert.equal(/create or replace function public\.assign_sector_work_item/.test(norm), false)
     assert.equal(/create or replace function public\.pick_next_sector_employee/.test(norm), false)
     assert.match(norm, /assign_sector_work_item\(/)
   })
 
-  it("3.1B assign retention antes de mutar Cobrança; falha dá rollback", () => {
+  it("3.1B assign retention antes de mutar CobranÃ§a; falha dÃ¡ rollback", () => {
     const fnIdx = patch.indexOf("create or replace function public.escalate_collection_to_retention")
     const fn = patch.slice(fnIdx)
-    const firstAttemptMarker = "Assign Retention ANTES de mutar Cobrança"
+    const firstAttemptMarker = "Assign Retention ANTES de mutar CobranÃ§a"
     const firstAttemptIdx = fn.indexOf(firstAttemptMarker)
     assert.ok(firstAttemptIdx > 0)
     const firstAttempt = fn.slice(firstAttemptIdx)
@@ -124,7 +124,7 @@ describe("patch collections retention foundation", () => {
     assert.equal(/'ok', true[\s\S]{0,80}'already_escalated'[\s\S]{0,200}unique_violation/.test(fn), false)
   })
 
-  it("RLS sem write authenticated; RPC só service_role", () => {
+  it("RLS sem write authenticated; RPC sÃ³ service_role", () => {
     assert.match(norm, /alter table public\.collection_cases enable row level security/)
     assert.match(norm, /revoke insert, update, delete, truncate on table public\.collection_cases from authenticated/)
     assert.match(
@@ -147,11 +147,11 @@ describe("patch collections retention foundation", () => {
     assert.match(norm, /^\s*commit\s*;/m)
   })
 
-  it("Membership NÃO autoriza /admin", () => {
-    assert.match(patch, /Membership NÃO autoriza \/admin/)
+  it("Membership NÃƒO autoriza /admin", () => {
+    assert.match(patch, /Membership NÃƒO autoriza \/admin/)
   })
 
-  it("não toca Auth users nem cron vercel", () => {
+  it("nÃ£o toca Auth users nem cron vercel", () => {
     assert.equal(/auth\.users/.test(norm), false)
     const vercel = readFileSync(join(repoRoot, "vercel.json"), "utf8")
     assert.equal(/collections/.test(vercel), false)
@@ -169,7 +169,7 @@ describe("patch collections retention foundation", () => {
   })
 })
 
-describe("3.1B mutações exigem ownership ativo", () => {
+describe("3.1B mutaÃ§Ãµes exigem ownership ativo", () => {
   const mutationRoutes = [
     "app/api/cobranca/cases/[id]/contact/route.ts",
     "app/api/cobranca/cases/[id]/status/route.ts",
@@ -190,15 +190,15 @@ describe("3.1B mutações exigem ownership ativo", () => {
     }
   })
 
-  it("escalate.ts não mascara falha com already_escalated", () => {
+  it("escalate.ts nÃ£o mascara falha com already_escalated", () => {
     const src = readFileSync(join(repoRoot, "lib/collections/escalate.ts"), "utf8")
     assert.equal(src.includes("parsed.ok || isIdempotentEscalation"), false)
     assert.match(src, /ok:\s*parsed\.ok === true/)
   })
 
-  it("UI Cobrança não expõe escalada automática", () => {
+  it("UI CobranÃ§a nÃ£o expÃµe escalada automÃ¡tica", () => {
     const src = readFileSync(join(repoRoot, "app/cobranca/[id]/page.tsx"), "utf8")
-    assert.equal(src.includes("Escalar retenção"), false)
+    assert.equal(src.includes("Escalar retenÃ§Ã£o"), false)
     assert.equal(src.includes("/escalate"), false)
   })
 
@@ -210,7 +210,7 @@ describe("3.1B mutações exigem ownership ativo", () => {
 })
 
 describe("3.1E-G sync varre a base Controllr", () => {
-  it("lista global de faturas e não depende só de 200 referrals", () => {
+  it("lista global de faturas e nÃ£o depende sÃ³ de 200 referrals", () => {
     const src = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
     assert.match(src, /runOverdueDiscoveryBatch/)
     assert.match(src, /listOverdueInvoicesPage/)
@@ -222,7 +222,7 @@ describe("3.1E-G sync varre a base Controllr", () => {
     assert.match(src, /createOpsDiscoveryStore/)
   })
 
-  it("invoice/list pagina sem contract_pk obrigatório", () => {
+  it("invoice/list pagina sem contract_pk obrigatÃ³rio", () => {
     const src = readFileSync(join(repoRoot, "lib/brbyte/invoice-list.ts"), "utf8")
     assert.match(src, /export async function listAllOpenInvoices/)
     assert.match(src, /export async function listOverdueInvoices/)
@@ -235,7 +235,7 @@ describe("3.1E-G sync varre a base Controllr", () => {
     assert.match(src, /maxAttempts: OVERDUE_INVOICE_LIST_HTTP_ATTEMPTS/)
   })
 
-  it("desenho em lotes não é runner de sync", () => {
+  it("desenho em lotes nÃ£o Ã© runner de sync", () => {
     const src = readFileSync(join(repoRoot, "lib/collections/batch-sync-design.ts"), "utf8")
     assert.equal(src.includes("brbyteAdminPostForm"), false)
     assert.equal(src.includes("assignSectorWorkItem"), false)
@@ -244,7 +244,7 @@ describe("3.1E-G sync varre a base Controllr", () => {
     assert.equal(runner.includes("COLLECTION_BATCH_TIME_BUDGET_MS"), false)
   })
 
-  it("varredura parcial não reconcilia casos ausentes da lista", () => {
+  it("varredura parcial nÃ£o reconcilia casos ausentes da lista", () => {
     const src = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
     assert.equal(/existingByInvoice\.values\(/.test(src), false)
     assert.equal(/existingByInvoice\.forEach/.test(src), false)
@@ -257,8 +257,8 @@ describe("3.1E-G sync varre a base Controllr", () => {
   })
 })
 
-describe("3.1E-H consulta de atrasados não contamina consumidores financeiros", () => {
-  it("listContractInvoices e primeira fatura não usam o filtro de atrasados", () => {
+describe("3.1E-H consulta de atrasados nÃ£o contamina consumidores financeiros", () => {
+  it("listContractInvoices e primeira fatura nÃ£o usam o filtro de atrasados", () => {
     const invoiceList = readFileSync(join(repoRoot, "lib/brbyte/invoice-list.ts"), "utf8")
     const firstInvoice = readFileSync(
       join(repoRoot, "lib/brbyte/check-first-invoice.service.ts"),
@@ -295,7 +295,7 @@ describe("3.1E-H consulta de atrasados não contamina consumidores financeiros",
   })
 })
 
-describe("3.1E-K descoberta retomável", () => {
+describe("3.1E-K descoberta retomÃ¡vel", () => {
   it("migration de checkpoint restringe acesso ao backend", () => {
     const patch = readFileSync(
       join(repoRoot, "supabase/patch-collection-discovery-checkpoint.sql"),
@@ -322,7 +322,7 @@ describe("3.1E-K descoberta retomável", () => {
     assert.equal(/collections/.test(vercel), false)
   })
 
-  it("update financeiro da descoberta não sobrescreve estágio nem atribuição", () => {
+  it("update financeiro da descoberta nÃ£o sobrescreve estÃ¡gio nem atribuiÃ§Ã£o", () => {
     const persistOps = readFileSync(
       join(repoRoot, "lib/collections/discovery-persist-ops.ts"),
       "utf8"
@@ -338,8 +338,8 @@ describe("3.1E-K descoberta retomável", () => {
   })
 })
 
-describe("3.1E-L persistência fenced", () => {
-  it("RPC de persistência valida lease na mesma transação", () => {
+describe("3.1E-L persistÃªncia fenced", () => {
+  it("RPC de persistÃªncia valida lease na mesma transaÃ§Ã£o", () => {
     const patch = readFileSync(
       join(repoRoot, "supabase/patch-collection-discovery-fenced-persist.sql"),
       "utf8"
@@ -365,8 +365,8 @@ describe("3.1E-L persistência fenced", () => {
   })
 })
 
-describe("3.1E-Q reconciliação financeira retomável", () => {
-  it("patch restringe RPCs ao service_role e não infere pagamento por ausência", () => {
+describe("3.1E-Q reconciliaÃ§Ã£o financeira retomÃ¡vel", () => {
+  it("patch restringe RPCs ao service_role e nÃ£o infere pagamento por ausÃªncia", () => {
     const patch = readFileSync(
       join(repoRoot, "supabase/patch-collection-discovery-reconciliation.sql"),
       "utf8"
@@ -381,7 +381,7 @@ describe("3.1E-Q reconciliação financeira retomável", () => {
       /grant execute[\s\S]*reconcile_collection_case_paid[\s\S]*to authenticated/i.test(patch),
       false
     )
-    assert.match(patch, /NÃO vira close_paid/)
+    assert.match(patch, /NÃƒO vira close_paid/)
     const persist = readFileSync(join(repoRoot, "lib/collections/discovery-persist.ts"), "utf8")
     assert.match(persist, /decision.action === "close_paid"/)
     const runner = readFileSync(join(repoRoot, "lib/collections/discovery-runner.ts"), "utf8")
@@ -396,7 +396,7 @@ describe("3.1E-Q reconciliação financeira retomável", () => {
     assert.match(sync, /settings.isEnabled === false/)
     assert.match(sync, /discoveryStatus: "disabled"/)
     assert.match(runner, /missing_migration/)
-    assert.match(runner, /Não marca conclusão das fases/)
+    assert.match(runner, /NÃ£o marca conclusÃ£o das fases/)
     const page = readFileSync(join(repoRoot, "app/cobranca/page.tsx"), "utf8")
     assert.match(page, /discoveryStatus/)
     assert.match(page, /toast\.message/)
@@ -405,7 +405,7 @@ describe("3.1E-Q reconciliação financeira retomável", () => {
 })
 
 describe("3.1E-O timeout HTTP cobre o corpo", () => {
-  it("helper operacional delega deadline único e preserva timeout do runner", () => {
+  it("helper operacional delega deadline Ãºnico e preserva timeout do runner", () => {
     const adminHttp = readFileSync(join(repoRoot, "lib/brbyte/admin-http.ts"), "utf8")
     const request = readFileSync(join(repoRoot, "lib/brbyte/admin-http-request.ts"), "utf8")
     const invoiceInfo = readFileSync(join(repoRoot, "lib/brbyte/invoice-info.ts"), "utf8")
@@ -433,7 +433,7 @@ describe("3.1E-O timeout HTTP cobre o corpo", () => {
 })
 
 describe("3.1E-V garantia de progresso", () => {
-  it("patch local não expõe PII e não altera assinaturas RPC existentes", () => {
+  it("patch local nÃ£o expÃµe PII e nÃ£o altera assinaturas RPC existentes", () => {
     const patch = readFileSync(
       join(repoRoot, "supabase/patch-collection-discovery-progress-guarantee.sql"),
       "utf8"
@@ -463,7 +463,7 @@ describe("3.1E-V garantia de progresso", () => {
 })
 
 describe("3.1E-AA elegibilidade e observabilidade de skips", () => {
-  it("histograma sanitizado, corte de 5 dias e cancelamento não inventado", () => {
+  it("histograma sanitizado, corte de 5 dias e cancelamento nÃ£o inventado", () => {
     const skip = readFileSync(join(repoRoot, "lib/collections/skip-reason.ts"), "utf8")
     const runner = readFileSync(join(repoRoot, "lib/collections/discovery-runner.ts"), "utf8")
     const sync = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
@@ -504,8 +504,8 @@ describe("3.1E-AA elegibilidade e observabilidade de skips", () => {
   })
 })
 
-describe("3.1E-AH supersede auditável", () => {
-  it("RPC fenced, fora do índice resumível, ausente do runner e do Sync", () => {
+describe("3.1E-AH supersede auditÃ¡vel", () => {
+  it("RPC fenced, fora do Ã­ndice resumÃ­vel, ausente do runner e do Sync", () => {
     const patch = readFileSync(
       join(repoRoot, "supabase/patch-collection-discovery-supersede.sql"),
       "utf8"
@@ -565,7 +565,7 @@ describe("3.1E-AH supersede auditável", () => {
     assert.match(checkpoint, /run\.status === "superseded"/)
     assert.match(internal, /import "server-only"/)
     assert.match(internal, /supersede_collection_discovery_run/)
-    assert.match(internal, /Não é chamada pelo runner/)
+    assert.match(internal, /NÃ£o Ã© chamada pelo runner/)
 
     assert.equal(runner.includes("supersede_collection_discovery_run"), false)
     assert.equal(runner.includes('status: "superseded"'), false)
@@ -581,7 +581,7 @@ describe("3.1E-AH supersede auditável", () => {
 
 
 describe("3.1E-AN health probe de listagem sancionada", () => {
-  it("rota reutilizada, modo health read-only e sem imports de runner/persistência", () => {
+  it("rota reutilizada, modo health read-only e sem imports de runner/persistÃªncia", () => {
     const route = readFileSync(
       join(repoRoot, "app/api/admin/collections/invoice-list-probe/route.ts"),
       "utf8"
@@ -605,7 +605,7 @@ describe("3.1E-AN health probe de listagem sancionada", () => {
     )
 
     assert.match(route, /overdue_first_page_health|OVERDUE_FIRST_PAGE_HEALTH_MODE/)
-    assert.match(route, /maxDuration = 90/)
+    assert.match(route, /maxDuration = 120/)
     assert.match(route, /runOverdueFirstPageHealthProbe/)
     assert.match(route, /runInvoiceListProbe/)
     assert.match(health, /listOverdueInvoicesPage/)
@@ -631,8 +631,8 @@ describe("3.1E-AN health probe de listagem sancionada", () => {
 })
 
 
-describe("código 3.1 sem service_role no browser", () => {
-  it("libs novas não expõem service role", () => {
+describe("cÃ³digo 3.1 sem service_role no browser", () => {
+  it("libs novas nÃ£o expÃµem service role", () => {
     const dirs = [
       join(repoRoot, "lib/collections"),
       join(repoRoot, "lib/retention"),
