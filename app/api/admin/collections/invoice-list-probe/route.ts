@@ -4,6 +4,8 @@ import { jsonError } from "@/lib/collections/http"
 import { runInvoiceListProbe } from "@/lib/brbyte/invoice-list-probe"
 import { runOverdueFirstPageHealthProbe } from "@/lib/brbyte/invoice-list-health-probe"
 import { OVERDUE_FIRST_PAGE_HEALTH_MODE } from "@/lib/brbyte/invoice-list-health-probe-result"
+import { runClientIdentityHealthProbe } from "@/lib/brbyte/client-identity-probe"
+import { CLIENT_IDENTITY_HEALTH_MODE } from "@/lib/brbyte/client-identity-probe-result"
 import { COLLECTION_SECTOR_CODE } from "@/types/collections"
 
 export const runtime = "nodejs"
@@ -17,6 +19,7 @@ export const maxDuration = 120
  * Não grava casos. Não chama assignment.
  *
  * Modo legado (sem `mode`): formulário DevTools do probe antigo.
+ * Modo `client_identity_health`: 1ª página sem cursor + ≤ 2 invoice_info, sanitizado.
  * Modo `overdue_first_page_health`: 1ª página operacional de atrasados (read-only).
  */
 export async function GET() {
@@ -45,6 +48,19 @@ export async function POST(request: Request) {
   }
 
   if (body && Object.prototype.hasOwnProperty.call(body, "mode")) {
+    if (body.mode === CLIENT_IDENTITY_HEALTH_MODE) {
+      if (bodyParseFailed) {
+        return jsonError(400, "Body JSON inválido.")
+      }
+      // 3.1E-AS: identidade do cliente, read-only, 1 tentativa, ≤ 2 invoice_info.
+      const identity = await runClientIdentityHealthProbe({ timeoutMs: body.timeoutMs })
+      const identityStatus = identity.ok
+        ? 200
+        : identity.classification === "AUTH_OR_CONFIG_FAILURE"
+          ? 503
+          : 502
+      return NextResponse.json(identity, { status: identityStatus })
+    }
     if (body.mode !== OVERDUE_FIRST_PAGE_HEALTH_MODE) {
       return jsonError(400, "mode inválido para o probe de listagem.")
     }
