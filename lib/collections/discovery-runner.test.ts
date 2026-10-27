@@ -574,7 +574,7 @@ describe("orçamento de duração com relógio controlado", () => {
     assert.equal(result.cursorLastInvoicePk, null)
   })
 
-  it("pausa no meio da página sem avançar o cursor", async () => {
+  it("AA — pausa no meio da página avança só o prefixo confirmado", async () => {
     const store = createMemoryDiscoveryStore()
     const repo = createMemoryDiscoveryCaseRepo()
     let nowMs = 0
@@ -610,9 +610,11 @@ describe("orçamento de duração com relógio controlado", () => {
     })
     assert.equal(result.status, "paused")
     assert.equal(result.resumable, true)
-    assert.equal(result.cursorLastInvoicePk, null)
+    assert.equal(result.pauseStage, "confirmed_prefix_budget")
     assert.equal(result.created >= 1, true)
     assert.equal(result.created < 15, true)
+    assert.equal(result.cursorLastInvoicePk, String(9 + result.created))
+    assert.equal(result.scannedInvoices, result.created)
     assert.equal(result.coverageProven, false)
   })
 
@@ -1300,7 +1302,7 @@ describe("3.1E-V garantia de progresso", () => {
     assert.equal(result.pauseStage, "page_limit")
   })
 
-  it("página parcial não avança cursor e retomada é idempotente", async () => {
+  it("AB/AE/AF — página parcial avança prefixo; restantes reaparecem; retomada idempotente", async () => {
     const store = createMemoryDiscoveryStore()
     const repo = createMemoryDiscoveryCaseRepo()
     let nowMs = 0
@@ -1328,11 +1330,14 @@ describe("3.1E-V garantia de progresso", () => {
       },
       toInvoice: (row) => invoice(String(row.invoicePk), 12),
     })
-    assert.equal(first.pauseStage, "partial_page")
-    assert.equal(first.cursorLastInvoicePk, null)
+    assert.equal(first.pauseStage, "confirmed_prefix_budget")
+    assert.equal(first.progressMade, true)
+    assert.equal(first.consecutiveNoProgress, 0)
     assert.equal(first.created >= 1, true)
     assert.equal(first.created < 15, true)
+    assert.equal(first.cursorLastInvoicePk, String(9 + first.created))
     const createdFirst = first.created
+    const seenAfter: Array<string | null> = []
     nowMs = 0
     const second = await runOverdueDiscoveryBatch({
       store,
@@ -1348,13 +1353,15 @@ describe("3.1E-V garantia de progresso", () => {
       clock: () => nowMs,
       budgetMs: 45_000,
       configuredTimeoutMs: 5_000,
-      fetchPage: async () => ({
-        ok: true,
-        rows: page15.map((invoicePk) => ({ invoicePk })),
-        total: 15,
-      }),
+      fetchPage: async ({ afterInvoicePk }) => {
+        seenAfter.push(afterInvoicePk)
+        const rest = page15.filter((pk) => afterInvoicePk == null || Number(pk) > Number(afterInvoicePk))
+        return { ok: true, rows: rest.map((invoicePk) => ({ invoicePk })), total: rest.length }
+      },
       toInvoice: (row) => invoice(String(row.invoicePk), 12),
     })
+    assert.equal(seenAfter[0], first.cursorLastInvoicePk)
+    assert.equal(createdFirst + second.created >= 15 || repo.createdEvents.length === 15, true)
     assert.equal(second.runId, first.runId)
     assert.equal(repo.createdEvents.length, 15)
     assert.equal(second.cursorLastInvoicePk, "24")

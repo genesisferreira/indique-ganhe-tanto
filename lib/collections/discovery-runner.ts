@@ -1,3 +1,4 @@
+import { decideConfirmedPrefixAdvance } from "@/lib/collections/discovery-prefix"
 import { parseOverdueInvoicePk } from "@/lib/brbyte/overdue-invoice-list-query"
 import {
   COLLECTION_DISCOVERY_LEASE_MS,
@@ -756,6 +757,11 @@ export async function runOverdueDiscoveryBatch<
 
     const lease = { runId: run.id, owner, generation }
     let processedAll = true
+    // Sprint 3.1E-AR: prefixo contíguo confirmado. Só avança até o último
+    // invoice_pk consecutivo cujo efeito (persistência ou skip de negócio)
+    // foi confirmado. Nunca pula fatura; erro técnico não vira skip.
+    let confirmedPrefixPk: string | null = null
+    let confirmedPrefixRows = 0
     const persistStarted = clock()
     for (const row of fetched.rows) {
       const remainingForPersist = collectionDiscoveryRemainingBudgetMs({
@@ -772,9 +778,10 @@ export async function runOverdueDiscoveryBatch<
       if (!invoice || !pk) {
         incrementDiscoverySkip(skipReasons, classifyUnmappedDiscoveryRow(row))
         counters.skippedCount += 1
+        confirmedPrefixPk = row.invoicePk ?? confirmedPrefixPk
+        confirmedPrefixRows += 1
         continue
       }
-      counters.scannedInvoices += 1
       const existing = await input.repo.findByInvoicePk(pk)
       try {
         const hydrateTimeout = collectionDiscoveryCappedTimeoutMs({
@@ -813,6 +820,9 @@ export async function runOverdueDiscoveryBatch<
         }
         if (persisted.newlyAssigned) counters.assignedCount += 1
         if (persisted.created && persisted.unassigned) counters.unassignedCount += 1
+        counters.scannedInvoices += 1
+        confirmedPrefixPk = invoice.invoicePk
+        confirmedPrefixRows += 1
       } catch {
         counters.errorCount += 1
         return fail(
@@ -824,10 +834,40 @@ export async function runOverdueDiscoveryBatch<
     const persistenceDurationMs = Math.max(0, clock() - persistStarted)
 
     if (!processedAll) {
-      const progressMade =
-        counters.scannedInvoices > invoicesAtClaim ||
-        counters.createdCount > 0 ||
-        counters.updatedCount > 0
+      const prefixAdvance = decideConfirmedPrefixAdvance({
+        cursorBefore: run.cursorLastInvoicePk,
+        confirmedPrefixPk,
+        confirmedPrefixRows,
+      })
+      if (prefixAdvance.advance) {
+        const advancedPrefix = await input.store.advance({
+          runId: run.id,
+          owner,
+          generation,
+          now: new Date(input.now.getTime() + Math.max(0, clock() - startedAtMs)),
+          cursorLastInvoicePk: prefixAdvance.cursor,
+          counters,
+        })
+        if (!advancedPrefix.ok) {
+          return fail("stale_lease", "Lease perdida. Worker antigo não avançou o prefixo confirmado.")
+        }
+        run = advancedPrefix.run
+        counters = countersFromRun(run)
+        return pause(
+          "Lote pausado por orçamento após prefixo confirmado. Cursor avançou só até a última fatura consecutiva confirmada; as demais reaparecem na próxima consulta.",
+          {
+            lastErrorClass: formatDiscoveryPauseClass("confirmed_prefix_budget", 0),
+            pauseStage: "confirmed_prefix_budget",
+            progressMade: true,
+            consecutiveNoProgress: 0,
+            remainingBeforeListMs,
+            remainingAfterListMs,
+            listDurationMs,
+            persistenceDurationMs,
+          }
+        )
+      }
+      const progressMade = false
       if (!progressMade) {
         return pauseNoProgress(
           "partial_page",

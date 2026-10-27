@@ -61,6 +61,7 @@ export type DiscoveryPauseStage =
   | "page_confirmed_budget"
   | "recon_budget"
   | "zero_progress_loop"
+  | "confirmed_prefix_budget"
 
 const PAUSE_STAGE_SET: ReadonlySet<string> = new Set([
   "pre_list_budget",
@@ -72,6 +73,7 @@ const PAUSE_STAGE_SET: ReadonlySet<string> = new Set([
   "page_confirmed_budget",
   "recon_budget",
   "zero_progress_loop",
+  "confirmed_prefix_budget",
 ])
 
 export type CollectionDiscoveryStatus =
