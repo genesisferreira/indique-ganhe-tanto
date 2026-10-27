@@ -21,6 +21,7 @@ import type {
   ContactOutcome,
   OperationalContactAttempt,
 } from "@/types/collections"
+import { CONSOLIDATED_CASE_NOTICE, CONSOLIDATED_HISTORY_NOTICE } from "@/lib/collections/consolidation"
 
 const STATUS_LABEL: Record<string, string> = {
   open: "Aberto",
@@ -30,6 +31,7 @@ const STATUS_LABEL: Record<string, string> = {
   unresolved: "Não resolvido",
   escalated_retention: "Escalado (retenção)",
   closed: "Encerrado",
+  consolidated: "Consolidado",
 }
 
 function formatMoney(value: number | null) {
@@ -51,6 +53,7 @@ export default function CobrancaDetailPage({
   const [notes, setNotes] = useState("")
   const [toEmployeeId, setToEmployeeId] = useState("")
   const [busy, setBusy] = useState(false)
+  const [consolidation, setConsolidation] = useState<{ consolidatedIntoCaseId: string | null; consolidatedCaseCount: number } | null>(null)
   const [operationalHistory, setOperationalHistory] = useState<
     Array<{
       id: string
@@ -74,6 +77,7 @@ export default function CobrancaDetailPage({
     setEvents(json.events ?? [])
     setAttempts(json.attempts ?? [])
     setOperationalHistory(json.operationalHistory ?? [])
+    setConsolidation(json.consolidation ?? null)
   }, [id])
 
   useEffect(() => {
@@ -101,7 +105,9 @@ export default function CobrancaDetailPage({
     return <p className="text-muted-foreground">Carregando caso…</p>
   }
 
-  const locked = item.status === "paid" || item.status === "closed" || item.status === "escalated_retention"
+  const consolidated = item.status === "consolidated"
+  const locked =
+    item.status === "paid" || item.status === "closed" || item.status === "escalated_retention" || consolidated
 
   return (
     <div className="space-y-6">
@@ -113,6 +119,20 @@ export default function CobrancaDetailPage({
           <Link href="/cobranca">Voltar</Link>
         </Button>
       </PageHeader>
+
+      {consolidated && consolidation?.consolidatedIntoCaseId ? (
+        <div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground" data-testid="consolidated-case-notice">
+          {CONSOLIDATED_CASE_NOTICE}{" "}
+          <Link className="underline" href={`/cobranca/${consolidation.consolidatedIntoCaseId}`}>
+            Abrir caso ativo
+          </Link>
+        </div>
+      ) : null}
+      {!consolidated && (consolidation?.consolidatedCaseCount ?? 0) > 0 ? (
+        <p className="text-xs text-muted-foreground" data-testid="consolidated-history-notice">
+          {CONSOLIDATED_HISTORY_NOTICE}
+        </p>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="rounded-lg border p-4 space-y-2 text-sm">

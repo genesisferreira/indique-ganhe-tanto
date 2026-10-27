@@ -1,5 +1,6 @@
 import "server-only"
 
+import { CONSOLIDATED_STATUS, consolidatedActionBlock, operationalCases } from "@/lib/collections/consolidation"
 import {
   COLLECTION_SECTOR_CODE,
   COLLECTION_WORK_TYPE,
@@ -253,6 +254,34 @@ async function loadContractMeta(
   return map
 }
 
+/** 3.1E-AW: casos consolidados por canônico (tolerante à migration ausente). */
+async function loadConsolidatedCounts(caseIds: string[]): Promise<Map<string, number>> {
+  const map = new Map<string, number>()
+  if (caseIds.length === 0) return map
+  const db = getOpsDb()
+  const res = await awaitQuery<Record<string, unknown>>(
+    db.from("collection_cases").select("consolidated_into_case_id").eq("status", CONSOLIDATED_STATUS).in("consolidated_into_case_id", caseIds)
+  )
+  for (const row of res.data ?? []) {
+    const k = asString(row.consolidated_into_case_id)
+    if (k) map.set(k, (map.get(k) ?? 0) + 1)
+  }
+  return map
+}
+
+/** 3.1E-AW: ponte de consolidação (canônico e casos incorporados). */
+async function loadConsolidationBridge(caseId: string): Promise<{ consolidatedIntoCaseId: string | null; consolidatedCaseIds: string[] }> {
+  const db = getOpsDb()
+  const self = await awaitQuery<Record<string, unknown>>(
+    db.from("collection_cases").select("consolidated_into_case_id").eq("id", caseId)
+  )
+  const into = asString(self.data?.[0]?.consolidated_into_case_id)
+  const children = await awaitQuery<Record<string, unknown>>(
+    db.from("collection_cases").select("id").eq("status", CONSOLIDATED_STATUS).eq("consolidated_into_case_id", caseId)
+  )
+  return { consolidatedIntoCaseId: into, consolidatedCaseIds: (children.data ?? []).map((r) => String(r.id)) }
+}
+
 export async function listCollectionCases(input: {
   employeeId?: string | null
   adminAll: boolean
@@ -296,6 +325,7 @@ export async function listCollectionCases(input: {
     return []
   }
 
+  rows = operationalCases(rows)
   const caseIds = rows.map((row) => row.id)
   const assignmentRes = await awaitQuery<{
     work_id: string
@@ -316,6 +346,7 @@ export async function listCollectionCases(input: {
   const lastContact = await loadLastContactAt(COLLECTION_WORK_TYPE, caseIds)
   const invoicesByCase = await loadCaseInvoices(caseIds)
   const contractMeta = await loadContractMeta(caseIds)
+  const consolidatedCounts = await loadConsolidatedCounts(caseIds)
 
   return rows.map((row) => {
     const mapped = mapCollectionCase(row as unknown as Record<string, unknown>)
@@ -341,6 +372,7 @@ export async function listCollectionCases(input: {
       invoices: linked && linked.length > 0 ? linked : legacy,
       contractStatus: meta?.contractStatus ?? null,
       followUpDueAt: meta?.followUpDueAt ?? null,
+      consolidatedCaseCount: consolidatedCounts.get(row.id) ?? 0,
     }
   })
 }
@@ -350,6 +382,7 @@ export async function getCollectionCaseDetail(caseId: string): Promise<{
   events: CollectionCaseEvent[]
   attempts: OperationalContactAttempt[]
   assigneeEmployeeId: string | null
+  consolidation?: { consolidatedIntoCaseId: string | null; consolidatedCaseCount: number }
 }> {
   const db = getOpsDb()
   const { data } = await db
@@ -363,11 +396,13 @@ export async function getCollectionCaseDetail(caseId: string): Promise<{
     return { case: null, events: [], attempts: [], assigneeEmployeeId: null }
   }
 
+  // 3.1E-AW: histórico do canônico inclui eventos dos casos incorporados (eventos não são reescritos).
+  const bridge = await loadConsolidationBridge(caseId)
   const eventsRes = await awaitQuery<Record<string, unknown>>(
     db
       .from("collection_case_events")
       .select("id, case_id, event_type, actor_profile_id, old_value, new_value, metadata, created_at")
-      .eq("case_id", caseId)
+      .in("case_id", [caseId, ...bridge.consolidatedCaseIds])
       .order("created_at", { ascending: false })
       .limit(100)
   )
@@ -408,6 +443,10 @@ export async function getCollectionCaseDetail(caseId: string): Promise<{
       createdAt: String(row.created_at),
     })),
     assigneeEmployeeId: active?.employeeId ?? null,
+    consolidation: {
+      consolidatedIntoCaseId: bridge.consolidatedIntoCaseId,
+      consolidatedCaseCount: bridge.consolidatedCaseIds.length,
+    },
   }
 }
 
@@ -426,6 +465,8 @@ export async function registerCollectionContact(input: {
     .eq("id", input.caseId)
     .maybeSingle()
   if (!current?.id) return { ok: false, message: "Caso não encontrado." }
+  const consolidatedBlock = consolidatedActionBlock(String(current.status))
+  if (consolidatedBlock) return { ok: false, message: consolidatedBlock }
 
   await db
     .from("operational_case_contact_attempts")
@@ -613,6 +654,11 @@ export async function transferCollectionCase(input: {
   actorProfileId: string
   reason?: string | null
 }): Promise<{ ok: true; assignmentId?: string } | { ok: false; message: string }> {
+  {
+    const { data: cur } = await getOpsDb().from("collection_cases").select("status").eq("id", input.caseId).maybeSingle()
+    const blocked = consolidatedActionBlock(cur?.status ? String(cur.status) : null)
+    if (blocked) return { ok: false, message: blocked }
+  }
   const active = await findActiveAssignment({
     workType: COLLECTION_WORK_TYPE,
     workId: input.caseId,

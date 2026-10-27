@@ -9,6 +9,7 @@ import {
   type ContractCardVisualState,
 } from "@/lib/collections/operational-model"
 import type { NextBatchSummary } from "@/lib/collections/next-batch"
+import { CONSOLIDATED_HISTORY_NOTICE } from "@/lib/collections/consolidation"
 import type { CollectionCaseInvoiceItem, CollectionCaseListItem } from "@/types/collections"
 
 export const INVOICE_PAYMENT_LABEL: Record<CollectionCaseInvoiceItem["paymentStatus"], string> = {
@@ -33,6 +34,8 @@ export type ContractCardView = {
   followUpDueAt: string | null
   priority: "alta" | "normal"
   invoices: Array<CollectionCaseInvoiceItem & { paymentLabel: string }>
+  /** 3.1E-AW: aviso "Histórico consolidado" (sem IDs). */
+  consolidatedNotice: string | null
 }
 
 export function buildContractCardView(item: CollectionCaseListItem, now: Date = new Date()): ContractCardView {
@@ -74,6 +77,7 @@ export function buildContractCardView(item: CollectionCaseListItem, now: Date = 
     followUpDueAt: item.followUpDueAt ?? null,
     priority: followUpExpired || (maxDaysOverdue ?? 0) >= 15 ? "alta" : "normal",
     invoices,
+    consolidatedNotice: (item.consolidatedCaseCount ?? 0) > 0 ? CONSOLIDATED_HISTORY_NOTICE : null,
   }
 }
 

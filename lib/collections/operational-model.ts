@@ -163,6 +163,8 @@ export type CapacityOccupant = {
     | "cancelled"
     | "closed"
     | "escalated_out"
+    /** 3.1E-AW: terminal, não ocupa capacidade. */
+    | "consolidated"
   dueAt?: string | null
 }
 
@@ -199,6 +201,8 @@ export function capacityStateFromCaseStatus(status: string): CapacityOccupant["s
       return "paid"
     case "escalated_retention":
       return "escalated_out"
+    case "consolidated":
+      return "consolidated"
     default:
       return "closed"
   }
@@ -351,4 +355,5 @@ export const COLLECTION_WORK_STATUS_LABEL: Record<string, string> = {
   paid: "Pago",
   cancelled: "Cancelado",
   closed: "Encerrado",
+  consolidated: "Consolidado",
 }

@@ -185,6 +185,11 @@ export default function CobrancaPage() {
                   {card.followUpDueAt ? new Date(card.followUpDueAt).toLocaleString("pt-BR") : "—"}
                 </p>
               </div>
+              {card.consolidatedNotice ? (
+                <p className="mt-2 text-xs text-muted-foreground" data-testid="contract-consolidated-notice">
+                  {card.consolidatedNotice}
+                </p>
+              ) : null}
               <div className="mt-3 overflow-x-auto rounded border">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50 text-left">

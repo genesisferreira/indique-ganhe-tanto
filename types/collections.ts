@@ -14,6 +14,8 @@ export const COLLECTION_STATUSES = [
   "unresolved",
   "escalated_retention",
   "closed",
+  /** 3.1E-AW: terminal; incorporado ao caso canônico do mesmo contrato. */
+  "consolidated",
 ] as const
 
 export type CollectionCaseStatus = (typeof COLLECTION_STATUSES)[number]
@@ -29,6 +31,7 @@ export const COLLECTION_TERMINAL_STATUSES: readonly CollectionCaseStatus[] = [
   "paid",
   "closed",
   "escalated_retention",
+  "consolidated",
 ]
 
 export const RETENTION_STATUSES = [
@@ -175,6 +178,8 @@ export type CollectionCaseListItem = CollectionCase & {
   invoices?: CollectionCaseInvoiceItem[]
   contractStatus?: number | null
   followUpDueAt?: string | null
+  /** 3.1E-AW: quantos casos legados do mesmo contrato foram incorporados (sem IDs). */
+  consolidatedCaseCount?: number
 }
 
 export type RetentionCaseListItem = RetentionCase & {

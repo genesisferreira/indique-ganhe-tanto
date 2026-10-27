@@ -46,7 +46,7 @@ async function loadPg() {
   return { EmbeddedPostgres, Client }
 }
 
-export async function startCollectionsLab() {
+export async function startCollectionsLab(options = {}) {
   rmSync(dataDir, { recursive: true, force: true })
   mkdirSync(dataDir, { recursive: true })
   const { EmbeddedPostgres, Client } = await loadPg()
@@ -104,9 +104,13 @@ export async function startCollectionsLab() {
     "supabase/patch-collection-discovery-progress-guarantee.sql",
     "supabase/patch-collection-discovery-supersede.sql",
     "supabase/patch-collection-ar-operational-batch.sql",
+    "supabase/patch-collection-aw-contract-case-consolidation.sql",
     "supabase/patch-collection-au-contract-batch.sql",
   ]
-  for (const rel of files) {
+  // 3.1E-AW: options.stopAfter permite testar a cadeia AR -> AW -> consolidação -> AU.
+  const stopIdx = options.stopAfter ? files.indexOf(options.stopAfter) : -1
+  const chain = stopIdx >= 0 ? files.slice(0, stopIdx + 1) : files
+  for (const rel of chain) {
     const sql = readFileSync(join(REPO_ROOT, rel), "utf8")
     await ownerClient.query(sql)
   }

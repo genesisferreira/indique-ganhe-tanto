@@ -24,6 +24,26 @@
 
 begin;
 
+-- 3.1E-AW gate: AU só cria o modelo um-caso-ativo-por-contrato quando não há
+-- duplicatas ativas não resolvidas (aplicar AW + RPC de consolidação antes).
+do $aw_gate$
+declare
+  v_dup integer;
+begin
+  select count(*) into v_dup from (
+    select contract_pk from public.collection_cases
+    where contract_pk ~ '^[1-9][0-9]*$'
+      and status in ('open', 'in_contact', 'promise_to_pay', 'unresolved')
+    group by contract_pk having count(*) > 1
+  ) d;
+  if v_dup > 0 then
+    raise exception 'AU abortada: % contrato(s) com mais de um caso ativo; aplicar AW e consolidar antes', v_dup
+      using errcode = 'P0001';
+  end if;
+end
+$aw_gate$;
+
+
 -- ------------------------------------------------------------------
 -- 1) collection_cases: unidade do caso + vencimento de promessa/retorno
 -- ------------------------------------------------------------------
@@ -759,20 +779,51 @@ stable
 security definer
 set search_path = public
 as $$
+  with active as (
+    select id, contract_pk from public.collection_cases
+    where status in ('open', 'in_contact', 'promise_to_pay', 'unresolved')
+  ),
+  dup as (
+    select contract_pk, count(*) as n from active
+    where contract_pk ~ '^[1-9][0-9]*$'
+    group by contract_pk having count(*) > 1
+  ),
+  valid_cases as (
+    select c.id, c.invoice_pk from public.collection_cases c
+    where c.invoice_pk ~ '^[1-9][0-9]*$'
+  )
   select jsonb_build_object(
     'casesTotal', (select count(*) from public.collection_cases),
-    'casesWithValidInvoicePk', (select count(*) from public.collection_cases where invoice_pk ~ '^[1-9][0-9]*$'),
+    'casesEvaluated', (select count(*) from public.collection_cases),
+    'casesWithValidInvoicePk', (select count(*) from valid_cases),
     'casesLinked', (select count(distinct case_id) from public.collection_case_invoices),
+    'relationsTotal', (select count(*) from public.collection_case_invoices),
+    'missingInvoicePk', (select count(*) from public.collection_cases
+                         where invoice_pk is null or invoice_pk !~ '^[1-9][0-9]*$'),
     'casesWithoutContractPk', (select count(*) from public.collection_cases
                                where contract_pk is null or contract_pk !~ '^[1-9][0-9]*$'),
-    'contractsWithMultipleActiveCases', (
-      select count(*) from (
-        select contract_pk from public.collection_cases
-        where contract_pk ~ '^[1-9][0-9]*$'
-          and status in ('open', 'in_contact', 'promise_to_pay', 'unresolved')
-        group by contract_pk having count(*) > 1
-      ) d
-    )
+    'missingContractPk', (select count(*) from public.collection_cases
+                          where contract_pk is null or contract_pk !~ '^[1-9][0-9]*$'),
+    'ambiguousContract', (select count(*) from public.collection_case_invoices l
+                          join public.collection_cases c on c.id = l.case_id
+                          where l.contract_pk is distinct from
+                                (case when c.contract_pk ~ '^[1-9][0-9]*$' then c.contract_pk end)
+                            and c.status <> 'consolidated'),
+    'conflictingInvoice', (select count(*) from valid_cases v
+                           join public.collection_case_invoices l on l.invoice_pk = v.invoice_pk
+                           join public.collection_cases c on c.id = v.id
+                           where l.case_id <> v.id
+                             and not (c.status = 'consolidated' and l.case_id::text = (to_jsonb(c) ->> 'consolidated_into_case_id'))),
+    'orphanCase', (select count(*) from valid_cases v
+                   where not exists (select 1 from public.collection_case_invoices l
+                                     where l.invoice_pk = v.invoice_pk)),
+    'contractsWithMultipleActiveCases', (select count(*) from dup),
+    'duplicateActiveContractGroups', (select count(*) from dup),
+    'duplicateActiveContractCases', (select coalesce(sum(n), 0) from dup),
+    'consolidatedCases', (select count(*) from public.collection_cases where status = 'consolidated'),
+    'unexplainedSkips', (select count(*) from valid_cases v
+                         where not exists (select 1 from public.collection_case_invoices l
+                                           where l.invoice_pk = v.invoice_pk))
   );
 $$;
 
