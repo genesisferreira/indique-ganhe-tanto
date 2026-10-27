@@ -61,6 +61,9 @@ export type CollectionsSyncResult = {
   coverageProven: false
   uniqueOrderProven: false
   message?: string
+  pauseStage?: string | null
+  contractsAdmitted?: number
+  capacityReached?: boolean
 }
 
 async function hydrateInvoice(input: {
@@ -108,6 +111,8 @@ export async function syncCollectionsFromControllr(input: {
   actorProfileId: string
   now?: Date
   runId?: string | null
+  /** Sprint 3.1E-AU: vagas de contratos novos ("Carregar próxima leva"). */
+  contractSlots?: number | null
 }): Promise<CollectionsSyncResult> {
   const empty: CollectionsSyncResult = {
     ok: true,
@@ -217,6 +222,7 @@ export async function syncCollectionsFromControllr(input: {
     referenceInstant: now,
     referenceDate,
     runId: input.runId,
+    contractSlots: input.contractSlots ?? null,
     clock,
     startedAtMs,
     budgetMs,
@@ -316,6 +322,8 @@ export async function syncCollectionsFromControllr(input: {
     discoveryStatus: batch.status,
     skippedThisBatch: batch.skippedThisBatch,
     skipReasons,
+    contractsAdmitted: batch.contractsAdmitted ?? 0,
+    capacityReached: batch.capacityReached === true,
   })
 
   return {
@@ -337,6 +345,9 @@ export async function syncCollectionsFromControllr(input: {
     resumable: batch.resumable,
     runId: batch.runId,
     discoveryStatus: batch.status,
+    pauseStage: batch.pauseStage,
+    contractsAdmitted: batch.contractsAdmitted ?? 0,
+    capacityReached: batch.capacityReached === true,
     message: [
       batch.message,
       batch.unassigned > 0

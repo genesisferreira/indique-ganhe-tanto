@@ -15,9 +15,21 @@ export type DiscoveryLease = {
   generation: number
 }
 
+/** Desfechos sanitizados da persistência por contrato (sem IDs). */
+export type ContractPersistOutcome =
+  | "case_created"
+  | "invoice_attached"
+  | "invoice_updated"
+  | "already_attached"
+  | "cancelled_contract"
+  | "paid_without_open_case"
+  | "already_resolved"
+  | "inconclusive"
+
 export type DiscoveryFencedPersistResult = {
   ok: boolean
   code: "created" | "updated" | "stale_lease" | "persist_error" | "not_found" | "invalid_input"
+  outcome?: ContractPersistOutcome | null
   caseId: string | null
   inserted: boolean
   newlyAssigned: boolean
@@ -37,6 +49,7 @@ export type DiscoveryFencedReconcileResult = {
     | "invalid_input"
     | "identity_mismatch"
     | "missing_migration"
+    | "partial_paid"
   caseId: string | null
   closed: boolean
   alreadyPaid: boolean
@@ -45,6 +58,8 @@ export type DiscoveryFencedReconcileResult = {
 
 export type DiscoveryCaseRepo = {
   findByInvoicePk(invoicePk: string): Promise<ExistingCollectionCase | null>
+  /** Sprint 3.1E-AU: contrato já possui caso operacional ativo? (sem PII) */
+  isContractActive?(contractPk: string): Promise<boolean>
   persistFencedInvoice(input: {
     lease: DiscoveryLease
     writeModel: Record<string, unknown>
@@ -85,6 +100,8 @@ export type DiscoveryPersistResult = {
   skipReason: DiscoverySkipReason | null
   newlyAssigned: boolean
   unassigned: boolean
+  outcome?: ContractPersistOutcome | null
+  technicalError?: boolean
 }
 
 export function decideDiscoveryPersistAction(input: {
@@ -158,7 +175,25 @@ export async function persistDiscoveredOverdueInvoice(input: {
         skipped: false,
         skipReason: null,
         staleLease: fenced.code === "stale_lease",
+        technicalError: fenced.code !== "stale_lease",
       }
+    }
+    if (
+      fenced.outcome === "inconclusive" ||
+      fenced.outcome === "cancelled_contract" ||
+      fenced.outcome === "already_resolved"
+    ) {
+      // skip de negócio confirmado pelo banco (sem escrita de caso).
+      return {
+        ...skipped,
+        skipReason:
+          fenced.outcome === "cancelled_contract"
+            ? "cancelled_contract"
+            : fenced.outcome === "already_resolved"
+              ? "already_closed"
+              : "inconclusive",
+        outcome: fenced.outcome,
+      } as DiscoveryPersistResult & { staleLease: boolean }
     }
     return {
       action: fenced.inserted ? "create" : "update_open",
@@ -169,6 +204,7 @@ export async function persistDiscoveredOverdueInvoice(input: {
       newlyAssigned: fenced.newlyAssigned,
       unassigned: fenced.unassigned,
       staleLease: false,
+      outcome: fenced.outcome ?? (fenced.inserted ? "case_created" : "invoice_updated"),
     }
   }
 

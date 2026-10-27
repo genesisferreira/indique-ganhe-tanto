@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { authorizeOperationalCaseWrite } from "@/lib/collections/actor"
 import { transferCollectionCase } from "@/lib/collections/cases.service"
+import { transferContractContactLock } from "@/lib/collections/contract-lock.service"
 import { jsonError, stripBrowserActor } from "@/lib/collections/http"
 import { COLLECTION_SECTOR_CODE, COLLECTION_WORK_TYPE } from "@/types/collections"
 
@@ -30,5 +31,11 @@ export async function POST(
     reason: typeof body.reason === "string" ? body.reason : null,
   })
   if (!result.ok) return jsonError(400, result.message)
+  // Sprint 3.1E-AU: transferência explícita da trava do contrato (histórico preservado).
+  await transferContractContactLock({
+    caseId: id,
+    fromProfileId: auth.profileId,
+    toEmployeeId,
+  })
   return NextResponse.json({ ok: true, assignmentId: result.assignmentId })
 }

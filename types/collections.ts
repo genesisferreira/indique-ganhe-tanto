@@ -158,10 +158,23 @@ export type RetentionCaseEvent = {
   createdAt: string
 }
 
+/** Sprint 3.1E-AU: fatura vinculada ao bloco do contrato. */
+export type CollectionCaseInvoiceItem = {
+  invoicePk: string
+  dueDate: string | null
+  daysOverdue: number | null
+  paymentStatus: "open" | "paid" | "cancelled_contract" | "inconclusive"
+  resolvedAt: string | null
+}
+
 export type CollectionCaseListItem = CollectionCase & {
   assigneeEmployeeId: string | null
   assigneeName: string | null
   lastContactAt: string | null
+  /** Sprint 3.1E-AU: todas as faturas do contrato (legado: só a âncora). */
+  invoices?: CollectionCaseInvoiceItem[]
+  contractStatus?: number | null
+  followUpDueAt?: string | null
 }
 
 export type RetentionCaseListItem = RetentionCase & {

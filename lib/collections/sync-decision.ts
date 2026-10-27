@@ -127,6 +127,11 @@ export function buildCollectionCaseWriteModel(input: {
     invoice_pk: input.invoice.invoicePk,
     customer_name: input.invoice.customerName,
     customer_document: input.invoice.customerDocument,
+    // Sprint 3.1E-AU: status oficial do contrato (inteiro) para o bloco; não é PII.
+    contract_status:
+      typeof input.invoice.contractStatus === "number" && Number.isInteger(input.invoice.contractStatus)
+        ? input.invoice.contractStatus
+        : null,
     days_overdue: daysOverdue ?? 0,
     overdue_since: overdueSinceFromDueDate(input.invoice.invoiceDueDate),
     outstanding_amount: outstandingAmountFromInvoice({

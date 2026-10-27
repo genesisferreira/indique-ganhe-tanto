@@ -4,6 +4,7 @@
 --
 -- client_pk NÃO está comprovado em invoice/list nem invoice_info; por isso esta
 -- migration NÃO cria trava de contato por cliente nem agrupa por cliente.
+-- 3.1E-AU: coluna client_pk removida da tabela nova (não comprovada; não usar).
 --
 -- Rollback (sem apagar efeitos financeiros): restaurar a função
 -- advance_collection_discovery_checkpoint de patch-collection-discovery-progress-guarantee.sql;
@@ -17,12 +18,11 @@ create table if not exists public.collection_case_invoices (
   case_id uuid not null references public.collection_cases(id) on delete restrict,
   invoice_pk text not null,
   contract_pk text,
-  client_pk text,
   due_date date,
   credit_date date,
-  financial_status text not null default 'open',
+  payment_status text not null default 'open',
   days_overdue integer,
-  snapshot jsonb not null default '{}'::jsonb,
+  invoice_snapshot jsonb not null default '{}'::jsonb,
   first_seen_at timestamptz not null default timezone('utc', now()),
   last_seen_at timestamptz not null default timezone('utc', now()),
   resolved_at timestamptz,
@@ -30,15 +30,18 @@ create table if not exists public.collection_case_invoices (
   updated_at timestamptz not null default timezone('utc', now()),
   constraint collection_case_invoices_invoice_pk_uniq unique (invoice_pk),
   constraint collection_case_invoices_invoice_pk_chk check (invoice_pk ~ '^[1-9][0-9]*$'),
+  constraint collection_case_invoices_contract_pk_chk check (
+    contract_pk is null or contract_pk ~ '^[1-9][0-9]*$'
+  ),
   constraint collection_case_invoices_status_chk check (
-    financial_status in ('open', 'paid', 'cancelled_contract', 'inconclusive')
+    payment_status in ('open', 'paid', 'cancelled_contract', 'inconclusive')
   )
 );
 
 create index if not exists collection_case_invoices_case_idx on public.collection_case_invoices (case_id);
 create index if not exists collection_case_invoices_contract_idx on public.collection_case_invoices (contract_pk);
-create index if not exists collection_case_invoices_client_idx on public.collection_case_invoices (client_pk);
-create index if not exists collection_case_invoices_status_idx on public.collection_case_invoices (financial_status);
+create index if not exists collection_case_invoices_status_idx on public.collection_case_invoices (payment_status);
+create index if not exists collection_case_invoices_due_idx on public.collection_case_invoices (due_date);
 
 alter table public.collection_case_invoices enable row level security;
 revoke all on table public.collection_case_invoices from public;
@@ -47,12 +50,15 @@ revoke all on table public.collection_case_invoices from authenticated;
 grant select, insert, update on table public.collection_case_invoices to service_role;
 
 -- 2) Backfill determinístico: cada caso existente com invoice_pk válido ganha
--- exatamente uma linha (os três casos atuais). Idempotente.
+-- exatamente uma linha (os três casos atuais). Idempotente. contract_pk só é
+-- copiado quando válido (nunca inventado); ausente → null, caso preservado.
 insert into public.collection_case_invoices (
-  case_id, invoice_pk, contract_pk, client_pk, due_date, financial_status,
+  case_id, invoice_pk, contract_pk, due_date, payment_status,
   days_overdue, first_seen_at, last_seen_at, resolved_at
 )
-select c.id, c.invoice_pk, c.contract_pk, c.client_pk, c.overdue_since,
+select c.id, c.invoice_pk,
+       case when c.contract_pk ~ '^[1-9][0-9]*$' then c.contract_pk else null end,
+       c.overdue_since,
        case when c.status = 'paid' then 'paid' else 'open' end,
        c.days_overdue, c.created_at, c.updated_at,
        case when c.status = 'paid' then c.closed_at else null end

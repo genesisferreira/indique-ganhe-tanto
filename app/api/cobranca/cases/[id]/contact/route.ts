@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { authorizeOperationalCaseWrite } from "@/lib/collections/actor"
 import { registerCollectionContact } from "@/lib/collections/cases.service"
+import { acquireContractContactLock } from "@/lib/collections/contract-lock.service"
 import { jsonError, readContactPayload } from "@/lib/collections/http"
 import { COLLECTION_SECTOR_CODE, COLLECTION_WORK_TYPE } from "@/types/collections"
 
@@ -21,6 +22,10 @@ export async function POST(
 
   const payload = readContactPayload(await request.json().catch(() => null))
   if ("error" in payload) return jsonError(400, payload.error)
+
+  // Sprint 3.1E-AU: um atendimento ativo por contract_pk (transacional no banco).
+  const lock = await acquireContractContactLock({ caseId: id, profileId: auth.profileId })
+  if (!lock.allowed) return jsonError(409, lock.message ?? "Contrato em atendimento.")
 
   const result = await registerCollectionContact({
     caseId: id,

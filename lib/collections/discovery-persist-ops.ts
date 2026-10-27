@@ -4,8 +4,11 @@ import {
   ensureCollectionAssignment,
   insertCollectionCaseEvent,
 } from "@/lib/collections/cases.service"
-import { asString, getOpsDb } from "@/lib/collections/db"
-import type { DiscoveryCaseRepo } from "@/lib/collections/discovery-persist"
+import { asString, awaitQuery, getOpsDb } from "@/lib/collections/db"
+import type {
+  ContractPersistOutcome,
+  DiscoveryCaseRepo,
+} from "@/lib/collections/discovery-persist"
 import type { ExistingCollectionCase } from "@/lib/collections/sync-decision"
 import type { CollectionCaseStatus } from "@/types/collections"
 
@@ -13,6 +16,17 @@ function missingRpc(error: { message?: string } | null | undefined): boolean {
   const message = String(error?.message ?? "")
   return /does not exist|could not find the function|schema cache/i.test(message)
 }
+
+const CONTRACT_OUTCOMES: ReadonlySet<string> = new Set([
+  "case_created",
+  "invoice_attached",
+  "invoice_updated",
+  "already_attached",
+  "cancelled_contract",
+  "paid_without_open_case",
+  "already_resolved",
+  "inconclusive",
+])
 
 export function createOpsDiscoveryCaseRepo(): DiscoveryCaseRepo {
   const db = getOpsDb()
@@ -31,8 +45,21 @@ export function createOpsDiscoveryCaseRepo(): DiscoveryCaseRepo {
         invoicePk: asString(data?.invoice_pk) ?? invoicePk,
       } satisfies ExistingCollectionCase
     },
+    async isContractActive(contractPk) {
+      const { data } = await awaitQuery<{ id: string }>(
+        db
+          .from("collection_cases")
+          .select("id")
+          .eq("contract_pk", contractPk)
+          .in("status", ["open", "in_contact", "promise_to_pay", "unresolved"])
+          .limit(1)
+      )
+      return Array.isArray(data) && data.length > 0
+    },
     async persistFencedInvoice(input) {
-      const { data, error } = await db.rpc("persist_collection_discovery_invoice", {
+      // Sprint 3.1E-AU: um caso ativo por contract_pk; várias faturas por caso.
+      // Fail-closed sem a migration AU (sem fallback para caso por fatura).
+      const { data, error } = await db.rpc("persist_collection_contract_invoice", {
         p_run_id: input.lease.runId,
         p_owner: input.lease.owner,
         p_generation: input.lease.generation,
@@ -57,9 +84,13 @@ export function createOpsDiscoveryCaseRepo(): DiscoveryCaseRepo {
           unassigned: false,
         }
       }
+      const outcome = CONTRACT_OUTCOMES.has(String(payload.code))
+        ? (String(payload.code) as ContractPersistOutcome)
+        : null
       return {
         ok: true,
         code: payload.inserted === true ? "created" : "updated",
+        outcome,
         caseId: payload.caseId ? String(payload.caseId) : null,
         inserted: payload.inserted === true,
         newlyAssigned: payload.newlyAssigned === true,
@@ -149,7 +180,9 @@ export function createOpsDiscoveryCaseRepo(): DiscoveryCaseRepo {
             ? "already_paid"
             : payload.code === "skipped_terminal"
               ? "skipped_terminal"
-              : "closed",
+              : payload.code === "partial_paid"
+                ? "partial_paid"
+                : "closed",
         caseId: payload.caseId ? String(payload.caseId) : input.caseId,
         closed: payload.closed === true,
         alreadyPaid: payload.alreadyPaid === true,

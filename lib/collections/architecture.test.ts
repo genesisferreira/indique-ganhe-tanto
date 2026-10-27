@@ -352,7 +352,9 @@ describe("3.1E-L persistência fenced", () => {
     assert.match(patch, /to service_role/)
     assert.equal(/grant execute[\s\S]*persist_collection_discovery_invoice[\s\S]*to authenticated/i.test(patch), false)
     const persistOps = readFileSync(join(repoRoot, "lib/collections/discovery-persist-ops.ts"), "utf8")
-    assert.match(persistOps, /persist_collection_discovery_invoice/)
+    // 3.1E-AU: persistência por contrato; RPC legada permanece no SQL para rollback.
+    assert.match(persistOps, /persist_collection_contract_invoice/)
+    assert.equal(/persist_collection_discovery_invoice/.test(persistOps), false)
     const sync = readFileSync(join(repoRoot, "lib/collections/sync.ts"), "utf8")
     assert.match(sync, /startedAtMs/)
     assert.match(sync, /collectionDiscoveryCappedTimeoutMs/)

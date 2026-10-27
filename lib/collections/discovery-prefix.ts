@@ -1,7 +1,8 @@
 /**
- * Sprint 3.1E-AR — prefixo contíguo confirmado (puro, sem I/O).
+ * Sprint 3.1E-AR/AU — prefixo contíguo confirmado (puro, sem I/O).
  * O cursor só avança até o último invoice_pk consecutivo confirmado e nunca
  * retrocede (monotônico). Sem prefixo confirmado → não avança.
+ * Erro técnico NÃO entra no prefixo; skip de negócio confirmado entra.
  */
 const PK = /^[1-9]\d*$/
 

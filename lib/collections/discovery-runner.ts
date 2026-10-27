@@ -24,9 +24,11 @@ import {
 } from "@/lib/collections/discovery-contract"
 import { validateDiscoveryPageProgression } from "@/lib/collections/discovery-page"
 import {
+  decideDiscoveryPersistAction,
   persistDiscoveredOverdueInvoice,
   type DiscoveryCaseRepo,
 } from "@/lib/collections/discovery-persist"
+import { parseProvenPk } from "@/lib/collections/operational-model"
 import type { DiscoveryStore } from "@/lib/collections/discovery-store"
 import {
   reconciliationAdvancesCursor,
@@ -87,6 +89,12 @@ export type DiscoveryRunnerDeps<TRow extends { invoicePk: string | null } = { in
   minimumDaysOverdue: number
   collectionsEnabled: boolean
   runId?: string | null
+  /**
+   * Sprint 3.1E-AU: vagas de contratos novos neste lote ("Carregar próxima
+   * leva"). Ausente = sem limite (compatibilidade com o Sync legado).
+   * Fatura de contrato já ativo não consome vaga; contrato novo consome uma.
+   */
+  contractSlots?: number | null
 }
 
 export type DiscoveryBatchResult = {
@@ -121,6 +129,9 @@ export type DiscoveryBatchResult = {
   remainingAfterListMs: number | null
   skippedThisBatch: number
   skipReasons: DiscoverySkipHistogram
+  /** Sprint 3.1E-AU: contratos novos admitidos neste lote (agregado). */
+  contractsAdmitted?: number
+  capacityReached?: boolean
 }
 
 const LIST_WAIT_TIMEOUT = Symbol("list-wait-timeout")
@@ -265,6 +276,12 @@ export async function runOverdueDiscoveryBatch<
   let lastPageDurationMs = 8_000
   let pagesThisBatch = 0
   const skipReasons = emptyDiscoverySkipHistogram()
+  const contractSlots =
+    typeof input.contractSlots === "number" && Number.isFinite(input.contractSlots)
+      ? Math.max(0, Math.floor(input.contractSlots))
+      : null
+  let contractsAdmitted = 0
+  const admittedContracts = new Set<string>()
 
   const fail = async (
     errorClass: string,
@@ -298,6 +315,7 @@ export async function runOverdueDiscoveryBatch<
         message,
         pauseStage: errorClass === "zero_progress_loop" ? "zero_progress_loop" : extra.pauseStage ?? null,
         consecutiveNoProgress: consecutive,
+        contractsAdmitted,
         ...extra,
         skipReasons,
         skippedThisBatch: sumDiscoverySkipHistogram(skipReasons),
@@ -330,6 +348,7 @@ export async function runOverdueDiscoveryBatch<
         resumable: true,
         message,
         consecutiveNoProgress: consecutive,
+        contractsAdmitted,
         ...extra,
         skipReasons,
         skippedThisBatch: sumDiscoverySkipHistogram(skipReasons),
@@ -374,6 +393,7 @@ export async function runOverdueDiscoveryBatch<
     })
     const ended = released.ok ? released.run : { ...run, status: "pagination_ended" as const }
     return resultFromRun(ended, {
+      contractsAdmitted,
       ok: true,
       resumable: false,
       truncated: false,
@@ -762,6 +782,7 @@ export async function runOverdueDiscoveryBatch<
     // foi confirmado. Nunca pula fatura; erro técnico não vira skip.
     let confirmedPrefixPk: string | null = null
     let confirmedPrefixRows = 0
+    let stopReason: "budget" | "capacity_reached" | "persist_error" | null = null
     const persistStarted = clock()
     for (const row of fetched.rows) {
       const remainingForPersist = collectionDiscoveryRemainingBudgetMs({
@@ -771,6 +792,7 @@ export async function runOverdueDiscoveryBatch<
       })
       if (remainingForPersist < COLLECTION_DISCOVERY_RELEASE_SLACK_MS) {
         processedAll = false
+        stopReason = "budget"
         break
       }
       const invoice = input.toInvoice(row)
@@ -783,6 +805,30 @@ export async function runOverdueDiscoveryBatch<
         continue
       }
       const existing = await input.repo.findByInvoicePk(pk)
+      // Sprint 3.1E-AU: capacidade por contrato distinto. Só contrato novo
+      // (sem caso ativo) consome vaga. Sem vaga → para ANTES de persistir;
+      // a fatura reaparece na próxima leva (nunca é pulada).
+      if (contractSlots != null && !existing) {
+        const contractKey = parseProvenPk(invoice.contractPk)
+        const wouldCreate =
+          decideDiscoveryPersistAction({
+            invoice,
+            existing: null,
+            now: frozenNow,
+            minimumDaysOverdue: input.minimumDaysOverdue,
+            collectionsEnabled: input.collectionsEnabled,
+          }) === "create"
+        if (wouldCreate && contractKey && !admittedContracts.has(contractKey)) {
+          const active = input.repo.isContractActive
+            ? await input.repo.isContractActive(contractKey)
+            : false
+          if (!active && contractsAdmitted >= contractSlots) {
+            processedAll = false
+            stopReason = "capacity_reached"
+            break
+          }
+        }
+      }
       try {
         const hydrateTimeout = collectionDiscoveryCappedTimeoutMs({
           remainingMs: remainingForPersist,
@@ -820,15 +866,28 @@ export async function runOverdueDiscoveryBatch<
         }
         if (persisted.newlyAssigned) counters.assignedCount += 1
         if (persisted.created && persisted.unassigned) counters.unassignedCount += 1
+        if (persisted.created) {
+          const contractKey = parseProvenPk(prepared.contractPk)
+          if (contractKey && !admittedContracts.has(contractKey)) {
+            admittedContracts.add(contractKey)
+            contractsAdmitted += 1
+          }
+        }
+        if (persisted.technicalError) {
+          // erro técnico não vira skip: interrompe e preserva só o prefixo.
+          counters.errorCount += 1
+          processedAll = false
+          stopReason = "persist_error"
+          break
+        }
         counters.scannedInvoices += 1
         confirmedPrefixPk = invoice.invoicePk
         confirmedPrefixRows += 1
       } catch {
         counters.errorCount += 1
-        return fail(
-          "persist_error",
-          "Falha ao persistir página. Cursor permanece no último identificador confirmado."
-        )
+        processedAll = false
+        stopReason = "persist_error"
+        break
       }
     }
     const persistenceDurationMs = Math.max(0, clock() - persistStarted)
@@ -839,6 +898,60 @@ export async function runOverdueDiscoveryBatch<
         confirmedPrefixPk,
         confirmedPrefixRows,
       })
+      if (stopReason === "persist_error") {
+        if (prefixAdvance.advance) {
+          const advancedBeforeError = await input.store.advance({
+            runId: run.id,
+            owner,
+            generation,
+            now: new Date(input.now.getTime() + Math.max(0, clock() - startedAtMs)),
+            cursorLastInvoicePk: prefixAdvance.cursor,
+            counters,
+          })
+          if (!advancedBeforeError.ok) {
+            return fail("stale_lease", "Lease perdida. Worker antigo não avançou o prefixo confirmado.")
+          }
+          run = advancedBeforeError.run
+          counters = { ...countersFromRun(run), errorCount: counters.errorCount }
+        }
+        return fail(
+          "persist_error",
+          "Falha ao persistir fatura. Cursor permanece no último identificador consecutivo confirmado; a fatura com falha reaparece.",
+          { pauseStage: "persist_error", contractsAdmitted, capacityReached: false }
+        )
+      }
+      if (stopReason === "capacity_reached") {
+        if (prefixAdvance.advance) {
+          const advancedCap = await input.store.advance({
+            runId: run.id,
+            owner,
+            generation,
+            now: new Date(input.now.getTime() + Math.max(0, clock() - startedAtMs)),
+            cursorLastInvoicePk: prefixAdvance.cursor,
+            counters,
+          })
+          if (!advancedCap.ok) {
+            return fail("stale_lease", "Lease perdida. Worker antigo não avançou o prefixo confirmado.")
+          }
+          run = advancedCap.run
+          counters = countersFromRun(run)
+        }
+        return pause(
+          "Capacidade de contratos atingida. Cursor avançou só até a última fatura consecutiva confirmada; as demais reaparecem na próxima leva.",
+          {
+            lastErrorClass: formatDiscoveryPauseClass("capacity_reached", 0),
+            pauseStage: "capacity_reached",
+            progressMade: prefixAdvance.advance,
+            consecutiveNoProgress: prefixAdvance.advance ? 0 : readConsecutiveNoProgress(run),
+            remainingBeforeListMs,
+            remainingAfterListMs,
+            listDurationMs,
+            persistenceDurationMs,
+            contractsAdmitted,
+            capacityReached: true,
+          }
+        )
+      }
       if (prefixAdvance.advance) {
         const advancedPrefix = await input.store.advance({
           runId: run.id,
@@ -915,6 +1028,19 @@ export async function runOverdueDiscoveryBatch<
       if (input.fetchInvoiceDetail) return runReconciliation()
       return endPaginationWithoutRecon(
         "Paginação da descoberta encerrou neste recorte. Encerramento da paginação não prova cobertura global."
+      )
+    }
+
+    if (contractSlots != null && contractsAdmitted >= contractSlots) {
+      return pause(
+        "Capacidade de contratos atingida ao fim de página confirmada. Nenhuma nova consulta ao ERP neste lote.",
+        {
+          lastErrorClass: formatDiscoveryPauseClass("capacity_reached", 0),
+          pauseStage: "capacity_reached",
+          progressMade: true,
+          consecutiveNoProgress: 0,
+          capacityReached: true,
+        }
       )
     }
   }

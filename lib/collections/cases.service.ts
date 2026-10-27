@@ -5,6 +5,7 @@ import {
   COLLECTION_WORK_TYPE,
   type CollectionCase,
   type CollectionCaseEvent,
+  type CollectionCaseInvoiceItem,
   type CollectionCaseListItem,
   type CollectionCaseStatus,
   type ContactChannel,
@@ -201,6 +202,57 @@ async function loadLastContactAt(
   return map
 }
 
+/** Sprint 3.1E-AU: faturas por caso (tolerante à migration ainda não aplicada). */
+async function loadCaseInvoices(caseIds: string[]): Promise<Map<string, CollectionCaseInvoiceItem[]>> {
+  const map = new Map<string, CollectionCaseInvoiceItem[]>()
+  if (caseIds.length === 0) return map
+  const db = getOpsDb()
+  const res = await awaitQuery<Record<string, unknown>>(
+    db
+      .from("collection_case_invoices")
+      .select("case_id, invoice_pk, due_date, days_overdue, payment_status, resolved_at")
+      .in("case_id", caseIds)
+      .order("invoice_pk", { ascending: true })
+  )
+  for (const row of res.data ?? []) {
+    const caseId = String(row.case_id)
+    const status = String(row.payment_status ?? "open")
+    const list = map.get(caseId) ?? []
+    list.push({
+      invoicePk: String(row.invoice_pk),
+      dueDate: asString(row.due_date),
+      daysOverdue: asNumber(row.days_overdue),
+      paymentStatus: (["open", "paid", "cancelled_contract", "inconclusive"].includes(status)
+        ? status
+        : "inconclusive") as CollectionCaseInvoiceItem["paymentStatus"],
+      resolvedAt: asString(row.resolved_at),
+    })
+    map.set(caseId, list)
+  }
+  for (const list of map.values()) {
+    list.sort((a, b) => (BigInt(a.invoicePk) < BigInt(b.invoicePk) ? -1 : 1))
+  }
+  return map
+}
+
+async function loadContractMeta(
+  caseIds: string[]
+): Promise<Map<string, { contractStatus: number | null; followUpDueAt: string | null }>> {
+  const map = new Map<string, { contractStatus: number | null; followUpDueAt: string | null }>()
+  if (caseIds.length === 0) return map
+  const db = getOpsDb()
+  const res = await awaitQuery<Record<string, unknown>>(
+    db.from("collection_cases").select("id, contract_status, follow_up_due_at").in("id", caseIds)
+  )
+  for (const row of res.data ?? []) {
+    map.set(String(row.id), {
+      contractStatus: asNumber(row.contract_status),
+      followUpDueAt: asString(row.follow_up_due_at),
+    })
+  }
+  return map
+}
+
 export async function listCollectionCases(input: {
   employeeId?: string | null
   adminAll: boolean
@@ -262,15 +314,33 @@ export async function listCollectionCases(input: {
   )
   const names = await loadAssigneeNames([...new Set(employeeByCase.values())])
   const lastContact = await loadLastContactAt(COLLECTION_WORK_TYPE, caseIds)
+  const invoicesByCase = await loadCaseInvoices(caseIds)
+  const contractMeta = await loadContractMeta(caseIds)
 
   return rows.map((row) => {
     const mapped = mapCollectionCase(row as unknown as Record<string, unknown>)
     const employeeId = employeeByCase.get(row.id) ?? null
+    const linked = invoicesByCase.get(row.id)
+    const legacy: CollectionCaseInvoiceItem[] = mapped.invoicePk
+      ? [
+          {
+            invoicePk: mapped.invoicePk,
+            dueDate: mapped.overdueSince,
+            daysOverdue: mapped.daysOverdue,
+            paymentStatus: mapped.status === "paid" ? "paid" : "open",
+            resolvedAt: mapped.status === "paid" ? mapped.closedAt : null,
+          },
+        ]
+      : []
+    const meta = contractMeta.get(row.id)
     return {
       ...mapped,
       assigneeEmployeeId: employeeId,
       assigneeName: employeeId ? names.get(employeeId) ?? null : null,
       lastContactAt: lastContact.get(row.id) ?? null,
+      invoices: linked && linked.length > 0 ? linked : legacy,
+      contractStatus: meta?.contractStatus ?? null,
+      followUpDueAt: meta?.followUpDueAt ?? null,
     }
   })
 }

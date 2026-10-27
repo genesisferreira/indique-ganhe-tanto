@@ -104,6 +104,7 @@ export async function startCollectionsLab() {
     "supabase/patch-collection-discovery-progress-guarantee.sql",
     "supabase/patch-collection-discovery-supersede.sql",
     "supabase/patch-collection-ar-operational-batch.sql",
+    "supabase/patch-collection-au-contract-batch.sql",
   ]
   for (const rel of files) {
     const sql = readFileSync(join(REPO_ROOT, rel), "utf8")
