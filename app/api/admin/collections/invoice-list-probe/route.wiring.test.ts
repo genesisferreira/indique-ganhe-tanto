@@ -108,4 +108,14 @@ describe("invoice-list-probe wiring", () => {
     const page = read("app/cobranca/page.tsx")
     assert.equal(page.includes("invoice-list-probe"), false)
   })
+
+  it("modo health reutiliza a rota e eleva maxDuration sem tocar no Sync", () => {
+    const route = read("app/api/admin/collections/invoice-list-probe/route.ts")
+    const sync = read("app/api/admin/collections/sync/route.ts")
+    assert.match(route, /maxDuration = 90/)
+    assert.match(route, /runOverdueFirstPageHealthProbe/)
+    assert.match(route, /OVERDUE_FIRST_PAGE_HEALTH_MODE/)
+    assert.match(sync, /maxDuration = 120/)
+  })
+
 })

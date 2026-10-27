@@ -579,6 +579,58 @@ describe("3.1E-AH supersede auditável", () => {
   })
 })
 
+
+describe("3.1E-AN health probe de listagem sancionada", () => {
+  it("rota reutilizada, modo health read-only e sem imports de runner/persistência", () => {
+    const route = readFileSync(
+      join(repoRoot, "app/api/admin/collections/invoice-list-probe/route.ts"),
+      "utf8"
+    )
+    const health = readFileSync(
+      join(repoRoot, "lib/brbyte/invoice-list-health-probe.ts"),
+      "utf8"
+    )
+    const healthResult = readFileSync(
+      join(repoRoot, "lib/brbyte/invoice-list-health-probe-result.ts"),
+      "utf8"
+    )
+    const snapshot = readFileSync(
+      join(repoRoot, "lib/collections/discovery-run-snapshot.ts"),
+      "utf8"
+    )
+    const oldProbe = readFileSync(join(repoRoot, "lib/brbyte/invoice-list-probe.ts"), "utf8")
+    const syncRoute = readFileSync(
+      join(repoRoot, "app/api/admin/collections/sync/route.ts"),
+      "utf8"
+    )
+
+    assert.match(route, /overdue_first_page_health|OVERDUE_FIRST_PAGE_HEALTH_MODE/)
+    assert.match(route, /maxDuration = 90/)
+    assert.match(route, /runOverdueFirstPageHealthProbe/)
+    assert.match(route, /runInvoiceListProbe/)
+    assert.match(health, /listOverdueInvoicesPage/)
+    assert.match(health, /readUniqueResumableDiscoveryRunSnapshot/)
+    assert.match(health, /loadCollectionOperationalSettings/)
+    assert.match(healthResult, /OVERDUE_FIRST_PAGE_HEALTH_TIMEOUT_MAX_MS = 60_000/)
+    assert.match(healthResult, /OVERDUE_FIRST_PAGE_HEALTH_ATTEMPTS = 1/)
+    assert.match(snapshot, /readUniqueResumableDiscoveryRunSnapshot/)
+    assert.match(snapshot, /\.select\(/)
+    assert.equal(snapshot.includes(".update("), false)
+    assert.equal(snapshot.includes(".insert("), false)
+    assert.equal(snapshot.includes("claim_collection_discovery_run"), false)
+    assert.equal(snapshot.includes("advance_collection_discovery_checkpoint"), false)
+    assert.equal(snapshot.includes("release_collection_discovery_run"), false)
+    assert.equal(health.includes("@/lib/collections/discovery-runner"), false)
+    assert.equal(health.includes("@/lib/collections/discovery-persist"), false)
+    assert.equal(health.includes("@/lib/collections/reconciliation"), false)
+    assert.equal(health.includes("assign_sector_work_item"), false)
+    assert.equal(route.includes("@/lib/collections/discovery-runner"), false)
+    assert.equal(oldProbe.includes("listOverdueInvoices"), false)
+    assert.match(syncRoute, /maxDuration = 120/)
+  })
+})
+
+
 describe("código 3.1 sem service_role no browser", () => {
   it("libs novas não expõem service role", () => {
     const dirs = [
