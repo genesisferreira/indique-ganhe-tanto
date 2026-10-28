@@ -84,14 +84,17 @@ export function buildContractCardView(item: CollectionCaseListItem, now: Date = 
 export function nextBatchButtonState(input: {
   summary: Pick<NextBatchSummary, "available" | "busy"> | null
   submitting: boolean
+  loading?: boolean
 }): { disabled: boolean; label: string; reason: string | null } {
+  const base = "Carregar próxima leva"
   if (input.submitting) return { disabled: true, label: "Carregando…", reason: "Solicitação em andamento." }
-  if (!input.summary) return { disabled: true, label: "Carregar próxima leva", reason: "Capacidade indisponível." }
-  if (input.summary.busy) return { disabled: true, label: "Carregar próxima leva", reason: "Leva em execução." }
+  if (input.loading) return { disabled: true, label: base, reason: "Carregando capacidade…" }
+  if (!input.summary) return { disabled: true, label: base, reason: "Capacidade indisponível." }
+  if (input.summary.busy) return { disabled: true, label: base, reason: "Leva em execução." }
   if (input.summary.available <= 0) {
-    return { disabled: true, label: "Carregar próxima leva", reason: "Capacidade cheia." }
+    return { disabled: true, label: base, reason: "Capacidade cheia." }
   }
-  return { disabled: false, label: "Carregar próxima leva", reason: null }
+  return { disabled: false, label: `Carregar até ${input.summary.available}`, reason: null }
 }
 
 /** Toast agregado, sem IDs e sem PII. */

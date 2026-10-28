@@ -37,10 +37,16 @@ export async function loadNextBatchSummary(): Promise<
   const db = getOpsDb()
   const { data, error } = await db.rpc("collection_contract_capacity_summary", { p_now: null })
   if (error) {
+    console.warn(LOG_TAG, { scope: "summary", code: typeof error.code === "string" ? error.code : "unknown" })
     return { ok: false, message: "Capacidade por contrato indisponível (migration 3.1E-AU pendente)." }
   }
-  const run = await loadRunSummary()
-  return { ok: true, summary: parseCapacitySummary(data, run) }
+  const run = await loadRunSummary().catch(() => null)
+  const summary = parseCapacitySummary(data, run)
+  if (!summary) {
+    console.warn(LOG_TAG, { scope: "summary", code: "invalid_shape", type: Array.isArray(data) ? "array" : typeof data })
+    return { ok: false, message: "Capacidade por contrato indisponível (resposta inválida)." }
+  }
+  return { ok: true, summary }
 }
 
 export async function runNextBatch(input: { actorProfileId: string }) {

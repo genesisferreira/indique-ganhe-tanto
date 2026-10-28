@@ -12,7 +12,11 @@ import {
   nextBatchToast,
 } from "@/lib/collections/contract-card"
 import { CONTRACT_SCOPE_NOTICE } from "@/lib/collections/operational-model"
-import { nextBatchConfirmMessage, type NextBatchSummary } from "@/lib/collections/next-batch"
+import {
+  nextBatchConfirmMessage,
+  readCapacitySummaryResponse,
+  type CapacitySummaryState,
+} from "@/lib/collections/next-batch"
 
 export default function CobrancaPage() {
   const [items, setItems] = useState<CollectionCaseListItem[]>([])
@@ -25,14 +29,20 @@ export default function CobrancaPage() {
   })
   const [kind, setKind] = useState<string>("member")
   const [loading, setLoading] = useState(true)
-  const [summary, setSummary] = useState<NextBatchSummary | null>(null)
+  const [summaryState, setSummaryState] = useState<CapacitySummaryState>({ status: "loading" })
+  const summary = summaryState.status === "ready" ? summaryState.summary : null
   const [submitting, setSubmitting] = useState(false)
   const inFlight = useRef(false)
 
   const loadSummary = useCallback(async () => {
-    const res = await fetch("/api/admin/collections/next-batch", { cache: "no-store" })
-    const json = await res.json().catch(() => null)
-    setSummary(res.ok && json?.ok ? (json.summary as NextBatchSummary) : null)
+    setSummaryState({ status: "loading" })
+    try {
+      const res = await fetch("/api/admin/collections/next-batch", { cache: "no-store" })
+      const json = await res.json().catch(() => null)
+      setSummaryState(readCapacitySummaryResponse(res.ok, json))
+    } catch {
+      setSummaryState(readCapacitySummaryResponse(false, null))
+    }
   }, [])
 
   const load = useCallback(async () => {
@@ -57,9 +67,9 @@ export default function CobrancaPage() {
 
   async function loadNextBatch() {
     if (inFlight.current || !summary) return
-    const button = nextBatchButtonState({ summary, submitting })
+    const button = nextBatchButtonState({ summary, submitting, loading: summaryState.status === "loading" })
     if (button.disabled) return
-    if (!window.confirm(nextBatchConfirmMessage(summary.available))) return
+    if (!window.confirm(nextBatchConfirmMessage(summary.availableCapacity))) return
     inFlight.current = true
     setSubmitting(true)
     try {
@@ -81,7 +91,7 @@ export default function CobrancaPage() {
   }
 
   const cards = items.map((item) => buildContractCardView(item))
-  const button = nextBatchButtonState({ summary, submitting })
+  const button = nextBatchButtonState({ summary, submitting, loading: summaryState.status === "loading" })
 
   return (
     <div>
@@ -105,9 +115,9 @@ export default function CobrancaPage() {
         <div className="mb-4 rounded-lg border bg-card p-4 text-sm" data-testid="next-batch-summary">
           {summary ? (
             <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-              <p>Capacidade: <strong>{summary.configured}</strong> contratos</p>
-              <p>Ocupando vagas: <strong>{summary.occupying}</strong></p>
-              <p>Vagas disponíveis: <strong>{summary.available}</strong></p>
+              <p>Capacidade: <strong>{summary.configuredCapacity}</strong> contratos</p>
+              <p>Ocupando vagas: <strong>{summary.activeContracts}</strong></p>
+              <p>Vagas disponíveis: <strong>{summary.availableCapacity}</strong></p>
               <p>Promessas futuras: <strong>{summary.futurePromises}</strong></p>
               <p>Retornos futuros: <strong>{summary.futureCallbacks}</strong></p>
               <p>
@@ -118,8 +128,17 @@ export default function CobrancaPage() {
                 Último health probe: {summary.lastHealthProbe ?? "não registrado"}. {summary.erpNotice}
               </p>
             </div>
+          ) : summaryState.status === "loading" ? (
+            <p className="text-muted-foreground" data-testid="next-batch-summary-loading">Carregando capacidade…</p>
           ) : (
-            <p className="text-muted-foreground">Capacidade por contrato indisponível.</p>
+            <div className="flex flex-wrap items-center gap-2" data-testid="next-batch-summary-error">
+              <p className="text-muted-foreground">
+                {summaryState.status === "error" ? summaryState.message : "Capacidade por contrato indisponível."}
+              </p>
+              <Button size="sm" variant="outline" onClick={() => void loadSummary()}>
+                Atualizar resumo
+              </Button>
+            </div>
           )}
         </div>
       ) : null}

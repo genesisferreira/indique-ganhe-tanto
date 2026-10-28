@@ -10,7 +10,15 @@ import {
   normalizeConfiguredCapacity,
 } from "@/lib/collections/operational-model"
 
+export const CONTRACT_CAPACITY_SOURCE = "contract_capacity" as const
+
 export type NextBatchSummary = {
+  /** 3.1E-AY: contrato único consumido por resumo E modal. */
+  configuredCapacity: number
+  activeContracts: number
+  availableCapacity: number
+  capacityFull: boolean
+  source: typeof CONTRACT_CAPACITY_SOURCE
   configured: number
   occupying: number
   available: number
@@ -29,21 +37,55 @@ export type NextBatchSummary = {
 export const NEXT_BATCH_ERP_NOTICE =
   "Ao confirmar, o CRM consulta o Controllr (somente leitura) para buscar faturas vencidas. Nenhuma mensagem é enviada."
 
+/** Aceita objeto, array de 1 linha (PostgREST) e snake_case/camelCase. null => null (fail-closed). */
+export function normalizeCapacityRow(raw: unknown): Record<string, unknown> | null {
+  let r: unknown = raw
+  if (Array.isArray(r)) r = r.length === 1 ? r[0] : null
+  if (r && typeof r === "object" && !Array.isArray(r)) {
+    const obj = r as Record<string, unknown>
+    const keys = Object.keys(obj)
+    // RPC escalar em array: [{ collection_contract_capacity_summary: {...} }]
+    if (keys.length === 1 && obj[keys[0]] && typeof obj[keys[0]] === "object" && !("configured" in obj)) {
+      return normalizeCapacityRow(obj[keys[0]])
+    }
+    return obj
+  }
+  return null
+}
+
+function pick(r: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const k of keys) if (r[k] !== undefined && r[k] !== null) return r[k]
+  return undefined
+}
+
 export function parseCapacitySummary(
   raw: unknown,
   run: { status: string | null; pauseStage: string | null } | null
-): NextBatchSummary {
-  const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {}
-  const configured = normalizeConfiguredCapacity(r.configured)
-  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0)
-  const occupying = num(r.occupying)
+): NextBatchSummary | null {
+  const r = normalizeCapacityRow(raw)
+  if (!r) return null
+  const num = (v: unknown) => {
+    const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v
+    return typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null
+  }
+  const configuredRaw = pick(r, "configured", "configuredCapacity", "configured_capacity")
+  const occupyingRaw = num(pick(r, "occupying", "activeContracts", "active_contracts"))
+  if (configuredRaw === undefined || occupyingRaw === null) return null
+  const configured = normalizeConfiguredCapacity(configuredRaw)
+  const occupying = occupyingRaw
+  const available = Math.max(0, configured - occupying)
   return {
+    configuredCapacity: configured,
+    activeContracts: occupying,
+    availableCapacity: available,
+    capacityFull: available <= 0,
+    source: CONTRACT_CAPACITY_SOURCE,
     configured,
     occupying,
-    available: Math.max(0, configured - occupying),
-    unkeyed: num(r.unkeyed),
-    futurePromises: num(r.futurePromises),
-    futureCallbacks: num(r.futureCallbacks),
+    available,
+    unkeyed: num(r.unkeyed) ?? 0,
+    futurePromises: num(pick(r, "futurePromises", "future_promises")) ?? 0,
+    futureCallbacks: num(pick(r, "futureCallbacks", "future_callbacks")) ?? 0,
     busy: r.busy === true,
     runStatus: run?.status ?? null,
     runPauseStage: run?.pauseStage ?? null,
@@ -52,6 +94,23 @@ export function parseCapacitySummary(
     scopeNotice: CONTRACT_SCOPE_NOTICE,
     erpNotice: NEXT_BATCH_ERP_NOTICE,
   }
+}
+
+/** Estado do resumo no cliente: loading != indisponível. */
+export type CapacitySummaryState =
+  | { status: "loading" }
+  | { status: "ready"; summary: NextBatchSummary }
+  | { status: "error"; message: string }
+
+export function readCapacitySummaryResponse(httpOk: boolean, json: unknown): CapacitySummaryState {
+  const j = json && typeof json === "object" ? (json as Record<string, unknown>) : null
+  if (httpOk && j?.ok === true) {
+    const s = j.summary as Record<string, unknown> | undefined
+    if (s && s.source === CONTRACT_CAPACITY_SOURCE && typeof s.availableCapacity === "number") {
+      return { status: "ready", summary: s as unknown as NextBatchSummary }
+    }
+  }
+  return { status: "error", message: "Capacidade por contrato indisponível. Use “Atualizar resumo”." }
 }
 
 export function nextBatchConfirmMessage(available: number): string {
