@@ -12,6 +12,7 @@
  * - a lease/fencing da discovery run continua sendo a segunda barreira.
  */
 import {
+  buildSegmentMetrics,
   decideSegmentStop,
   durableOperationView,
   resolveMaxSegments,
@@ -111,11 +112,20 @@ export async function executeNextBatchRequest(
 
   // Capacidade recalculada + lease antes de CADA segmento (zero ERP se bloquear).
   const enabled = await deps.loadQueueEnabled()
+  const gateStartedAt = Date.now()
   const loaded = await deps.loadSummary()
+  // 3.1E-BD: métricas de gate (sem ERP): só capacidade e tempo do gate.
+  const gateMetrics = (capacity: number | null) =>
+    buildSegmentMetrics({
+      startedAtMs: gateStartedAt, totalMs: Math.max(0, Date.now() - gateStartedAt), stageTimings: null,
+      segmentScannedInvoices: 0, newContracts: 0, existingContractInvoices: 0, segmentCreated: 0,
+      skippedThisBatch: 0, capacityBefore: capacity, capacityAfter: capacity,
+    })
   if (!loaded.ok) {
     const done = await deps.store.complete({
       operationId, segment, ok: false, stopReason: "unavailable",
       summary: { scannedInvoices: 0, newContracts: 0, existingContractInvoices: 0, durationMs: 0, pauseStage: null },
+      metrics: gateMetrics(null),
     })
     return { status: 503, body: { ok: false, code: "unavailable", message: loaded.message, ...durableOperationView(done.operation, null) } }
   }
@@ -127,6 +137,7 @@ export async function executeNextBatchRequest(
     const done = await deps.store.complete({
       operationId, segment, ok: reason === "capacity_reached", stopReason: reason,
       summary: { scannedInvoices: 0, newContracts: 0, existingContractInvoices: 0, durationMs: 0, pauseStage: null },
+      metrics: gateMetrics(loaded.summary.activeContracts),
     })
     log("segment-gate", { segment, reason })
     return {
@@ -175,6 +186,18 @@ export async function executeNextBatchRequest(
       durationMs: Math.max(0, Date.now() - started),
       pauseStage: sanitized?.pauseStage ?? null,
     },
+    metrics: buildSegmentMetrics({
+      startedAtMs: started,
+      totalMs: Math.max(0, Date.now() - started),
+      stageTimings: sanitized?.stageTimings ?? null,
+      segmentScannedInvoices: sanitized?.segmentScannedInvoices ?? 0,
+      newContracts: sanitized?.contractsAdmitted ?? 0,
+      existingContractInvoices: sanitized?.segmentUpdated ?? 0,
+      segmentCreated: sanitized?.segmentCreated ?? 0,
+      skippedThisBatch: sanitized?.skippedThisBatch ?? 0,
+      capacityBefore: loaded.summary.activeContracts,
+      capacityAfter: after && after.ok ? after.summary.activeContracts : null,
+    }),
   })
   const view = durableOperationView(done.operation, availableAfter)
   log("segment-result", {

@@ -50,12 +50,14 @@ export function createRpcBatchOperationStore(): BatchOperationStore {
         p_now: null,
       }),
     complete: (input) =>
-      call("complete_collection_batch_segment", {
+      // 3.1E-BD: conclusão + métricas sanitizadas na mesma transação.
+      call("complete_collection_batch_segment_with_metrics", {
         p_operation_id: input.operationId,
         p_segment: input.segment,
         p_ok: input.ok,
         p_stop_reason: input.stopReason,
         p_summary: input.summary,
+        p_metrics: input.metrics ?? {},
         p_ttl_seconds: BATCH_OPERATION_TTL_SECONDS,
         p_now: null,
       }),

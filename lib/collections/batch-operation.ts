@@ -156,6 +156,8 @@ export interface BatchOperationStore {
     ok: boolean
     stopReason: DurableStopReason | null
     summary: { scannedInvoices: number; newContracts: number; existingContractInvoices: number; durationMs: number; pauseStage: string | null }
+    /** 3.1E-BD: métricas sanitizadas gravadas na MESMA transação do complete. */
+    metrics?: SegmentMetrics
   }): Promise<DurableOpResult>
   requestStop(operationId: string): Promise<DurableOpResult>
   get(operationId: string | null): Promise<DurableOpResult>
@@ -249,5 +251,79 @@ export function durableOperationView(op: DurableBatchOperation | null, remaining
     remainingSlots,
     totals: op.totals,
     segments: op.segments,
+  }
+}
+
+/**
+ * Sprint 3.1E-BD — métricas duráveis por segmento (append-only no PostgreSQL,
+ * public.collection_batch_operation_segments). SOMENTE números, booleano e
+ * timestamp do início. Nunca IDs de cliente/contrato/fatura/caso, nomes,
+ * documentos, telefones, valores, payload ERP, cookies, tokens ou mensagens.
+ */
+export const SEGMENT_METRIC_NUMBER_KEYS = [
+  "totalMs", "loginMs", "listMs", "listRequests", "classificationMs", "detailLookups",
+  "detailSkippedByList", "detailMs", "persistMs", "checkpointMs", "releaseMs",
+  "rowsScanned", "confirmedPrefixRows", "newContracts", "existingContractInvoices",
+  "invoicesAttached", "skippedTotal", "capacityBefore", "capacityAfter",
+] as const
+
+export type SegmentMetrics = {
+  startedAt: string | null
+  cursorAdvanced: boolean
+} & { [K in (typeof SEGMENT_METRIC_NUMBER_KEYS)[number]]: number | null }
+
+const metricInt = (v: unknown, cap: number): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(cap, Math.floor(v))) : null
+
+/**
+ * Monta as métricas a partir do resultado JÁ sanitizado do segmento
+ * (sanitizeNextBatchResult) e dos resumos de capacidade antes/depois.
+ * Chaves extras são descartadas; somente a lista fechada sai daqui.
+ */
+export function buildSegmentMetrics(input: {
+  startedAtMs: number | null
+  totalMs: number | null
+  stageTimings: Record<string, number | null> | null | undefined
+  segmentScannedInvoices: number | null | undefined
+  newContracts: number | null | undefined
+  existingContractInvoices: number | null | undefined
+  segmentCreated: number | null | undefined
+  skippedThisBatch: number | null | undefined
+  capacityBefore: number | null | undefined
+  capacityAfter: number | null | undefined
+}): SegmentMetrics {
+  const t = (input.stageTimings ?? {}) as Record<string, unknown>
+  const MS = 3_600_000
+  const ROWS = 100_000
+  const scanned = metricInt(input.segmentScannedInvoices, ROWS) ?? 0
+  const existing = metricInt(input.existingContractInvoices, ROWS) ?? 0
+  const created = metricInt(input.segmentCreated, ROWS) ?? 0
+  const startedAt =
+    typeof input.startedAtMs === "number" && Number.isFinite(input.startedAtMs)
+      ? new Date(input.startedAtMs).toISOString()
+      : null
+  return {
+    startedAt,
+    totalMs: metricInt(input.totalMs, MS),
+    loginMs: metricInt(t.loginMs, MS),
+    listMs: metricInt(t.listMs, MS),
+    listRequests: metricInt(t.listRequests, ROWS),
+    classificationMs: metricInt(t.classificationMs, MS),
+    detailLookups: metricInt(t.detailLookups, ROWS),
+    detailSkippedByList: metricInt(t.detailSkippedByList, ROWS),
+    detailMs: metricInt(t.detailMs, MS),
+    persistMs: metricInt(t.persistMs, MS),
+    checkpointMs: metricInt(t.checkpointMs, MS),
+    releaseMs: metricInt(t.releaseMs, MS),
+    rowsScanned: scanned,
+    // Contadores da run só avançam no checkpoint do prefixo confirmado.
+    confirmedPrefixRows: scanned,
+    newContracts: metricInt(input.newContracts, 15) ?? 0,
+    existingContractInvoices: existing,
+    invoicesAttached: created + existing,
+    skippedTotal: metricInt(input.skippedThisBatch, ROWS) ?? 0,
+    cursorAdvanced: scanned > 0,
+    capacityBefore: metricInt(input.capacityBefore, 15),
+    capacityAfter: metricInt(input.capacityAfter, 15),
   }
 }

@@ -15,11 +15,18 @@ import {
   type NextBatchProgressView,
 } from "@/lib/collections/contract-card"
 import { CONTRACT_SCOPE_NOTICE } from "@/lib/collections/operational-model"
+import { nextBatchConfirmMessage, readCapacitySummaryResponse } from "@/lib/collections/next-batch"
 import {
-  nextBatchConfirmMessage,
-  readCapacitySummaryResponse,
-  type CapacitySummaryState,
-} from "@/lib/collections/next-batch"
+  CASES_URL,
+  NEXT_BATCH_URL,
+  STALE_SUMMARY_MESSAGE,
+  driveBatchSegments,
+  readySummary,
+  refreshServerState,
+  summaryFromRefresh,
+  type ServerRefreshResult,
+  type SummaryViewState,
+} from "@/lib/collections/server-refresh"
 
 export default function CobrancaPage() {
   const [items, setItems] = useState<CollectionCaseListItem[]>([])
@@ -32,8 +39,9 @@ export default function CobrancaPage() {
   })
   const [kind, setKind] = useState<string>("member")
   const [loading, setLoading] = useState(true)
-  const [summaryState, setSummaryState] = useState<CapacitySummaryState>({ status: "loading" })
-  const summary = summaryState.status === "ready" ? summaryState.summary : null
+  // 3.1E-BD: "refreshing"/"stale" nunca exibem números antigos como atuais.
+  const [summaryState, setSummaryState] = useState<SummaryViewState>({ status: "loading" })
+  const summary = readySummary(summaryState)
   const [submitting, setSubmitting] = useState(false)
   const inFlight = useRef(false)
   const stopAfterCurrent = useRef(false)
@@ -42,35 +50,64 @@ export default function CobrancaPage() {
   // 3.1E-BB: estado durável lido do servidor (fonte da verdade); sem auto-continuar.
   const [pendingOp, setPendingOp] = useState<{ id: string; nextSegment: number } | null>(null)
 
+  const applyOperation = useCallback((op: Record<string, unknown> | null) => {
+    setPendingOp(readResumableOperation(op))
+    if (op && typeof op.segment === "number" && op.segment > 0) setProgress(readNextBatchProgress(op, false))
+  }, [])
+
   const loadSummary = useCallback(async () => {
     setSummaryState({ status: "loading" })
     try {
-      const res = await fetch("/api/admin/collections/next-batch", { cache: "no-store" })
+      const res = await fetch(NEXT_BATCH_URL, { cache: "no-store" })
       const json = await res.json().catch(() => null)
       setSummaryState(readCapacitySummaryResponse(res.ok, json))
-      const op = (json?.operation ?? null) as Record<string, unknown> | null
-      setPendingOp(readResumableOperation(op))
-      if (op && typeof op.segment === "number" && op.segment > 0) setProgress(readNextBatchProgress(op, false))
+      applyOperation((json?.operation ?? null) as Record<string, unknown> | null)
     } catch {
       setSummaryState(readCapacitySummaryResponse(false, null))
     }
-  }, [])
+  }, [applyOperation])
 
   const load = useCallback(async () => {
     setLoading(true)
-    const res = await fetch("/api/cobranca/cases", { cache: "no-store" })
-    const json = await res.json().catch(() => null)
-    if (!res.ok || !json?.ok) {
-      toast.error(json?.message || "Não foi possível carregar a Cobrança.")
+    let json: Record<string, unknown> | null = null
+    let ok = false
+    try {
+      const res = await fetch(CASES_URL, { cache: "no-store" })
+      json = (await res.json().catch(() => null)) as Record<string, unknown> | null
+      ok = res.ok && json?.ok === true
+    } catch {
+      ok = false
+    }
+    if (!ok || !json) {
+      toast.error(String(json?.message ?? "") || "Não foi possível carregar a Cobrança.")
       setLoading(false)
       return
     }
-    setItems(json.items ?? [])
-    setDashboard(json.dashboard)
-    setKind(json.kind ?? "member")
+    setItems((json.items ?? []) as CollectionCaseListItem[])
+    setDashboard(json.dashboard as typeof dashboard)
+    setKind(String(json.kind ?? "member"))
     setLoading(false)
     if (json.kind === "admin_master") void loadSummary()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadSummary])
+
+  /**
+   * 3.1E-BD: refetch do servidor (resumo + operação durável + blocos). Só GET:
+   * nenhum segmento, nenhuma chamada ao ERP. Falha => "Resumo desatualizado".
+   */
+  const refreshAll = useCallback(async (): Promise<ServerRefreshResult> => {
+    setSummaryState({ status: "refreshing" })
+    const r = await refreshServerState((url, init) => fetch(url, init))
+    setSummaryState(summaryFromRefresh(r))
+    if (r.ok) {
+      applyOperation(r.operation)
+      setItems(r.cases.items as CollectionCaseListItem[])
+      if (r.cases.dashboard) setDashboard(r.cases.dashboard as typeof dashboard)
+      setKind(r.cases.kind)
+    }
+    return r
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyOperation])
 
   useEffect(() => {
     void load()
@@ -78,7 +115,7 @@ export default function CobrancaPage() {
 
   async function loadNextBatch() {
     if (inFlight.current || !summary) return
-    const button = nextBatchButtonState({ summary, submitting, loading: summaryState.status === "loading" })
+    const button = nextBatchButtonState({ summary, submitting, loading: summaryState.status !== "ready" })
     if (button.disabled) return
     // Uma confirmação humana => até maxSegments (servidor) segmentos sequenciais. Sem retry.
     if (!window.confirm(nextBatchConfirmMessage(summary.availableCapacity))) return
@@ -87,14 +124,14 @@ export default function CobrancaPage() {
 
   /** Retomada EXPLÍCITA de uma operação durável ainda válida (awaiting_next). */
   async function resumeOperation() {
-    if (inFlight.current || !pendingOp) return
+    if (inFlight.current || !pendingOp || summaryState.status !== "ready") return
     if (!window.confirm("Retomar a operação de próxima leva a partir do próximo segmento?")) return
     await runSegments({ batchOperationId: pendingOp.id, segment: pendingOp.nextSegment })
   }
 
   async function stopPendingOperation() {
     if (inFlight.current || !pendingOp) return
-    const res = await fetch("/api/admin/collections/next-batch", {
+    const res = await fetch(NEXT_BATCH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ batchOperationId: pendingOp.id, stop: true }),
@@ -102,6 +139,7 @@ export default function CobrancaPage() {
     const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
     setProgress(readNextBatchProgress(json, false))
     setPendingOp(null)
+    await refreshAll()
   }
 
   async function runSegments(initial: Record<string, unknown>) {
@@ -111,47 +149,40 @@ export default function CobrancaPage() {
     setSubmitting(true)
     setPendingOp(null)
     let last: Record<string, unknown> | null = null
+    let refreshFailed = false
     try {
-      let payload: Record<string, unknown> = initial
-      // Teto defensivo no cliente; a autoridade (maxSegments/nextSegment) é o servidor.
-      for (let guard = 0; guard < 10; guard++) {
-        const res = await fetch("/api/admin/collections/next-batch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        })
-        const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
-        last = json
-        setProgress(readNextBatchProgress(json, json?.continue === true))
-        const opId = typeof json?.batchOperationId === "string" ? json.batchOperationId : null
-        const nextSegment = typeof json?.nextSegment === "number" ? json.nextSegment : null
-        if (!res.ok || !json || json.continue !== true || !opId || nextSegment == null) break
-        if (stopAfterCurrent.current) {
-          const stopRes = await fetch("/api/admin/collections/next-batch", {
+      const out = await driveBatchSegments({
+        initial,
+        post: async (payload) => {
+          const res = await fetch(NEXT_BATCH_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ batchOperationId: opId, stop: true }),
+            body: JSON.stringify(payload),
           })
-          const stopJson = (await stopRes.json().catch(() => null)) as Record<string, unknown> | null
-          setProgress(readNextBatchProgress(stopJson ?? json, false))
-          break
-        }
-        payload = { batchOperationId: opId, segment: nextSegment }
-      }
+          return { httpOk: res.ok, json: (await res.json().catch(() => null)) as Record<string, unknown> | null }
+        },
+        refresh: refreshAll,
+        onSegment: (json, running) => setProgress(readNextBatchProgress(json, running)),
+        onRefreshing: () => undefined,
+        onRefreshed: () => undefined,
+        stopRequested: () => stopAfterCurrent.current,
+      })
+      last = out.last
+      refreshFailed = out.refreshFailed
       const message = nextBatchToast(last)
       const discoveryStatus = String(last?.discoveryStatus ?? "")
       if (last?.ok && discoveryStatus !== "failed") toast.success(message)
       else toast.message(message)
+      if (refreshFailed) toast.message(STALE_SUMMARY_MESSAGE)
     } finally {
       inFlight.current = false
       setSubmitting(false)
       setProgress((p) => (p ? { ...p, running: false } : p))
-      await load()
     }
   }
 
   const cards = items.map((item) => buildContractCardView(item))
-  const button = nextBatchButtonState({ summary, submitting, loading: summaryState.status === "loading" })
+  const button = nextBatchButtonState({ summary, submitting, loading: summaryState.status !== "ready" })
 
   return (
     <div>
@@ -182,7 +213,7 @@ export default function CobrancaPage() {
             Parar após o segmento atual
           </Button>
         ) : null}
-        {kind === "admin_master" && !submitting && pendingOp ? (
+        {kind === "admin_master" && !submitting && pendingOp && summaryState.status === "ready" ? (
           <>
             <Button variant="outline" onClick={() => void resumeOperation()} data-testid="next-batch-resume-button">
               Retomar operação (segmento {pendingOp.nextSegment})
@@ -227,6 +258,15 @@ export default function CobrancaPage() {
             </div>
           ) : summaryState.status === "loading" ? (
             <p className="text-muted-foreground" data-testid="next-batch-summary-loading">Carregando capacidade…</p>
+          ) : summaryState.status === "refreshing" ? (
+            <p className="text-muted-foreground" data-testid="next-batch-summary-updating">Atualizando capacidade…</p>
+          ) : summaryState.status === "stale" ? (
+            <div className="flex flex-wrap items-center gap-2" data-testid="next-batch-summary-stale">
+              <p className="text-muted-foreground">{STALE_SUMMARY_MESSAGE}</p>
+              <Button size="sm" variant="outline" onClick={() => void refreshAll()} disabled={submitting}>
+                Atualizar resumo
+              </Button>
+            </div>
           ) : (
             <div className="flex flex-wrap items-center gap-2" data-testid="next-batch-summary-error">
               <p className="text-muted-foreground">
