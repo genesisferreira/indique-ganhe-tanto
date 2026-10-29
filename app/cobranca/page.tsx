@@ -11,6 +11,7 @@ import {
   nextBatchButtonState,
   nextBatchToast,
   readNextBatchProgress,
+  readResumableOperation,
   type NextBatchProgressView,
 } from "@/lib/collections/contract-card"
 import { CONTRACT_SCOPE_NOTICE } from "@/lib/collections/operational-model"
@@ -38,6 +39,8 @@ export default function CobrancaPage() {
   const stopAfterCurrent = useRef(false)
   const [stopRequested, setStopRequested] = useState(false)
   const [progress, setProgress] = useState<NextBatchProgressView | null>(null)
+  // 3.1E-BB: estado durável lido do servidor (fonte da verdade); sem auto-continuar.
+  const [pendingOp, setPendingOp] = useState<{ id: string; nextSegment: number } | null>(null)
 
   const loadSummary = useCallback(async () => {
     setSummaryState({ status: "loading" })
@@ -45,6 +48,9 @@ export default function CobrancaPage() {
       const res = await fetch("/api/admin/collections/next-batch", { cache: "no-store" })
       const json = await res.json().catch(() => null)
       setSummaryState(readCapacitySummaryResponse(res.ok, json))
+      const op = (json?.operation ?? null) as Record<string, unknown> | null
+      setPendingOp(readResumableOperation(op))
+      if (op && typeof op.segment === "number" && op.segment > 0) setProgress(readNextBatchProgress(op, false))
     } catch {
       setSummaryState(readCapacitySummaryResponse(false, null))
     }
@@ -74,16 +80,40 @@ export default function CobrancaPage() {
     if (inFlight.current || !summary) return
     const button = nextBatchButtonState({ summary, submitting, loading: summaryState.status === "loading" })
     if (button.disabled) return
-    // Uma confirmação humana => até maxSegments segmentos sequenciais. Sem retry.
+    // Uma confirmação humana => até maxSegments (servidor) segmentos sequenciais. Sem retry.
     if (!window.confirm(nextBatchConfirmMessage(summary.availableCapacity))) return
+    await runSegments({ confirm: true })
+  }
+
+  /** Retomada EXPLÍCITA de uma operação durável ainda válida (awaiting_next). */
+  async function resumeOperation() {
+    if (inFlight.current || !pendingOp) return
+    if (!window.confirm("Retomar a operação de próxima leva a partir do próximo segmento?")) return
+    await runSegments({ batchOperationId: pendingOp.id, segment: pendingOp.nextSegment })
+  }
+
+  async function stopPendingOperation() {
+    if (inFlight.current || !pendingOp) return
+    const res = await fetch("/api/admin/collections/next-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ batchOperationId: pendingOp.id, stop: true }),
+    })
+    const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
+    setProgress(readNextBatchProgress(json, false))
+    setPendingOp(null)
+  }
+
+  async function runSegments(initial: Record<string, unknown>) {
     inFlight.current = true
     stopAfterCurrent.current = false
     setStopRequested(false)
     setSubmitting(true)
+    setPendingOp(null)
     let last: Record<string, unknown> | null = null
     try {
-      let payload: Record<string, unknown> = { confirm: true }
-      // Limite duro no cliente além do servidor: nunca loop ilimitado.
+      let payload: Record<string, unknown> = initial
+      // Teto defensivo no cliente; a autoridade (maxSegments/nextSegment) é o servidor.
       for (let guard = 0; guard < 10; guard++) {
         const res = await fetch("/api/admin/collections/next-batch", {
           method: "POST",
@@ -94,7 +124,8 @@ export default function CobrancaPage() {
         last = json
         setProgress(readNextBatchProgress(json, json?.continue === true))
         const opId = typeof json?.batchOperationId === "string" ? json.batchOperationId : null
-        if (!res.ok || !json || json.continue !== true || !opId) break
+        const nextSegment = typeof json?.nextSegment === "number" ? json.nextSegment : null
+        if (!res.ok || !json || json.continue !== true || !opId || nextSegment == null) break
         if (stopAfterCurrent.current) {
           const stopRes = await fetch("/api/admin/collections/next-batch", {
             method: "POST",
@@ -105,7 +136,7 @@ export default function CobrancaPage() {
           setProgress(readNextBatchProgress(stopJson ?? json, false))
           break
         }
-        payload = { batchOperationId: opId, segment: Number(json.segment) + 1 }
+        payload = { batchOperationId: opId, segment: nextSegment }
       }
       const message = nextBatchToast(last)
       const discoveryStatus = String(last?.discoveryStatus ?? "")
@@ -150,6 +181,16 @@ export default function CobrancaPage() {
           >
             Parar após o segmento atual
           </Button>
+        ) : null}
+        {kind === "admin_master" && !submitting && pendingOp ? (
+          <>
+            <Button variant="outline" onClick={() => void resumeOperation()} data-testid="next-batch-resume-button">
+              Retomar operação (segmento {pendingOp.nextSegment})
+            </Button>
+            <Button variant="outline" onClick={() => void stopPendingOperation()} data-testid="next-batch-stop-pending-button">
+              Parar operação
+            </Button>
+          </>
         ) : null}
       </PageHeader>
 

@@ -2,7 +2,11 @@ import { NextResponse } from "next/server"
 import { authorizeOperationalRequest } from "@/lib/collections/actor"
 import { jsonError } from "@/lib/collections/http"
 import { readNextBatchRequest } from "@/lib/collections/next-batch"
-import { loadNextBatchSummary, runNextBatchOperation } from "@/lib/collections/next-batch.service"
+import {
+  loadBatchOperationState,
+  loadNextBatchSummary,
+  runNextBatchOperation,
+} from "@/lib/collections/next-batch.service"
 import { COLLECTION_SECTOR_CODE } from "@/types/collections"
 
 export const runtime = "nodejs"
@@ -32,7 +36,10 @@ export async function GET() {
   if (!auth.ok) return auth.res
   const loaded = await loadNextBatchSummary()
   if (!loaded.ok) return jsonError(503, loaded.message)
-  return NextResponse.json({ ok: true, summary: loaded.summary })
+  // 3.1E-BB: estado durável da operação (refresh/nova aba). Só leitura;
+  // nunca inicia segmento automaticamente.
+  const operation = await loadBatchOperationState().catch(() => null)
+  return NextResponse.json({ ok: true, summary: loaded.summary, operation })
 }
 
 export async function POST(request: Request) {
@@ -41,7 +48,7 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null)
   const parsed = readNextBatchRequest(body)
   if (!parsed.ok) return jsonError(400, parsed.message)
-  // Sprint 3.1E-BA: cada POST executa no máximo UM segmento.
+  // Sprint 3.1E-BA/BB: cada POST executa no máximo UM segmento (operação durável).
   const result = await runNextBatchOperation({ actorProfileId: auth.profileId, request: parsed.request })
   return NextResponse.json(result.body, { status: result.status })
 }

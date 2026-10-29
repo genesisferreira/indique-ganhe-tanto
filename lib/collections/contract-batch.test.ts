@@ -181,11 +181,14 @@ describe("3.1E-AU capacidade e próxima leva", () => {
     const dbl = decideNextBatch({ summary: { available: 5, busy: false }, enabled: true, inFlight: true })
     assert.equal(dbl.proceed === false && dbl.code, "in_flight")
     assert.deepEqual(decideNextBatch({ summary: { available: 5, busy: false }, enabled: true, inFlight: false }), { proceed: true, slots: 5 })
+    // 3.1E-BB: o gate vive no fluxo durável (um segmento por requisição).
     const svc = readFileSync("lib/collections/next-batch.service.ts", "utf8")
-    const gateAt = svc.indexOf("decideNextBatch(")
-    const syncAt = svc.indexOf("syncCollectionsFromControllr({")
+    const flow = readFileSync("lib/collections/batch-operation-flow.ts", "utf8")
+    const gateAt = flow.indexOf("decideNextBatch(")
+    const syncAt = flow.indexOf("deps.runSegment(")
     assert.equal(gateAt > 0 && syncAt > gateAt, true)
-    assert.match(svc, /if \(!decision\.proceed\)[\s\S]*?return[\s\S]*?syncCollectionsFromControllr/)
+    assert.match(flow, /if \(!decision\.proceed\)[\s\S]*?return[\s\S]*?deps\.runSegment\(/)
+    assert.match(svc, /syncCollectionsFromControllr\(/)
     assert.equal(/brbyteAdminLogin|listOverdueInvoicesPage/.test(svc), false)
   })
 

@@ -5,8 +5,11 @@
  * executa no máximo `maxSegments` segmentos HTTP sequenciais; cada segmento
  * é uma chamada independente que retoma do cursor confirmado da mesma run.
  * Não é retry: qualquer erro/timeout encerra a operação. Sem loop ilimitado,
- * sem cron, sem continuação automática após refresh (o cliente só guarda o
- * id em memória; o servidor expira a operação por TTL).
+ * sem cron, sem continuação automática após refresh.
+ *
+ * Sprint 3.1E-BB: o estado da operação é DURÁVEL (PostgreSQL,
+ * public.collection_batch_operations). Nada crítico vive em memória de
+ * instância; o registro em Map da BA foi removido.
  */
 
 export const NEXT_BATCH_MAX_SEGMENTS_DEFAULT = 5
@@ -39,158 +42,6 @@ export function resolveMaxSegments(raw: unknown): number {
   if (typeof n !== "number" || !Number.isFinite(n) || n < 1) return NEXT_BATCH_MAX_SEGMENTS_DEFAULT
   return Math.min(NEXT_BATCH_MAX_SEGMENTS_HARD_CAP, Math.floor(n))
 }
-
-export type SegmentRecord = {
-  segment: number
-  ok: boolean
-  scannedInvoices: number
-  newContracts: number
-  existingContractInvoices: number
-  pauseStage: string | null
-  durationMs: number
-  stopReason: BatchStopReason | null
-}
-
-export type BatchOperation = {
-  id: string
-  createdAtMs: number
-  lastActivityMs: number
-  maxSegments: number
-  status: "active" | "stopped"
-  segmentInFlight: boolean
-  stopRequested: boolean
-  stopReason: BatchStopReason | null
-  segments: SegmentRecord[]
-}
-
-export type ClaimSegmentResult =
-  | { ok: true; operation: BatchOperation }
-  | {
-      ok: false
-      code:
-        | "unknown_operation"
-        | "operation_stopped"
-        | "segment_out_of_order"
-        | "segment_in_flight"
-        | "max_segments"
-        | "stop_requested"
-    }
-
-export function createBatchOperationRegistry(opts: {
-  now?: () => number
-  newId: () => string
-  ttlMs?: number
-}) {
-  const now = opts.now ?? Date.now
-  const ttl = opts.ttlMs ?? NEXT_BATCH_OPERATION_TTL_MS
-  const ops = new Map<string, BatchOperation>()
-
-  const expire = () => {
-    const t = now()
-    for (const [id, op] of ops) {
-      if (t - op.lastActivityMs > ttl) {
-        if (op.status === "active") {
-          op.status = "stopped"
-          op.segmentInFlight = false
-          op.stopReason = op.stopReason ?? "error"
-        }
-        ops.delete(id)
-      }
-    }
-  }
-
-  const activeOp = (): BatchOperation | null => {
-    for (const op of ops.values()) if (op.status === "active") return op
-    return null
-  }
-
-  return {
-    /** Uma operação ativa por processo: bloqueia clique duplo e segunda aba. */
-    begin(maxSegments: number): { ok: true; operation: BatchOperation } | { ok: false; code: "operation_active" } {
-      expire()
-      if (activeOp()) return { ok: false, code: "operation_active" }
-      const t = now()
-      const op: BatchOperation = {
-        id: opts.newId(),
-        createdAtMs: t,
-        lastActivityMs: t,
-        maxSegments: resolveMaxSegments(maxSegments),
-        status: "active",
-        segmentInFlight: false,
-        stopRequested: false,
-        stopReason: null,
-        segments: [],
-      }
-      ops.set(op.id, op)
-      return { ok: true, operation: op }
-    },
-    claimSegment(id: string, segment: number): ClaimSegmentResult {
-      expire()
-      const op = ops.get(id)
-      if (!op) return { ok: false, code: "unknown_operation" }
-      if (op.status !== "active") return { ok: false, code: "operation_stopped" }
-      if (op.segmentInFlight) return { ok: false, code: "segment_in_flight" }
-      if (segment !== op.segments.length + 1) return { ok: false, code: "segment_out_of_order" }
-      if (op.stopRequested) {
-        op.status = "stopped"
-        op.stopReason = "stop_requested"
-        return { ok: false, code: "stop_requested" }
-      }
-      if (segment > op.maxSegments) {
-        op.status = "stopped"
-        op.stopReason = "max_segments"
-        return { ok: false, code: "max_segments" }
-      }
-      op.segmentInFlight = true
-      op.lastActivityMs = now()
-      return { ok: true, operation: op }
-    },
-    completeSegment(id: string, record: SegmentRecord): BatchOperation | null {
-      const op = ops.get(id)
-      if (!op) return null
-      op.segmentInFlight = false
-      op.lastActivityMs = now()
-      op.segments.push(record)
-      let reason = record.stopReason
-      if (!reason && op.stopRequested) reason = "stop_requested"
-      if (!reason && op.segments.length >= op.maxSegments) reason = "max_segments"
-      if (reason) {
-        op.status = "stopped"
-        op.stopReason = reason
-        op.segments[op.segments.length - 1] = { ...record, stopReason: reason }
-      }
-      return op
-    },
-    /** Encerra sem rodar segmento (gate de capacidade/lease antes do segmento). */
-    stop(id: string, reason: BatchStopReason): BatchOperation | null {
-      const op = ops.get(id)
-      if (!op) return null
-      op.segmentInFlight = false
-      op.status = "stopped"
-      op.stopReason = op.stopReason ?? reason
-      return op
-    },
-    requestStop(id: string): BatchOperation | null {
-      const op = ops.get(id)
-      if (!op) return null
-      op.stopRequested = true
-      if (!op.segmentInFlight && op.status === "active") {
-        op.status = "stopped"
-        op.stopReason = "stop_requested"
-      }
-      return op
-    },
-    get(id: string): BatchOperation | null {
-      return ops.get(id) ?? null
-    },
-    hasActive(): boolean {
-      expire()
-      return activeOp() != null
-    },
-  }
-}
-
-export type BatchOperationRegistry = ReturnType<typeof createBatchOperationRegistry>
 
 /** Decide a parada após um segmento. null => pode haver próximo segmento. */
 export function decideSegmentStop(input: {
@@ -231,4 +82,172 @@ export function gateSegmentStart(input: {
   if (input.available == null) return { ok: false, reason: "error" }
   if (input.available <= 0) return { ok: false, reason: "capacity_reached" }
   return { ok: true, slots: Math.floor(input.available) }
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 3.1E-BB: operação DURÁVEL (PostgreSQL). Nenhum estado crítico em
+// memória de instância: create/claim/complete/stop/expire são RPCs atômicas
+// em public.collection_batch_operations. Este módulo só tipa e lê respostas.
+// ---------------------------------------------------------------------------
+
+export const BATCH_OPERATION_ACTIVE_STATUSES = ["ready", "segment_running", "awaiting_next"] as const
+export type DurableBatchStatus =
+  | "ready"
+  | "segment_running"
+  | "awaiting_next"
+  | "capacity_reached"
+  | "pagination_ended"
+  | "max_segments"
+  | "stopped"
+  | "failed"
+  | "expired"
+  | "completed"
+
+export type DurableStopReason = BatchStopReason | "expired" | "unavailable" | "disabled"
+
+export type DurableSegmentSummary = {
+  segment: number
+  ok: boolean
+  scannedInvoices: number
+  newContracts: number
+  existingContractInvoices: number
+  durationMs: number
+  pauseStage: string | null
+  stopReason: DurableStopReason | null
+}
+
+export type DurableBatchOperation = {
+  id: string
+  status: DurableBatchStatus
+  active: boolean
+  maxSegments: number
+  segmentsStarted: number
+  segmentsCompleted: number
+  nextSegment: number
+  segmentInFlight: number | null
+  stopRequested: boolean
+  stopReason: DurableStopReason | null
+  expiresAt: string | null
+  totals: { scannedInvoices: number; newContracts: number; existingContractInvoices: number; durationMs: number }
+  segments: DurableSegmentSummary[]
+}
+
+export type DurableOpResult = {
+  ok: boolean
+  code: string
+  segment?: number
+  replay?: boolean
+  operation: DurableBatchOperation | null
+}
+
+/** Porta para o armazenamento durável (produção: RPCs Supabase/service_role). */
+export interface BatchOperationStore {
+  create(input: {
+    maxSegments: number
+    configuredCapacity: number
+    available: number | null
+    queueEnabled: boolean
+    createdBy: string | null
+  }): Promise<DurableOpResult>
+  claim(operationId: string, segment: number): Promise<DurableOpResult>
+  complete(input: {
+    operationId: string
+    segment: number
+    ok: boolean
+    stopReason: DurableStopReason | null
+    summary: { scannedInvoices: number; newContracts: number; existingContractInvoices: number; durationMs: number; pauseStage: string | null }
+  }): Promise<DurableOpResult>
+  requestStop(operationId: string): Promise<DurableOpResult>
+  get(operationId: string | null): Promise<DurableOpResult>
+}
+
+const STATUSES = new Set<string>([
+  "ready", "segment_running", "awaiting_next", "capacity_reached", "pagination_ended",
+  "max_segments", "stopped", "failed", "expired", "completed",
+])
+const REASONS = new Set<string>([
+  "error", "timeout", "zero_progress", "capacity_reached", "pagination_ended", "max_segments",
+  "stop_requested", "busy", "expired", "unavailable", "disabled",
+])
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const int = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0)
+const reason = (v: unknown): DurableStopReason | null => (typeof v === "string" && REASONS.has(v) ? (v as DurableStopReason) : null)
+
+export function parseDurableOperation(raw: unknown): DurableBatchOperation | null {
+  if (!raw || typeof raw !== "object") return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.id !== "string" || !UUID.test(r.id)) return null
+  if (typeof r.status !== "string" || !STATUSES.has(r.status)) return null
+  const agg = (r.aggregateCounters && typeof r.aggregateCounters === "object" ? r.aggregateCounters : {}) as Record<string, unknown>
+  const segs = Array.isArray(agg.segments) ? agg.segments : []
+  return {
+    id: r.id,
+    status: r.status as DurableBatchStatus,
+    active: (BATCH_OPERATION_ACTIVE_STATUSES as readonly string[]).includes(r.status),
+    maxSegments: int(r.maxSegments),
+    segmentsStarted: int(r.segmentsStarted),
+    segmentsCompleted: int(r.segmentsCompleted),
+    nextSegment: int(r.nextSegment),
+    segmentInFlight: typeof r.segmentInFlight === "number" ? r.segmentInFlight : null,
+    stopRequested: r.stopRequested === true,
+    stopReason: reason(r.stopReason),
+    expiresAt: typeof r.expiresAt === "string" ? r.expiresAt : null,
+    totals: {
+      scannedInvoices: int(agg.scannedInvoices),
+      newContracts: int(agg.newContracts),
+      existingContractInvoices: int(agg.existingContractInvoices),
+      durationMs: int(agg.durationMs),
+    },
+    segments: segs
+      .filter((s): s is Record<string, unknown> => !!s && typeof s === "object")
+      .map((s) => ({
+        segment: int(s.segment),
+        ok: s.ok === true,
+        scannedInvoices: int(s.scannedInvoices),
+        newContracts: int(s.newContracts),
+        existingContractInvoices: int(s.existingContractInvoices),
+        durationMs: int(s.durationMs),
+        pauseStage: typeof s.pauseStage === "string" ? s.pauseStage : null,
+        stopReason: reason(s.stopReason),
+      })),
+  }
+}
+
+export function parseDurableResult(raw: unknown): DurableOpResult {
+  const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {}
+  return {
+    ok: r.ok === true,
+    code: typeof r.code === "string" ? r.code : "invalid_response",
+    segment: typeof r.segment === "number" ? r.segment : undefined,
+    replay: r.replay === true,
+    operation: parseDurableOperation(r.operation),
+  }
+}
+
+export const DURABLE_STOP_REASON_LABEL: Record<DurableStopReason, string> = {
+  ...BATCH_STOP_REASON_LABEL,
+  expired: "Operação expirada (sem atividade por 10 min).",
+  unavailable: "Capacidade indisponível; segmento não iniciado.",
+  disabled: "Fila de Cobrança desligada; segmento não iniciado.",
+}
+
+/** Visão para a UI (sem created_by, sem IDs de cliente/contrato/fatura). */
+export function durableOperationView(op: DurableBatchOperation | null, remainingSlots: number | null) {
+  if (!op) return { batchOperation: null }
+  return {
+    batchOperationId: op.id,
+    operationStatus: op.status,
+    segment: op.segmentsCompleted,
+    maxSegments: op.maxSegments,
+    nextSegment: op.nextSegment,
+    continue: op.status === "awaiting_next",
+    resumable: op.status === "awaiting_next",
+    stopRequested: op.stopRequested,
+    stopReason: op.stopReason,
+    stopReasonLabel: op.stopReason ? DURABLE_STOP_REASON_LABEL[op.stopReason] : null,
+    remainingSlots,
+    totals: op.totals,
+    segments: op.segments,
+  }
 }

@@ -8,7 +8,8 @@ import { describe, it } from "node:test"
 import {
   NEXT_BATCH_MAX_SEGMENTS_DEFAULT,
   NEXT_BATCH_MAX_SEGMENTS_HARD_CAP,
-  createBatchOperationRegistry,
+  parseDurableResult,
+  type BatchOperationStore,
   decideSegmentStop,
   gateSegmentStart,
   resolveMaxSegments,
@@ -20,8 +21,9 @@ import {
   collectionListRowFinancialProven,
   decideInvoiceDetailLookup,
 } from "@/lib/collections/invoice-from-controllr"
-import { readNextBatchRequest, sanitizeNextBatchResult, sanitizeStageTimings } from "@/lib/collections/next-batch"
-import { readNextBatchProgress } from "@/lib/collections/contract-card"
+import { readNextBatchRequest, sanitizeNextBatchResult, sanitizeStageTimings, type NextBatchSummary } from "@/lib/collections/next-batch"
+import { readNextBatchProgress, readResumableOperation } from "@/lib/collections/contract-card"
+import { executeNextBatchRequest, type NextBatchFlowDeps } from "@/lib/collections/batch-operation-flow"
 import type { CollectionSyncInvoice } from "@/lib/collections/sync-decision"
 
 const now = new Date("2026-09-16T12:00:00.000Z")
@@ -182,67 +184,236 @@ describe("3.1E-BA performance mocks (causa das 3 faturas)", () => {
   })
 })
 
-describe("3.1E-BA batchOperationId", () => {
-  const mk = () => {
-    let n = 0
-    let clock = 0
-    const reg = createBatchOperationRegistry({
-      newId: () => `00000000-0000-4000-8000-00000000000${++n}`,
-      now: () => clock,
-      ttlMs: 1000,
-    })
-    return { reg, tick: (ms: number) => (clock += ms) }
+/**
+ * 3.1E-BB: fake de TESTE com a mesma semântica das RPCs (a fonte da verdade em
+ * produção é o PostgreSQL; ver batch-operation-postgres.integration.test.ts).
+ * Compartilhar o mesmo objeto entre "instâncias" simula o banco único.
+ */
+function createFakeDurableStore(opts: { now?: () => number; ttlMs?: number } = {}) {
+  const now = opts.now ?? (() => 0)
+  const ttl = opts.ttlMs ?? 600_000
+  type Row = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+  const rows: Row[] = []
+  let n = 0
+  const ACTIVE = ["ready", "segment_running", "awaiting_next"]
+  const view = (r: Row) => ({
+    id: r.id, status: r.status, maxSegments: r.max, segmentsStarted: r.started, segmentsCompleted: r.completed,
+    nextSegment: r.completed + 1, segmentInFlight: r.inFlight, stopRequested: r.stop, stopReason: r.reason,
+    expiresAt: null, aggregateCounters: r.agg, lastSegmentSummary: null,
+  })
+  const res = (ok: boolean, code: string, r?: Row, extra: Record<string, unknown> = {}) =>
+    parseDurableResult({ ok, code, operation: r ? view(r) : null, ...extra })
+  const expire = () => {
+    for (const r of rows) if (ACTIVE.includes(r.status) && r.expires <= now()) { r.status = "expired"; r.reason = "expired"; r.inFlight = null }
   }
-  it("clique duplo / segunda aba: segunda operação recusada enquanto há uma ativa", () => {
-    const { reg } = mk()
-    assert.equal(reg.begin(5).ok, true)
-    const second = reg.begin(5)
-    assert.equal(second.ok, false)
-    if (!second.ok) assert.equal(second.code, "operation_active")
+  const store: BatchOperationStore & { rows: Row[] } = {
+    rows,
+    async create(i) {
+      expire()
+      const act = rows.find((r) => ACTIVE.includes(r.status))
+      if (act) return res(false, "operation_active", act)
+      if (!i.queueEnabled) return res(false, "disabled")
+      if (i.available == null || i.available <= 0) return res(false, "capacity_full")
+      const r: Row = { id: `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`, status: "ready", max: Math.min(10, Math.max(1, i.maxSegments)), started: 0, completed: 0, inFlight: null, stop: false, reason: null, expires: now() + ttl, agg: { scannedInvoices: 0, newContracts: 0, existingContractInvoices: 0, segments: [] } }
+      rows.push(r)
+      return res(true, "created", r)
+    },
+    async claim(id, seg) {
+      const r = rows.find((x) => x.id === id)
+      if (!r) return res(false, "unknown_operation")
+      if (ACTIVE.includes(r.status) && r.expires <= now()) { r.status = "expired"; r.reason = "expired"; r.inFlight = null; return res(false, "operation_expired", r) }
+      if (r.status === "segment_running") return res(false, "segment_in_flight", r)
+      if (!ACTIVE.includes(r.status)) return res(false, "operation_stopped", r)
+      if (r.stop) { r.status = "stopped"; r.reason = "stop_requested"; return res(false, "stop_requested", r) }
+      if (seg !== r.completed + 1) return res(false, "segment_out_of_order", r)
+      if (r.started >= r.max) { r.status = "max_segments"; r.reason = "max_segments"; return res(false, "max_segments", r) }
+      r.started += 1; r.inFlight = r.started; r.status = "segment_running"; r.expires = now() + ttl
+      return res(true, "claimed", r, { segment: r.inFlight })
+    },
+    async complete(i) {
+      const r = rows.find((x) => x.id === i.operationId)
+      if (!r) return res(false, "unknown_operation")
+      if (i.segment <= r.completed) return res(true, "already_completed", r, { replay: true })
+      if (r.status !== "segment_running" || r.inFlight !== i.segment) return res(false, "segment_mismatch", r)
+      const fail = ["error", "timeout", "zero_progress", "busy", "unavailable", "disabled"]
+      let status: string, reason: string | null
+      if ((i.stopReason && fail.includes(i.stopReason)) || !i.ok) { status = "failed"; reason = i.stopReason && fail.includes(i.stopReason) ? i.stopReason : "error" }
+      else if (i.stopReason === "capacity_reached" || i.stopReason === "pagination_ended") { status = i.stopReason; reason = i.stopReason }
+      else if (r.stop) { status = "stopped"; reason = "stop_requested" }
+      else if (r.completed + 1 >= r.max) { status = "max_segments"; reason = "max_segments" }
+      else { status = "awaiting_next"; reason = null }
+      r.completed += 1; r.inFlight = null; r.status = status; r.reason = reason; r.expires = now() + ttl
+      r.agg.scannedInvoices += i.summary.scannedInvoices; r.agg.newContracts += i.summary.newContracts
+      r.agg.existingContractInvoices += i.summary.existingContractInvoices
+      r.agg.segments.push({ segment: i.segment, ok: i.ok, ...i.summary, stopReason: reason })
+      return res(true, "completed", r)
+    },
+    async requestStop(id) {
+      const r = rows.find((x) => x.id === id)
+      if (!r) return res(false, "unknown_operation")
+      r.stop = true
+      if (r.status === "ready" || r.status === "awaiting_next") { r.status = "stopped"; r.reason = "stop_requested" }
+      return res(true, "stop_requested", r)
+    },
+    async get(id) {
+      expire()
+      const r = id ? rows.find((x) => x.id === id) : rows[rows.length - 1]
+      return res(true, "ok", r)
+    },
+  }
+  return store
+}
+
+describe("3.1E-BB batchOperationId durável (fluxo + store)", () => {
+  const summary = (available: number, busy = false) => ({
+    ok: true as const,
+    summary: { configuredCapacity: 15, activeContracts: 15 - available, availableCapacity: available, capacityFull: available <= 0, source: "contract_capacity", configured: 15, occupying: 15 - available, available, unkeyed: 0, futurePromises: 0, futureCallbacks: 0, busy, runStatus: "paused", runPauseStage: null } as unknown as NextBatchSummary,
   })
-  it("concorrência: segmento em voo bloqueia outro; ordem estrita", () => {
-    const { reg } = mk()
-    const b = reg.begin(5)
-    assert.ok(b.ok)
-    if (!b.ok) return
-    const id = b.operation.id
-    assert.equal(reg.claimSegment(id, 2).ok, false)
-    assert.equal(reg.claimSegment(id, 1).ok, true)
-    const dup = reg.claimSegment(id, 1)
-    assert.equal(dup.ok, false)
-    if (!dup.ok) assert.equal(dup.code, "segment_in_flight")
+  const okSeg = { ok: true, discoveryStatus: "paused", pauseStage: "page_limit", progressMade: true, contractsAdmitted: 1, segmentScannedInvoices: 15, segmentUpdated: 0, capacityReached: false }
+  function deps(store: BatchOperationStore, o: { available?: () => number; busy?: () => boolean; run?: () => Promise<unknown>; calls?: { n: number } } = {}): NextBatchFlowDeps {
+    return {
+      store,
+      loadSummary: async () => summary(o.available ? o.available() : 10, o.busy ? o.busy() : false),
+      loadQueueEnabled: async () => true,
+      runSegment: async () => {
+        if (o.calls) o.calls.n += 1
+        return (o.run ? await o.run() : okSeg) as never
+      },
+      maxSegmentsEnv: undefined,
+    }
+  }
+  it("clique duplo / duas abas / duas instâncias: segunda criação recusada (operation_active)", async () => {
+    const db = createFakeDurableStore()
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const calls = { n: 0 }
+    const tabA = executeNextBatchRequest(deps(db, { calls, run: async () => { await gate; return okSeg } }), { actorProfileId: "x", request: { kind: "start" } })
+    await new Promise((r) => setTimeout(r, 5))
+    const tabB = await executeNextBatchRequest(deps(db, { calls }), { actorProfileId: "x", request: { kind: "start" } })
+    assert.equal(tabB.status, 409)
+    assert.equal(tabB.body.code, "operation_active")
+    release()
+    await tabA
+    assert.equal(calls.n, 1)
+    assert.equal(db.rows.length, 1)
   })
-  it("limite de segmentos e parada solicitada", () => {
-    const { reg } = mk()
-    const b = reg.begin(2)
-    assert.ok(b.ok)
-    if (!b.ok) return
-    const id = b.operation.id
-    const rec = (segment: number) => ({ segment, ok: true, scannedInvoices: 15, newContracts: 1, existingContractInvoices: 0, pauseStage: "page_limit", durationMs: 1, stopReason: null })
-    reg.claimSegment(id, 1)
-    reg.completeSegment(id, rec(1))
-    reg.claimSegment(id, 2)
-    const op = reg.completeSegment(id, rec(2))
-    assert.equal(op?.status, "stopped")
-    assert.equal(op?.stopReason, "max_segments")
-    assert.equal(reg.claimSegment(id, 3).ok, false)
-    const b2 = reg.begin(5)
-    assert.ok(b2.ok)
-    if (!b2.ok) return
-    reg.claimSegment(b2.operation.id, 1)
-    reg.requestStop(b2.operation.id)
-    const op2 = reg.completeSegment(b2.operation.id, rec(1))
-    assert.equal(op2?.stopReason, "stop_requested")
+  it("instância A cria/executa seg1; B reconhece e continua seg2; ordinal não pula", async () => {
+    const db = createFakeDurableStore()
+    const A = deps(db), B = deps(db)
+    const s1 = await executeNextBatchRequest(A, { actorProfileId: "x", request: { kind: "start" } })
+    assert.equal(s1.body.continue, true)
+    assert.equal(s1.body.nextSegment, 2)
+    const id = String(s1.body.batchOperationId)
+    const seen = await db.get(null)
+    assert.equal(seen.operation?.id, id)
+    const skip = await executeNextBatchRequest(B, { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: 3 } })
+    assert.equal(skip.body.code, "segment_out_of_order")
+    const s2 = await executeNextBatchRequest(B, { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: 2 } })
+    assert.equal(s2.body.segment, 2)
   })
-  it("refresh/aba fechada: operação expira por TTL e não continua sozinha", () => {
-    const { reg, tick } = mk()
-    const b = reg.begin(5)
-    assert.ok(b.ok)
-    if (!b.ok) return
-    tick(5000)
-    assert.equal(reg.hasActive(), false)
-    const c = reg.claimSegment(b.operation.id, 1)
-    assert.equal(c.ok, false)
+  it("limite 5 global (env 100 => teto 10; default 5) e maxSegments no body recusado", async () => {
+    const db = createFakeDurableStore()
+    let id = ""
+    let r = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "start" } })
+    id = String(r.body.batchOperationId)
+    for (let seg = 2; seg <= 7; seg++) {
+      r = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: seg } })
+      if (r.body.continue !== true) break
+    }
+    assert.equal(r.body.operationStatus, "max_segments")
+    assert.equal(r.body.segment, 5)
+    assert.equal(resolveMaxSegments("100"), NEXT_BATCH_MAX_SEGMENTS_HARD_CAP)
+    assert.equal(readNextBatchRequest({ confirm: true, maxSegments: 100 }).ok, false)
+    assert.equal(readNextBatchRequest({ batchOperationId: id, segment: 2, maxSegments: 100 }).ok, false)
+  })
+  it("erro e timeout => failed, zero retry; zero_progress => failed", async () => {
+    for (const [run, reason] of [
+      [async () => { throw new Error("x") }, "error"],
+      [async () => ({ ...okSeg, pauseStage: "list_timeout_headers" }), "timeout"],
+      [async () => ({ ...okSeg, progressMade: false }), "zero_progress"],
+    ] as const) {
+      const db = createFakeDurableStore()
+      const calls = { n: 0 }
+      const r = await executeNextBatchRequest(deps(db, { run, calls }), { actorProfileId: "x", request: { kind: "start" } })
+      assert.equal(r.body.operationStatus, "failed")
+      assert.equal(r.body.stopReason, reason)
+      assert.equal(r.body.continue, false)
+      assert.equal(calls.n, 1)
+    }
+  })
+  it("capacity_reached e pagination_ended encerram globalmente; capacidade cheia antes => zero ERP", async () => {
+    const db = createFakeDurableStore()
+    let avail = 1
+    const calls = { n: 0 }
+    const r = await executeNextBatchRequest(deps(db, { available: () => avail, calls, run: async () => { avail = 0; return okSeg } }), { actorProfileId: "x", request: { kind: "start" } })
+    assert.equal(r.body.operationStatus, "capacity_reached")
+    const db2 = createFakeDurableStore()
+    const p = await executeNextBatchRequest(deps(db2, { run: async () => ({ ...okSeg, discoveryStatus: "pagination_ended" }) }), { actorProfileId: "x", request: { kind: "start" } })
+    assert.equal(p.body.operationStatus, "pagination_ended")
+    const db3 = createFakeDurableStore()
+    const c3 = { n: 0 }
+    const full = await executeNextBatchRequest(deps(db3, { available: () => 0, calls: c3 }), { actorProfileId: "x", request: { kind: "start" } })
+    assert.equal(full.body.code, "capacity_full")
+    assert.equal(c3.n, 0)
+    // capacidade enche entre segmentos (outra instância) => seg2 não chama ERP
+    const db4 = createFakeDurableStore()
+    let a4 = 5
+    const c4 = { n: 0 }
+    const s1 = await executeNextBatchRequest(deps(db4, { available: () => a4, calls: c4 }), { actorProfileId: "x", request: { kind: "start" } })
+    a4 = 0
+    const s2 = await executeNextBatchRequest(deps(db4, { available: () => a4, calls: c4 }), { actorProfileId: "x", request: { kind: "continue", batchOperationId: String(s1.body.batchOperationId), segment: 2 } })
+    assert.equal(s2.body.operationStatus, "capacity_reached")
+    assert.equal(c4.n, 1)
+  })
+  it("run lease ativa (busy) continua barrando: segmento não chama ERP", async () => {
+    const db = createFakeDurableStore()
+    const calls = { n: 0 }
+    const r = await executeNextBatchRequest(deps(db, { busy: () => true, calls }), { actorProfileId: "x", request: { kind: "start" } })
+    assert.equal(r.status, 409)
+    assert.equal(calls.n, 0)
+    assert.equal(r.body.operationStatus, "failed")
+  })
+  it("stop_requested em outra instância: segmento em voo termina, nenhum novo começa", async () => {
+    const db = createFakeDurableStore()
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const p = executeNextBatchRequest(deps(db, { run: async () => { await gate; return okSeg } }), { actorProfileId: "x", request: { kind: "start" } })
+    await new Promise((r) => setTimeout(r, 5))
+    const id = db.rows[0].id
+    const stop = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "stop", batchOperationId: id } })
+    assert.equal(stop.body.operationStatus, "segment_running")
+    release()
+    const r = await p
+    assert.equal(r.body.operationStatus, "stopped")
+    const next = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: 2 } })
+    assert.equal(next.body.code, "operation_stopped")
+  })
+  it("TTL entre instâncias e refresh: expira, não continua sozinho; terminal não bloqueia nova", async () => {
+    let clock = 0
+    const db = createFakeDurableStore({ now: () => clock, ttlMs: 1000 })
+    const s1 = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "start" } })
+    assert.equal(s1.body.operationStatus, "awaiting_next")
+    // "refresh": nada roda sozinho; GET só lê
+    const state = await db.get(null)
+    assert.equal(state.operation?.status, "awaiting_next")
+    assert.equal(db.rows[0].completed, 1)
+    clock += 5000
+    const late = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "continue", batchOperationId: String(s1.body.batchOperationId), segment: 2 } })
+    assert.equal(late.body.code, "operation_expired")
+    const fresh = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "start" } })
+    assert.equal(fresh.body.code, "loaded")
+  })
+  it("conclusão repetida é idempotente", async () => {
+    const db = createFakeDurableStore()
+    const c = await db.create({ maxSegments: 5, configuredCapacity: 15, available: 5, queueEnabled: true, createdBy: null })
+    const id = c.operation!.id
+    await db.claim(id, 1)
+    const sum = { scannedInvoices: 3, newContracts: 1, existingContractInvoices: 0, durationMs: 1, pauseStage: null }
+    const a = await db.complete({ operationId: id, segment: 1, ok: true, stopReason: null, summary: sum })
+    const b = await db.complete({ operationId: id, segment: 1, ok: true, stopReason: null, summary: sum })
+    assert.equal(a.replay, false)
+    assert.equal(b.replay, true)
+    assert.equal(b.operation?.totals.newContracts, 1)
   })
   it("max segments configurável com teto", () => {
     assert.equal(resolveMaxSegments(undefined), NEXT_BATCH_MAX_SEGMENTS_DEFAULT)
@@ -259,6 +430,11 @@ describe("3.1E-BA batchOperationId", () => {
     assert.equal(readNextBatchRequest({ batchOperationId: "nope", segment: 2 }).ok, false)
     assert.equal(readNextBatchRequest({ batchOperationId: id, segment: 2 }).ok, true)
     assert.equal(readNextBatchRequest({ batchOperationId: id, stop: true }).ok, true)
+  })
+  it("retomada só explícita: readResumableOperation exige awaiting_next", () => {
+    const id = "00000000-0000-4000-8000-000000000001"
+    assert.deepEqual(readResumableOperation({ batchOperationId: id, operationStatus: "awaiting_next", resumable: true, nextSegment: 2 }), { id, nextSegment: 2 })
+    assert.equal(readResumableOperation({ batchOperationId: id, operationStatus: "failed", resumable: false, nextSegment: 2 }), null)
   })
 })
 
@@ -281,26 +457,25 @@ describe("3.1E-BA decisões de parada / gate", () => {
   })
 })
 
-describe("3.1E-BA continuação limitada (memória)", () => {
+describe("3.1E-BA/BB continuação limitada (store durável fake)", () => {
   async function operation(opts: { rows: CollectionSyncInvoice[]; initialActive: number; maxSegments: number; failAt?: number }) {
     const pages = keyset(opts.rows)
     const store = createMemoryDiscoveryStore()
     const repo = createMemoryContractCaseRepo()
-    const reg = createBatchOperationRegistry({ newId: () => "00000000-0000-4000-8000-000000000009" })
-    const begun = reg.begin(opts.maxSegments)
-    assert.ok(begun.ok)
-    if (!begun.ok) throw new Error("x")
-    const id = begun.operation.id
+    const reg = createFakeDurableStore()
+    const begun = await reg.create({ maxSegments: opts.maxSegments, configuredCapacity: 15, available: 13, queueEnabled: true, createdBy: null })
+    assert.ok(begun.ok && begun.operation)
+    const id = begun.operation!.id
     let active = opts.initialActive
     let runId: string | null = null
     let fetchCalls = 0
     const results: DiscoveryBatchResult[] = []
     for (let seg = 1; seg <= 20; seg++) {
-      const claim = reg.claimSegment(id, seg)
+      const claim = await reg.claim(id, seg)
       if (!claim.ok) break
       const gate = gateSegmentStart({ available: CAPACITY - active, busy: false, enabled: true })
       if (!gate.ok) {
-        reg.stop(id, gate.reason)
+        await reg.complete({ operationId: id, segment: seg, ok: gate.reason === "capacity_reached", stopReason: gate.reason, summary: { scannedInvoices: 0, newContracts: 0, existingContractInvoices: 0, durationMs: 0, pauseStage: null } })
         break
       }
       const r: DiscoveryBatchResult = await runOverdueDiscoveryBatch({
@@ -339,18 +514,17 @@ describe("3.1E-BA continuação limitada (memória)", () => {
         capacityReached: r.capacityReached === true,
         availableAfter: CAPACITY - active,
       })
-      reg.completeSegment(id, {
+      await reg.complete({
+        operationId: id,
         segment: seg,
         ok: r.ok,
-        scannedInvoices: 0,
-        newContracts: r.contractsAdmitted ?? 0,
-        existingContractInvoices: 0,
-        pauseStage: r.pauseStage,
-        durationMs: 0,
         stopReason: stop,
+        summary: { scannedInvoices: 0, newContracts: r.contractsAdmitted ?? 0, existingContractInvoices: 0, pauseStage: r.pauseStage ?? null, durationMs: 0 },
       })
     }
-    return { op: reg.get(id)!, pages, repo, results, active, fetchCalls }
+    const got = (await reg.get(id)).operation!
+    const op = { ...got, segments: got.segments }
+    return { op, pages, repo, results, active, fetchCalls }
   }
 
   it("uma confirmação => vários segmentos; segundo começa após o cursor do primeiro; capacidade ≤15", async () => {
@@ -416,6 +590,10 @@ describe("3.1E-BA UI / arquitetura", () => {
     assert.match(route, /runNextBatchOperation/)
     const svc = readFileSync("lib/collections/next-batch.service.ts", "utf8")
     assert.doesNotMatch(svc, /while\s*\(|for\s*\(\s*;/)
-    assert.match(svc, /decideNextBatch\(/)
+    // 3.1E-BB: gate por segmento vive no fluxo durável, chamado pelo serviço.
+    const flow = readFileSync("lib/collections/batch-operation-flow.ts", "utf8")
+    assert.match(svc, /executeNextBatchRequest\(/)
+    assert.doesNotMatch(flow, /while\s*\(|for\s*\(\s*;/)
+    assert.match(flow, /decideNextBatch\(/)
   })
 })

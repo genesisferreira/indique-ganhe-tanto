@@ -224,6 +224,10 @@ export function readNextBatchRequest(
 ): { ok: true; request: NextBatchRequest } | { ok: false; message: string } {
   const r = body && typeof body === "object" ? (body as Record<string, unknown>) : {}
   if ("runId" in r) return { ok: false, message: "runId não é aceito. O servidor escolhe a execução." }
+  // 3.1E-BB: limites vêm do servidor/banco; o body nunca pode aumentá-los.
+  if ("maxSegments" in r || "max_segments" in r || "nextSegment" in r || "ttl" in r) {
+    return { ok: false, message: "maxSegments/nextSegment/ttl são definidos pelo servidor." }
+  }
   if (r.batchOperationId === undefined) {
     const base = readNextBatchBody(body)
     return base.ok ? { ok: true, request: { kind: "start" } } : base

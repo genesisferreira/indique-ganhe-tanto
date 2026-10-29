@@ -134,3 +134,11 @@ export function readNextBatchProgress(body: Record<string, unknown> | null, runn
     running,
   }
 }
+
+/** Sprint 3.1E-BB: operação durável retomável (só awaiting_next). Sem auto-continuar. */
+export function readResumableOperation(op: Record<string, unknown> | null): { id: string; nextSegment: number } | null {
+  if (!op || op.resumable !== true || op.operationStatus !== "awaiting_next") return null
+  if (typeof op.batchOperationId !== "string" || typeof op.nextSegment !== "number") return null
+  if (!Number.isInteger(op.nextSegment) || op.nextSegment < 2) return null
+  return { id: op.batchOperationId, nextSegment: op.nextSegment }
+}
