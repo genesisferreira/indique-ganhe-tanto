@@ -95,6 +95,8 @@ export type DiscoveryRunnerDeps<TRow extends { invoicePk: string | null } = { in
    * Fatura de contrato já ativo não consome vaga; contrato novo consome uma.
    */
   contractSlots?: number | null
+  /** Sprint 3.1E-BA: contadores cumulativos da run no claim (delta por segmento). */
+  onClaim?: (counters: CollectionDiscoveryCounters) => void
 }
 
 export type DiscoveryBatchResult = {
@@ -273,6 +275,7 @@ export async function runOverdueDiscoveryBatch<
   const generation = claim.run.leaseGeneration
   let run = claim.run
   let counters = countersFromRun(run)
+  input.onClaim?.({ ...counters })
   let lastPageDurationMs = 8_000
   let pagesThisBatch = 0
   const skipReasons = emptyDiscoverySkipHistogram()

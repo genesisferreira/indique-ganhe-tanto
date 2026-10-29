@@ -21,6 +21,7 @@ import {
 import { createOpsDiscoveryCaseRepo } from "@/lib/collections/discovery-persist-ops"
 import { runOverdueDiscoveryBatch } from "@/lib/collections/discovery-runner"
 import { createOpsDiscoveryStore } from "@/lib/collections/discovery-store-ops"
+import type { DiscoveryStore } from "@/lib/collections/discovery-store"
 import { classifyInvoiceDetailForReconciliation } from "@/lib/collections/reconciliation"
 import {
   emptyDiscoverySkipHistogram,
@@ -29,6 +30,8 @@ import {
 } from "@/lib/collections/skip-reason"
 import {
   collectionInvoiceNeedsDetailFetch,
+  collectionListRowFinancialProven,
+  decideInvoiceDetailLookup,
   mergeInvoiceInfoIntoSyncInvoice,
   presentCollectionInvoiceFromListRow,
 } from "@/lib/collections/invoice-from-controllr"
@@ -64,7 +67,30 @@ export type CollectionsSyncResult = {
   pauseStage?: string | null
   contractsAdmitted?: number
   capacityReached?: boolean
+  /** Sprint 3.1E-BA: progresso e métricas sanitizadas do segmento (sem IDs/PII). */
+  progressMade?: boolean
+  segmentScannedInvoices?: number
+  segmentCreated?: number
+  segmentUpdated?: number
+  stageTimings?: DiscoveryStageTimings
 }
+
+export type DiscoveryStageTimings = {
+  loginMs: number
+  listMs: number
+  listRequests: number
+  classificationMs: number
+  detailLookups: number
+  detailSkippedByList: number
+  detailMs: number
+  persistMs: number | null
+  checkpointMs: number
+  checkpoints: number
+  releaseMs: number
+  totalMs: number
+}
+
+type DetailStats = { lookups: number; skippedByList: number; durationMs: number }
 
 async function hydrateInvoice(input: {
   invoice: CollectionSyncInvoice
@@ -73,6 +99,8 @@ async function hydrateInvoice(input: {
   now: Date
   config: NonNullable<ReturnType<typeof getBrbyteOperationalConfig>>
   cookie: string
+  listFinancialProven?: boolean
+  stats?: DetailStats
 }): Promise<CollectionSyncInvoice> {
   const daysOverdue = computeDaysOverdue({
     invoiceDueDate: input.invoice.invoiceDueDate,
@@ -89,11 +117,24 @@ async function hydrateInvoice(input: {
     return input.invoice
   }
 
+  // Sprint 3.1E-BA: listagem já comprova os campos => sem invoice_info.
+  if (
+    decideInvoiceDetailLookup({
+      needsDetailByRule: true,
+      listFinancialProven: input.listFinancialProven === true,
+    }) === "skip_list_sufficient"
+  ) {
+    if (input.stats) input.stats.skippedByList += 1
+    return input.invoice
+  }
+  const detailStarted = Date.now()
+  if (input.stats) input.stats.lookups += 1
   const info = await fetchInvoiceInfo({
     config: input.config,
     cookie: input.cookie,
     invoicePk: input.invoice.invoicePk,
   })
+  if (input.stats) input.stats.durationMs += Math.max(0, Date.now() - detailStarted)
   if (!info.ok || !info.info) return input.invoice
   return mergeInvoiceInfoIntoSyncInvoice({
     invoice: input.invoice,
@@ -213,8 +254,35 @@ export async function syncCollectionsFromControllr(input: {
 
   const now = input.now ?? new Date()
   const referenceDate = freezeInvoiceListReferenceDate(now)
+  const detailStats: DetailStats = { lookups: 0, skippedByList: 0, durationMs: 0 }
+  const stage = { listMs: 0, listRequests: 0, classificationMs: 0, checkpointMs: 0, checkpoints: 0, releaseMs: 0 }
+  const provenInvoicePks = new Set<string>()
+  let countersAtClaim: { scannedInvoices: number; createdCount: number; updatedCount: number } | null = null
+  const baseStore = createOpsDiscoveryStore()
+  const timedStore: DiscoveryStore = Object.assign(Object.create(baseStore) as DiscoveryStore, {
+    advance: async (args: Parameters<DiscoveryStore["advance"]>[0]) => {
+      const t = clock()
+      try {
+        return await baseStore.advance(args)
+      } finally {
+        stage.checkpointMs += Math.max(0, clock() - t)
+        stage.checkpoints += 1
+      }
+    },
+    release: async (args: Parameters<DiscoveryStore["release"]>[0]) => {
+      const t = clock()
+      try {
+        return await baseStore.release(args)
+      } finally {
+        stage.releaseMs += Math.max(0, clock() - t)
+      }
+    },
+  })
   const batch = await runOverdueDiscoveryBatch({
-    store: createOpsDiscoveryStore(),
+    store: timedStore,
+    onClaim: (c) => {
+      countersAtClaim = { scannedInvoices: c.scannedInvoices, createdCount: c.createdCount, updatedCount: c.updatedCount }
+    },
     repo: createOpsDiscoveryCaseRepo(),
     owner: `discovery:${randomUUID()}`,
     actorProfileId: input.actorProfileId,
@@ -230,6 +298,7 @@ export async function syncCollectionsFromControllr(input: {
     minimumDaysOverdue: settings.minimumDaysOverdue,
     collectionsEnabled: settings.isEnabled,
     fetchPage: async ({ referenceDate: frozenDate, referenceInstant, afterInvoicePk, timeoutMs }) => {
+      const listStarted = clock()
       const page = await listOverdueInvoicesPage({
         config,
         cookie: login.cookie,
@@ -240,6 +309,8 @@ export async function syncCollectionsFromControllr(input: {
         timeoutMs,
         minimumDaysOverdue: settings.minimumDaysOverdue,
       })
+      stage.listMs += Math.max(0, clock() - listStarted)
+      stage.listRequests += 1
       console.log(LOG_TAG, {
         scope: "discovery-page",
         httpStatus: page.httpStatus,
@@ -258,7 +329,13 @@ export async function syncCollectionsFromControllr(input: {
         bodyReadComplete: page.bodyReadComplete,
       }
     },
-    toInvoice: (row) => presentCollectionInvoiceFromListRow(row),
+    toInvoice: (row) => {
+      const t = clock()
+      const presented = presentCollectionInvoiceFromListRow(row)
+      if (presented && collectionListRowFinancialProven(row)) provenInvoicePks.add(presented.invoicePk)
+      stage.classificationMs += Math.max(0, clock() - t)
+      return presented
+    },
     prepareInvoice: async (invoice, existing, frozenNow) => {
       const remaining = collectionDiscoveryRemainingBudgetMs({
         startedAtMs,
@@ -277,6 +354,8 @@ export async function syncCollectionsFromControllr(input: {
         now: frozenNow,
         config: { ...config, timeoutMs: hydrateTimeout },
         cookie: login.cookie,
+        listFinancialProven: provenInvoicePks.has(invoice.invoicePk),
+        stats: detailStats,
       })
     },
     fetchInvoiceDetail: async ({ invoicePk, timeoutMs }) => {
@@ -308,6 +387,25 @@ export async function syncCollectionsFromControllr(input: {
   })
 
   const skipReasons = sanitizeDiscoverySkipHistogram(batch.skipReasons)
+  const claimBase = countersAtClaim as { scannedInvoices: number; createdCount: number; updatedCount: number } | null
+  const segmentScannedInvoices = claimBase ? Math.max(0, batch.scannedInvoices - claimBase.scannedInvoices) : 0
+  const segmentCreated = claimBase ? Math.max(0, batch.created - claimBase.createdCount) : 0
+  const segmentUpdated = claimBase ? Math.max(0, batch.updated - claimBase.updatedCount) : 0
+  const stageTimings: DiscoveryStageTimings = {
+    loginMs: loginDurationMs,
+    listMs: stage.listMs,
+    listRequests: stage.listRequests,
+    classificationMs: stage.classificationMs,
+    detailLookups: detailStats.lookups,
+    detailSkippedByList: detailStats.skippedByList,
+    detailMs: detailStats.durationMs,
+    persistMs: batch.persistenceDurationMs,
+    checkpointMs: stage.checkpointMs,
+    checkpoints: stage.checkpoints,
+    releaseMs: stage.releaseMs,
+    totalMs: Math.max(0, clock() - startedAtMs),
+  }
+  console.log(LOG_TAG, { scope: "discovery-stage-timings", ...stageTimings, segmentScannedInvoices, segmentCreated, segmentUpdated })
   console.log(LOG_TAG, {
     scope: "discovery-batch",
     pauseStage: batch.pauseStage,
@@ -348,6 +446,11 @@ export async function syncCollectionsFromControllr(input: {
     pauseStage: batch.pauseStage,
     contractsAdmitted: batch.contractsAdmitted ?? 0,
     capacityReached: batch.capacityReached === true,
+    progressMade: batch.progressMade || segmentScannedInvoices > 0,
+    segmentScannedInvoices,
+    segmentCreated,
+    segmentUpdated,
+    stageTimings,
     message: [
       batch.message,
       batch.unassigned > 0

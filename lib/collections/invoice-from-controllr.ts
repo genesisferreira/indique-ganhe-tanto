@@ -147,3 +147,48 @@ export function shouldInspectCollectionInvoice(input: {
   })
   return daysOverdue != null && daysOverdue >= input.minimumDaysOverdue
 }
+
+/**
+ * Sprint 3.1E-BA — a listagem (invoice/list) já comprova os campos financeiros?
+ * true só quando TODOS estão explícitos na linha: vencimento, contract_pk,
+ * contract_status, invoice_deleted=false, invoice_date_credit presente e vazio,
+ * valor do documento e valor pago numéricos com pago < documento (aberto ou
+ * parcial) e invoice_msg diferente de "paid". Qualquer ausência, conflito ou
+ * indício de pagamento total => false (invoice_info continua necessário para
+ * evidência positiva/conflito). Ausência NUNCA vira pagamento.
+ */
+export function collectionListRowFinancialProven(row: BrbyteInvoiceListRow): boolean {
+  const raw = asRecord(row.raw)
+  if (!raw) return false
+  if (!row.invoicePk?.trim() || row.invoiceDeleted) return false
+  if (classifyInvoiceDeletedFlag(raw).kind !== "not_deleted") return false
+  if (!row.invoiceDueDate) return false
+  const contractPk = row.contractPk ?? firstText(raw, ["contract_pk", "contractPk"])
+  if (!contractPk || !/^[1-9]\d*$/.test(contractPk.trim())) return false
+  if (coalesceControllrStatus(raw, ["contract_status", "contractStatus"]) == null) return false
+  const creditKeys = ["invoice_date_credit", "invoiceDateCredit"].filter((k) =>
+    Object.prototype.hasOwnProperty.call(raw, k)
+  )
+  if (creditKeys.length === 0) return false
+  if (creditKeys.some((k) => readText(raw[k]) != null)) return false
+  const msg = firstText(raw, ["invoice_msg", "invoiceMsg"])
+  if (msg && msg.toLowerCase() === "paid") return false
+  const monetary = extractInvoiceMonetaryFields(raw)
+  const doc = monetary.invoiceAmountDocument
+  const paid = monetary.invoiceAmountPaid
+  if (typeof doc !== "number" || !Number.isFinite(doc) || doc <= 0) return false
+  if (typeof paid !== "number" || !Number.isFinite(paid) || paid < 0) return false
+  if (paid >= doc) return false
+  return true
+}
+
+export type InvoiceDetailLookupDecision = "fetch" | "skip_list_sufficient" | "skip_not_needed"
+
+export function decideInvoiceDetailLookup(input: {
+  needsDetailByRule: boolean
+  listFinancialProven: boolean
+}): InvoiceDetailLookupDecision {
+  if (!input.needsDetailByRule) return "skip_not_needed"
+  if (input.listFinancialProven) return "skip_list_sufficient"
+  return "fetch"
+}

@@ -10,6 +10,8 @@ import {
   buildContractCardView,
   nextBatchButtonState,
   nextBatchToast,
+  readNextBatchProgress,
+  type NextBatchProgressView,
 } from "@/lib/collections/contract-card"
 import { CONTRACT_SCOPE_NOTICE } from "@/lib/collections/operational-model"
 import {
@@ -33,6 +35,9 @@ export default function CobrancaPage() {
   const summary = summaryState.status === "ready" ? summaryState.summary : null
   const [submitting, setSubmitting] = useState(false)
   const inFlight = useRef(false)
+  const stopAfterCurrent = useRef(false)
+  const [stopRequested, setStopRequested] = useState(false)
+  const [progress, setProgress] = useState<NextBatchProgressView | null>(null)
 
   const loadSummary = useCallback(async () => {
     setSummaryState({ status: "loading" })
@@ -69,23 +74,47 @@ export default function CobrancaPage() {
     if (inFlight.current || !summary) return
     const button = nextBatchButtonState({ summary, submitting, loading: summaryState.status === "loading" })
     if (button.disabled) return
+    // Uma confirmação humana => até maxSegments segmentos sequenciais. Sem retry.
     if (!window.confirm(nextBatchConfirmMessage(summary.availableCapacity))) return
     inFlight.current = true
+    stopAfterCurrent.current = false
+    setStopRequested(false)
     setSubmitting(true)
+    let last: Record<string, unknown> | null = null
     try {
-      const res = await fetch("/api/admin/collections/next-batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
-      })
-      const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
-      const message = nextBatchToast(json)
-      const discoveryStatus = String(json?.discoveryStatus ?? "")
-      if (res.ok && json?.ok && discoveryStatus !== "failed") toast.success(message)
+      let payload: Record<string, unknown> = { confirm: true }
+      // Limite duro no cliente além do servidor: nunca loop ilimitado.
+      for (let guard = 0; guard < 10; guard++) {
+        const res = await fetch("/api/admin/collections/next-batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+        const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
+        last = json
+        setProgress(readNextBatchProgress(json, json?.continue === true))
+        const opId = typeof json?.batchOperationId === "string" ? json.batchOperationId : null
+        if (!res.ok || !json || json.continue !== true || !opId) break
+        if (stopAfterCurrent.current) {
+          const stopRes = await fetch("/api/admin/collections/next-batch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ batchOperationId: opId, stop: true }),
+          })
+          const stopJson = (await stopRes.json().catch(() => null)) as Record<string, unknown> | null
+          setProgress(readNextBatchProgress(stopJson ?? json, false))
+          break
+        }
+        payload = { batchOperationId: opId, segment: Number(json.segment) + 1 }
+      }
+      const message = nextBatchToast(last)
+      const discoveryStatus = String(last?.discoveryStatus ?? "")
+      if (last?.ok && discoveryStatus !== "failed") toast.success(message)
       else toast.message(message)
     } finally {
       inFlight.current = false
       setSubmitting(false)
+      setProgress((p) => (p ? { ...p, running: false } : p))
       await load()
     }
   }
@@ -109,7 +138,34 @@ export default function CobrancaPage() {
             {button.label}
           </Button>
         ) : null}
+        {kind === "admin_master" && submitting ? (
+          <Button
+            variant="outline"
+            onClick={() => {
+              stopAfterCurrent.current = true
+              setStopRequested(true)
+            }}
+            disabled={stopRequested}
+            data-testid="next-batch-stop-button"
+          >
+            Parar após o segmento atual
+          </Button>
+        ) : null}
       </PageHeader>
+
+      {kind === "admin_master" && progress ? (
+        <div className="mb-4 rounded-lg border bg-card p-4 text-sm" data-testid="next-batch-progress">
+          <p>
+            Segmento {progress.segment} de {progress.maxSegments}
+            {progress.running ? " (em andamento)" : ""}
+          </p>
+          <p>Faturas analisadas: {progress.scannedInvoices}</p>
+          <p>Contratos novos: {progress.newContracts}</p>
+          <p>Faturas de contratos existentes: {progress.existingContractInvoices}</p>
+          <p>Vagas restantes: {progress.remainingSlots ?? "—"}</p>
+          {progress.stopReasonLabel ? <p>Motivo da parada: {progress.stopReasonLabel}</p> : null}
+        </div>
+      ) : null}
 
       {kind === "admin_master" ? (
         <div className="mb-4 rounded-lg border bg-card p-4 text-sm" data-testid="next-batch-summary">

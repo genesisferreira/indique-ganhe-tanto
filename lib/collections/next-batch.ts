@@ -167,6 +167,11 @@ export function sanitizeNextBatchResult(r: {
   unassigned?: number
   errors?: number
   message?: string
+  progressMade?: boolean
+  segmentScannedInvoices?: number
+  segmentCreated?: number
+  segmentUpdated?: number
+  stageTimings?: Record<string, number | null> | null
 }) {
   return {
     ok: r.ok,
@@ -184,5 +189,52 @@ export function sanitizeNextBatchResult(r: {
     errors: r.errors ?? 0,
     scope: CUSTOMER_DEDUPLICATION_SCOPE,
     message: r.message ?? null,
+    progressMade: r.progressMade === true,
+    segmentScannedInvoices: r.segmentScannedInvoices ?? 0,
+    segmentCreated: r.segmentCreated ?? 0,
+    segmentUpdated: r.segmentUpdated ?? 0,
+    stageTimings: sanitizeStageTimings(r.stageTimings),
   }
+}
+
+/** Sprint 3.1E-BA: só números (durações/contagens). Nada de IDs/PII. */
+export function sanitizeStageTimings(raw: unknown): Record<string, number | null> | null {
+  if (!raw || typeof raw !== "object") return null
+  const out: Record<string, number | null> = {}
+  for (const key of [
+    "loginMs", "listMs", "listRequests", "classificationMs", "detailLookups", "detailSkippedByList",
+    "detailMs", "persistMs", "checkpointMs", "checkpoints", "releaseMs", "totalMs",
+  ]) {
+    const v = (raw as Record<string, unknown>)[key]
+    out[key] = typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : null
+  }
+  return out
+}
+
+/** Sprint 3.1E-BA: start (confirmação humana), continue (segmento N) ou stop. */
+export type NextBatchRequest =
+  | { kind: "start" }
+  | { kind: "continue"; batchOperationId: string; segment: number }
+  | { kind: "stop"; batchOperationId: string }
+
+const OP_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function readNextBatchRequest(
+  body: unknown
+): { ok: true; request: NextBatchRequest } | { ok: false; message: string } {
+  const r = body && typeof body === "object" ? (body as Record<string, unknown>) : {}
+  if ("runId" in r) return { ok: false, message: "runId não é aceito. O servidor escolhe a execução." }
+  if (r.batchOperationId === undefined) {
+    const base = readNextBatchBody(body)
+    return base.ok ? { ok: true, request: { kind: "start" } } : base
+  }
+  if (typeof r.batchOperationId !== "string" || !OP_ID.test(r.batchOperationId)) {
+    return { ok: false, message: "batchOperationId inválido." }
+  }
+  if (r.stop === true) return { ok: true, request: { kind: "stop", batchOperationId: r.batchOperationId } }
+  const seg = r.segment
+  if (typeof seg !== "number" || !Number.isInteger(seg) || seg < 2) {
+    return { ok: false, message: "Segmento de continuação inválido." }
+  }
+  return { ok: true, request: { kind: "continue", batchOperationId: r.batchOperationId, segment: seg } }
 }

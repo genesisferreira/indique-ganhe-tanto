@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
 import { authorizeOperationalRequest } from "@/lib/collections/actor"
 import { jsonError } from "@/lib/collections/http"
-import { readNextBatchBody } from "@/lib/collections/next-batch"
-import { loadNextBatchSummary, runNextBatch } from "@/lib/collections/next-batch.service"
+import { readNextBatchRequest } from "@/lib/collections/next-batch"
+import { loadNextBatchSummary, runNextBatchOperation } from "@/lib/collections/next-batch.service"
 import { COLLECTION_SECTOR_CODE } from "@/types/collections"
 
 export const runtime = "nodejs"
@@ -39,8 +39,9 @@ export async function POST(request: Request) {
   const auth = await authorize()
   if (!auth.ok) return auth.res
   const body = await request.json().catch(() => null)
-  const parsed = readNextBatchBody(body)
+  const parsed = readNextBatchRequest(body)
   if (!parsed.ok) return jsonError(400, parsed.message)
-  const result = await runNextBatch({ actorProfileId: auth.profileId })
+  // Sprint 3.1E-BA: cada POST executa no máximo UM segmento.
+  const result = await runNextBatchOperation({ actorProfileId: auth.profileId, request: parsed.request })
   return NextResponse.json(result.body, { status: result.status })
 }

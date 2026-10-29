@@ -106,3 +106,31 @@ export function nextBatchToast(body: Record<string, unknown> | null): string {
   const cap = body.capacityReached === true ? " Capacidade atingida." : ""
   return `Próxima leva: ${n} novo(s) contrato(s), ${att} fatura(s) vinculada(s)/atualizada(s).${cap}`
 }
+
+/** Sprint 3.1E-BA: progresso da operação (sem IDs, sem PII). */
+export type NextBatchProgressView = {
+  segment: number
+  maxSegments: number
+  scannedInvoices: number
+  newContracts: number
+  existingContractInvoices: number
+  remainingSlots: number | null
+  stopReasonLabel: string | null
+  running: boolean
+}
+
+export function readNextBatchProgress(body: Record<string, unknown> | null, running: boolean): NextBatchProgressView | null {
+  if (!body || typeof body.segment !== "number") return null
+  const totals = (body.totals ?? {}) as Record<string, unknown>
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
+  return {
+    segment: n(body.segment),
+    maxSegments: n(body.maxSegments),
+    scannedInvoices: n(totals.scannedInvoices),
+    newContracts: n(totals.newContracts),
+    existingContractInvoices: n(totals.existingContractInvoices),
+    remainingSlots: typeof body.remainingSlots === "number" ? body.remainingSlots : null,
+    stopReasonLabel: typeof body.stopReasonLabel === "string" ? body.stopReasonLabel : null,
+    running,
+  }
+}
