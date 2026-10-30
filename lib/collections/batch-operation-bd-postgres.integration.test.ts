@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { after, before, describe, it } from "node:test"
 import { dirname, join } from "node:path"
@@ -235,9 +236,9 @@ describe("PostgreSQL real - 3.1E-BD grants + métricas por segmento", { timeout:
       },
       maxSegmentsEnv: "5",
     }
-    const r1 = await executeNextBatchRequest(deps, { actorProfileId: "00000000-0000-4000-8000-000000000009", request: { kind: "start" } })
+    const r1 = await executeNextBatchRequest(deps, { actorProfileId: "00000000-0000-4000-8000-000000000009", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(r1.body.continue, true)
-    const r2 = await executeNextBatchRequest(deps, { actorProfileId: "00000000-0000-4000-8000-000000000009", request: { kind: "continue", batchOperationId: String(r1.body.batchOperationId), segment: Number(r1.body.nextSegment) } })
+    const r2 = await executeNextBatchRequest(deps, { actorProfileId: "00000000-0000-4000-8000-000000000009", request: { kind: "continue", batchOperationId: String(r1.body.batchOperationId), segment: Number(r1.body.nextSegment), clientOperationNonce: randomUUID() } })
     assert.equal(r2.body.continue, false)
     assert.equal(n, 2)
     const rows = (await owner.query("select segment_ordinal o, outcome, stop_reason, capacity_before b, capacity_after a, new_contracts nc, invoices_attached ia, detail_lookups dl, detail_skipped_by_list ds from public.collection_batch_operation_segments order by 1")).rows

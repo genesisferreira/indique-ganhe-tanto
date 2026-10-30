@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs"
 import { after, before, describe, it } from "node:test"
 import { dirname, join } from "node:path"
@@ -283,28 +284,28 @@ describe("PostgreSQL real - 3.1E-BB operação durável", { timeout: 300_000 }, 
     let release: () => void = () => undefined
     const gate = new Promise<void>((r) => (release = r))
     const calls = { n: 0 }
-    const tabA = executeNextBatchRequest(flowDeps(pgStore(A), { calls, run: async () => { await gate; return okSeg } }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start" } })
+    const tabA = executeNextBatchRequest(flowDeps(pgStore(A), { calls, run: async () => { await gate; return okSeg } }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start", clientOperationNonce: randomUUID() } })
     await new Promise((r) => setTimeout(r, 50))
-    const tabB = await executeNextBatchRequest(flowDeps(pgStore(B), { calls }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start" } })
+    const tabB = await executeNextBatchRequest(flowDeps(pgStore(B), { calls }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(tabB.body.code, "operation_active")
     release()
     const r1 = await tabA
     assert.equal(r1.body.operationStatus, "awaiting_next")
     const id = String(r1.body.batchOperationId)
     // instância B continua com nextSegment do servidor; capacidade enche => zero ERP
-    const r2 = await executeNextBatchRequest(flowDeps(pgStore(B), { calls, available: () => 0 }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "continue", batchOperationId: id, segment: Number(r1.body.nextSegment) } })
+    const r2 = await executeNextBatchRequest(flowDeps(pgStore(B), { calls, available: () => 0 }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "continue", batchOperationId: id, segment: Number(r1.body.nextSegment), clientOperationNonce: randomUUID() } })
     assert.equal(r2.body.operationStatus, "capacity_reached")
     assert.equal(calls.n, 1)
     // lease ativa (busy): segmento não chama ERP
-    const r3 = await executeNextBatchRequest(flowDeps(pgStore(A), { calls, busy: () => true }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start" } })
+    const r3 = await executeNextBatchRequest(flowDeps(pgStore(A), { calls, busy: () => true }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(r3.status, 409)
     assert.equal(calls.n, 1)
     // erro: failed, sem retry
-    const r4 = await executeNextBatchRequest(flowDeps(pgStore(B), { calls, run: async () => { throw new Error("boom") } }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start" } })
+    const r4 = await executeNextBatchRequest(flowDeps(pgStore(B), { calls, run: async () => { throw new Error("boom") } }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(r4.body.operationStatus, "failed")
     assert.equal(calls.n, 2)
     // env 100 => teto 10 no banco
-    const r5 = await executeNextBatchRequest(flowDeps(pgStore(A), { env: "100" }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start" } })
+    const r5 = await executeNextBatchRequest(flowDeps(pgStore(A), { env: "100" }), { actorProfileId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(r5.body.maxSegments, 10)
     assert.equal(await opsSnapshot(), snap, "controle da operação não cria/altera casos/eventos/faturas/assignments/run")
   })

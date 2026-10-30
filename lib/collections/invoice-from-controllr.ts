@@ -5,6 +5,26 @@ import type { CollectionSyncInvoice } from "@/lib/collections/sync-decision"
 import { sanitizeCustomerDocument, sanitizeCustomerName } from "@/lib/collections/sanitize"
 import { coalesceControllrStatus } from "@/lib/operational/cancelled"
 import type { BrbyteInvoiceListRow } from "@/types/brbyte"
+import {
+  FINANCIAL_PROOF_REASONS,
+  emptyFinancialProofHistogram,
+  incrementFinancialProofReason,
+  isFinancialProofReason,
+  sanitizeFinancialProofHistogram,
+  sumFinancialProofHistogram,
+  type FinancialProofReason,
+  type FinancialProofReasonHistogram,
+} from "@/lib/collections/financial-proof"
+
+export {
+  FINANCIAL_PROOF_REASONS,
+  emptyFinancialProofHistogram,
+  incrementFinancialProofReason,
+  isFinancialProofReason,
+  sanitizeFinancialProofHistogram,
+  sumFinancialProofHistogram,
+}
+export type { FinancialProofReason, FinancialProofReasonHistogram }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -149,37 +169,70 @@ export function shouldInspectCollectionInvoice(input: {
 }
 
 /**
- * Sprint 3.1E-BA — a listagem (invoice/list) já comprova os campos financeiros?
- * true só quando TODOS estão explícitos na linha: vencimento, contract_pk,
- * contract_status, invoice_deleted=false, invoice_date_credit presente e vazio,
- * valor do documento e valor pago numéricos com pago < documento (aberto ou
- * parcial) e invoice_msg diferente de "paid". Qualquer ausência, conflito ou
- * indício de pagamento total => false (invoice_info continua necessário para
- * evidência positiva/conflito). Ausência NUNCA vira pagamento.
+ * Sprint 3.1E-BF/BG — razão primária, sanitizada e determinística de a
+ * listagem (invoice/list) comprovar ou não os campos financeiros.
+ * Allowlist fechada; uma única razão por linha, em ordem fixa. Sem valores,
+ * sem identificadores, sem texto livre. `unknown_requirement` é fail-closed
+ * (exige invoice_info). Regras IDÊNTICAS à 3.1E-BA: nenhuma prova relaxada.
  */
-export function collectionListRowFinancialProven(row: BrbyteInvoiceListRow): boolean {
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+function validIsoDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false
+  const d = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value
+}
+
+export function collectionListRowFinancialProof(row: BrbyteInvoiceListRow): {
+  proven: boolean
+  reason: FinancialProofReason
+} {
+  const no = (reason: FinancialProofReason) => ({ proven: false, reason })
   const raw = asRecord(row.raw)
-  if (!raw) return false
-  if (!row.invoicePk?.trim() || row.invoiceDeleted) return false
-  if (classifyInvoiceDeletedFlag(raw).kind !== "not_deleted") return false
-  if (!row.invoiceDueDate) return false
+  if (!raw || !row.invoicePk?.trim()) return no("unknown_requirement")
+  // 1. vencimento
+  if (!row.invoiceDueDate) return no("missing_due_date")
+  if (!validIsoDate(String(row.invoiceDueDate).slice(0, 10))) return no("invalid_due_date")
+  // 2. contrato
   const contractPk = row.contractPk ?? firstText(raw, ["contract_pk", "contractPk"])
-  if (!contractPk || !/^[1-9]\d*$/.test(contractPk.trim())) return false
-  if (coalesceControllrStatus(raw, ["contract_status", "contractStatus"]) == null) return false
+  if (!contractPk || !/^[1-9]\d*$/.test(contractPk.trim())) return no("missing_contract_pk")
+  if (coalesceControllrStatus(raw, ["contract_status", "contractStatus"]) == null) {
+    return no("invalid_contract_status")
+  }
+  // 3. invoice_deleted literal false
+  if (row.invoiceDeleted) return no("invalid_invoice_deleted")
+  const deleted = classifyInvoiceDeletedFlag(raw).kind
+  if (deleted === "absent") return no("missing_invoice_deleted")
+  if (deleted !== "not_deleted") return no("invalid_invoice_deleted")
+  // 4. crédito presente e vazio
   const creditKeys = ["invoice_date_credit", "invoiceDateCredit"].filter((k) =>
     Object.prototype.hasOwnProperty.call(raw, k)
   )
-  if (creditKeys.length === 0) return false
-  if (creditKeys.some((k) => readText(raw[k]) != null)) return false
-  const msg = firstText(raw, ["invoice_msg", "invoiceMsg"])
-  if (msg && msg.toLowerCase() === "paid") return false
+  if (creditKeys.length === 0) return no("missing_credit_field")
+  if (creditKeys.some((k) => readText(raw[k]) != null)) return no("nonempty_credit")
+  // 5. valores
   const monetary = extractInvoiceMonetaryFields(raw)
   const doc = monetary.invoiceAmountDocument
   const paid = monetary.invoiceAmountPaid
-  if (typeof doc !== "number" || !Number.isFinite(doc) || doc <= 0) return false
-  if (typeof paid !== "number" || !Number.isFinite(paid) || paid < 0) return false
-  if (paid >= doc) return false
-  return true
+  if (doc == null) return no("missing_document_amount")
+  if (typeof doc !== "number" || !Number.isFinite(doc) || doc <= 0) return no("invalid_document_amount")
+  if (paid == null) return no("missing_paid_amount")
+  if (typeof paid !== "number" || !Number.isFinite(paid) || paid < 0) return no("invalid_paid_amount")
+  if (paid >= doc) return no("paid_greater_or_equal_document")
+  // 6. mensagem (ausência não é pagamento; "paid" exige detalhe)
+  const msg = firstText(raw, ["invoice_msg", "invoiceMsg"])
+  if (msg && msg.toLowerCase() === "paid") return no("paid_message")
+  // 7. indício explícito de pagamento conflitante => detalhe (conservador)
+  for (const key of ["is_paid", "isPaid"]) {
+    const v = raw[key]
+    if (v === true || v === 1 || v === "1" || v === "true") return no("conflicting_payment_evidence")
+  }
+  return { proven: true, reason: "proven" }
+}
+
+/** Compat 3.1E-BA: booleano derivado da razão primária. */
+export function collectionListRowFinancialProven(row: BrbyteInvoiceListRow): boolean {
+  return collectionListRowFinancialProof(row).proven
 }
 
 export type InvoiceDetailLookupDecision = "fetch" | "skip_list_sufficient" | "skip_not_needed"

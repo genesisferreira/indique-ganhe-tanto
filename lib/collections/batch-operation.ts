@@ -12,6 +12,11 @@
  * instância; o registro em Map da BA foi removido.
  */
 
+import {
+  sanitizeFinancialProofHistogram,
+  type FinancialProofReasonHistogram,
+} from "@/lib/collections/financial-proof"
+
 export const NEXT_BATCH_MAX_SEGMENTS_DEFAULT = 5
 export const NEXT_BATCH_MAX_SEGMENTS_HARD_CAP = 10
 export const NEXT_BATCH_OPERATION_TTL_MS = 10 * 60_000
@@ -53,9 +58,16 @@ export function decideSegmentStop(input: {
   availableAfter: number | null
 }): BatchStopReason | null {
   const stage = input.pauseStage ?? ""
-  if (stage.startsWith("list_timeout") || stage === "pre_list_budget" || stage === "post_list_no_reserve") {
+  if (
+    stage.startsWith("list_timeout") ||
+    stage === "pre_list_budget" ||
+    stage === "post_list_no_reserve" ||
+    stage === "detail_timeout"
+  ) {
     return "timeout"
   }
+  // 3.1E-BG: detalhe indisponível encerra a operação (sem retry).
+  if (stage === "detail_error") return "error"
   if (!input.ok || input.discoveryStatus === "failed" || input.discoveryStatus === "busy") return "error"
   if (
     input.discoveryStatus === "pagination_ended" ||
@@ -132,6 +144,17 @@ export type DurableBatchOperation = {
   segments: DurableSegmentSummary[]
 }
 
+/** 3.1E-BG: origem controlada pelo servidor; nunca lida do body. */
+export const BATCH_INITIATION_SOURCE_ADMIN_CONFIRM = "admin_master_confirm" as const
+export type BatchInitiationSource = typeof BATCH_INITIATION_SOURCE_ADMIN_CONFIRM
+
+export const CLIENT_OPERATION_NONCE_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+export function isClientOperationNonce(v: unknown): v is string {
+  return typeof v === "string" && CLIENT_OPERATION_NONCE_RE.test(v)
+}
+
 export type DurableOpResult = {
   ok: boolean
   code: string
@@ -148,8 +171,17 @@ export interface BatchOperationStore {
     available: number | null
     queueEnabled: boolean
     createdBy: string | null
+    /**
+     * 3.1E-BG: UUID gerado uma vez por confirmação; unique(setor, nonce).
+     * Opcional só no tipo (stores BB/BD legados de teste); o fluxo SEMPRE envia
+     * e a RPC de produção recusa ausência (invalid_input).
+     */
+    clientOperationNonce?: string
+    /** 3.1E-BG: definido SOMENTE pelo servidor. */
+    initiationSource?: BatchInitiationSource
   }): Promise<DurableOpResult>
-  claim(operationId: string, segment: number): Promise<DurableOpResult>
+  /** 3.1E-BG: o nonce deve coincidir com o da operação (RPC: nonce_mismatch). */
+  claim(operationId: string, segment: number, clientOperationNonce?: string): Promise<DurableOpResult>
   complete(input: {
     operationId: string
     segment: number
@@ -265,12 +297,19 @@ export const SEGMENT_METRIC_NUMBER_KEYS = [
   "detailSkippedByList", "detailMs", "persistMs", "checkpointMs", "releaseMs",
   "rowsScanned", "confirmedPrefixRows", "newContracts", "existingContractInvoices",
   "invoicesAttached", "skippedTotal", "capacityBefore", "capacityAfter",
+  // 3.1E-BG: métricas não sobrepostas (ver DiscoveryStageTimings).
+  "detailWallMs", "detailRequestSumMs", "detailMaxConcurrency", "persistExclusiveMs",
 ] as const
 
 export type SegmentMetrics = {
   startedAt: string | null
   cursorAdvanced: boolean
+  /** 3.1E-BG: histograma agregado (allowlist fechada); null se ausente/inválido. */
+  financialProofReasons: FinancialProofReasonHistogram | null
 } & { [K in (typeof SEGMENT_METRIC_NUMBER_KEYS)[number]]: number | null }
+
+/** Espelha COLLECTION_DETAIL_CONCURRENCY_MAX (teto absoluto 2). */
+const DETAIL_CONCURRENCY_METRIC_CAP = 2
 
 const metricInt = (v: unknown, cap: number): number | null =>
   typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(cap, Math.floor(v))) : null
@@ -291,6 +330,7 @@ export function buildSegmentMetrics(input: {
   skippedThisBatch: number | null | undefined
   capacityBefore: number | null | undefined
   capacityAfter: number | null | undefined
+  financialProofReasons?: unknown
 }): SegmentMetrics {
   const t = (input.stageTimings ?? {}) as Record<string, unknown>
   const MS = 3_600_000
@@ -325,5 +365,10 @@ export function buildSegmentMetrics(input: {
     cursorAdvanced: scanned > 0,
     capacityBefore: metricInt(input.capacityBefore, 15),
     capacityAfter: metricInt(input.capacityAfter, 15),
+    detailWallMs: metricInt(t.detailWallMs, MS),
+    detailRequestSumMs: metricInt(t.detailRequestSumMs, MS),
+    detailMaxConcurrency: metricInt(t.detailMaxConcurrency, DETAIL_CONCURRENCY_METRIC_CAP),
+    persistExclusiveMs: metricInt(t.persistExclusiveMs, MS),
+    financialProofReasons: sanitizeFinancialProofHistogram(input.financialProofReasons),
   }
 }

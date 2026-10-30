@@ -12,6 +12,7 @@
  * - a lease/fencing da discovery run continua sendo a segunda barreira.
  */
 import {
+  BATCH_INITIATION_SOURCE_ADMIN_CONFIRM,
   buildSegmentMetrics,
   decideSegmentStop,
   durableOperationView,
@@ -49,6 +50,8 @@ const MESSAGES: Record<string, string> = {
   disabled: "Fila de Cobrança desligada.",
   store_unavailable: "Controle de operação indisponível (migration 3.1E-BB pendente).",
   invalid_response: "Controle de operação com resposta inválida.",
+  operation_replay: "Confirmação já registrada; nenhuma operação nova foi criada.",
+  nonce_mismatch: "Esta operação pertence a outra confirmação. Confirme novamente.",
 }
 
 function refusal(r: DurableOpResult, status = 409) {
@@ -79,6 +82,7 @@ export async function executeNextBatchRequest(
 
   let operationId: string
   let segment: number
+  const nonce = req.clientOperationNonce
   if (req.kind === "start") {
     // Revalida fila + capacidade ANTES de criar (sem ERP).
     const enabled = await deps.loadQueueEnabled()
@@ -89,8 +93,25 @@ export async function executeNextBatchRequest(
       configuredCapacity: pre.summary.configuredCapacity,
       available: pre.summary.available,
       queueEnabled: enabled,
+      // Ator vem SEMPRE da sessão Admin Master (rota); nunca do body.
       createdBy: input.actorProfileId,
+      clientOperationNonce: nonce,
+      initiationSource: BATCH_INITIATION_SOURCE_ADMIN_CONFIRM,
     })
+    // 3.1E-BG: mesma confirmação reenviada (duplo clique/replay) => devolve a
+    // operação existente SEM claim e SEM novo segmento.
+    if (created.ok && created.replay && created.operation) {
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          code: "operation_replay",
+          message: MESSAGES.operation_replay,
+          ...durableOperationView(created.operation, null),
+          continue: false,
+        },
+      }
+    }
     if (!created.ok || !created.operation) {
       if (created.code === "capacity_full") {
         return { status: 200, body: { ok: false, code: "capacity_full", message: MESSAGES.capacity_full, summary: pre.summary } }
@@ -104,7 +125,7 @@ export async function executeNextBatchRequest(
     segment = req.segment
   }
 
-  const claimed = await deps.store.claim(operationId, segment)
+  const claimed = await deps.store.claim(operationId, segment, nonce)
   if (!claimed.ok || typeof claimed.segment !== "number") {
     return refusal(claimed, claimed.code === "store_unavailable" ? 503 : 409)
   }
@@ -197,6 +218,7 @@ export async function executeNextBatchRequest(
       skippedThisBatch: sanitized?.skippedThisBatch ?? 0,
       capacityBefore: loaded.summary.activeContracts,
       capacityAfter: after && after.ok ? after.summary.activeContracts : null,
+      financialProofReasons: sanitized?.financialProofReasons ?? null,
     }),
   })
   const view = durableOperationView(done.operation, availableAfter)

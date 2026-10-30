@@ -15,6 +15,8 @@ export async function fetchInvoiceInfo(input: {
   config: BrbyteCreateInterestConfig
   cookie: string
   invoicePk: string
+  /** 3.1E-BG: deixa de aguardar no fim do segmento (não cancela o ERP remoto). */
+  signal?: AbortSignal
 }): Promise<{
   ok: boolean
   info: BrbyteInvoiceInfo | null
@@ -46,12 +48,15 @@ export async function fetchInvoiceInfo(input: {
   for (const fields of lookupForms) {
     const remainingMs = budgetMs - (Date.now() - startedAtMs)
     if (remainingMs < 1) break
+    if (input.signal?.aborted) {
+      return { ok: false, info: null, payload: null, httpStatus: null, abortClass: "external_abort" }
+    }
     const result = await brbyteAdminPostForm(
       input.config,
       input.cookie,
       BRBYTE_API_PATHS.invoiceListInfo,
       fields,
-      { maxAttempts: 1, timeoutMs: remainingMs }
+      { maxAttempts: 1, timeoutMs: remainingMs, signal: input.signal }
     )
 
     if (!result.ok) {

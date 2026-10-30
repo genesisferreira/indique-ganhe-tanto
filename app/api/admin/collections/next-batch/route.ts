@@ -11,7 +11,7 @@ import { COLLECTION_SECTOR_CODE } from "@/types/collections"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
-export const maxDuration = 120
+export const maxDuration = 240
 
 /**
  * Sprint 3.1E-AU — "Carregar próxima leva" (Admin Master).

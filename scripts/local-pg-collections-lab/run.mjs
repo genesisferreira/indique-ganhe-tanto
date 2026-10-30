@@ -108,6 +108,7 @@ export async function startCollectionsLab(options = {}) {
     "supabase/patch-collection-au-contract-batch.sql",
     "supabase/patch-collection-bb-durable-batch-operation.sql",
     "supabase/patch-collection-bd-segment-metrics-and-grants.sql",
+    "supabase/patch-collection-bg-throughput-safeguard-and-run-recovery.sql",
   ]
   // 3.1E-AW: options.stopAfter permite testar a cadeia AR -> AW -> consolidação -> AU.
   const stopIdx = options.stopAfter ? files.indexOf(options.stopAfter) : -1

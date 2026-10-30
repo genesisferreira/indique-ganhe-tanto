@@ -82,7 +82,4 @@ export async function runNextBatchOperation(input: {
   return executeNextBatchRequest(productionDeps(), input)
 }
 
-/** Compat (3.1E-AU): um clique = operação nova, primeiro segmento. */
-export async function runNextBatch(input: { actorProfileId: string }) {
-  return runNextBatchOperation({ actorProfileId: input.actorProfileId, request: { kind: "start" } })
-}
+// 3.1E-BG: removido o atalho runNextBatch (criava operação sem nonce).

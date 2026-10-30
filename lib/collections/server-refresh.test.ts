@@ -207,7 +207,7 @@ describe("3.1E-BD métricas por segmento (sanitização)", () => {
       capacityBefore: 2, capacityAfter: 3,
     })
     const keys = Object.keys(m).sort()
-    assert.deepEqual(keys, [...SEGMENT_METRIC_NUMBER_KEYS, "startedAt", "cursorAdvanced"].sort())
+    assert.deepEqual(keys, [...SEGMENT_METRIC_NUMBER_KEYS, "startedAt", "cursorAdvanced", "financialProofReasons"].sort())
     assert.equal(m.totalMs, 102765)
     assert.equal(m.listMs, 0)
     assert.equal(m.persistMs, null)

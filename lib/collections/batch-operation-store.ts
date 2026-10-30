@@ -32,20 +32,24 @@ async function call(fn: string, args: Record<string, unknown>): Promise<DurableO
 export function createRpcBatchOperationStore(): BatchOperationStore {
   return {
     create: (input) =>
-      call("create_collection_batch_operation", {
+      // 3.1E-BG: nonce idempotente por setor + origem controlada pelo servidor.
+      call("create_collection_batch_operation_with_nonce", {
         p_sector: COLLECTION_SECTOR_CODE,
         p_max_segments: input.maxSegments,
         p_configured_capacity: input.configuredCapacity,
         p_available: input.available,
         p_queue_enabled: input.queueEnabled,
         p_created_by: input.createdBy,
+        p_client_operation_nonce: input.clientOperationNonce,
+        p_initiation_source: input.initiationSource,
         p_ttl_seconds: BATCH_OPERATION_TTL_SECONDS,
         p_now: null,
       }),
-    claim: (operationId, segment) =>
-      call("claim_collection_batch_segment", {
+    claim: (operationId, segment, clientOperationNonce) =>
+      call("claim_collection_batch_segment_with_nonce", {
         p_operation_id: operationId,
         p_segment: segment,
+        p_client_operation_nonce: clientOperationNonce,
         p_ttl_seconds: BATCH_OPERATION_TTL_SECONDS,
         p_now: null,
       }),

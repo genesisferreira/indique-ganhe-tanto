@@ -5,6 +5,7 @@ import {
   COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
   COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS,
   COLLECTION_DISCOVERY_MAX_PAGES_PER_BATCH,
+  COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
   COLLECTION_DISCOVERY_PAGE_SIZE,
   COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS,
   COLLECTION_DISCOVERY_RELEASE_SLACK_MS,
@@ -15,6 +16,7 @@ import {
   collectionDiscoveryShouldStopForTime,
   formatDiscoveryPauseClass,
   readConsecutiveNoProgress,
+  resolveDetailConcurrency,
   sanitizeDiscoveryErrorClass,
   type CollectionDiscoveryCounters,
   type CollectionDiscoveryPhase,
@@ -76,11 +78,19 @@ export type DiscoveryRunnerDeps<TRow extends { invoicePk: string | null } = { in
     timeoutMs: number
   }) => Promise<DiscoveryFetchedPage<TRow>>
   toInvoice: (row: TRow) => CollectionSyncInvoice | null
+  /**
+   * 3.1E-BG: pode devolver a fatura (compat) ou um PrepareOutcome explícito.
+   * ctx.signal é abortado no fim da página/segmento; ctx.timeoutMs é o teto
+   * desta chamada (sem retry).
+   */
   prepareInvoice?: (
     invoice: CollectionSyncInvoice,
     existing: ExistingCollectionCase | null,
-    frozenNow: Date
-  ) => Promise<CollectionSyncInvoice>
+    frozenNow: Date,
+    ctx?: { signal: AbortSignal; timeoutMs: number }
+  ) => Promise<CollectionSyncInvoice | PrepareOutcome>
+  /** 3.1E-BG: janela de detalhes; clamp [1, 2]. Nunca vem do body HTTP. */
+  detailConcurrency?: number
   fetchInvoiceDetail?: (input: {
     invoicePk: string
     timeoutMs: number
@@ -134,6 +144,31 @@ export type DiscoveryBatchResult = {
   /** Sprint 3.1E-AU: contratos novos admitidos neste lote (agregado). */
   contractsAdmitted?: number
   capacityReached?: boolean
+  /** 3.1E-BG */
+  pipelineMetrics?: DiscoveryPipelineMetrics
+}
+
+export type PrepareOutcome =
+  | { ok: true; invoice: CollectionSyncInvoice }
+  | { ok: false; failure: "timeout" | "error" | "thrown" }
+
+function normalizePrepareResult(raw: CollectionSyncInvoice | PrepareOutcome): PrepareOutcome {
+  if (raw && typeof raw === "object" && "ok" in raw && typeof (raw as PrepareOutcome).ok === "boolean") {
+    const r = raw as PrepareOutcome
+    if (r.ok) return r.invoice ? r : { ok: false, failure: "error" }
+    return { ok: false, failure: r.failure === "timeout" ? "timeout" : r.failure === "thrown" ? "thrown" : "error" }
+  }
+  return { ok: true, invoice: raw as CollectionSyncInvoice }
+}
+
+/** 3.1E-BG: métricas do pipeline (exclusivas, sem sobreposição de código). */
+export type DiscoveryPipelineMetrics = {
+  /** Tempo em que o laço ficou BLOQUEADO aguardando detalhes (wall, exclusivo). */
+  detailWaitMs: number
+  /** Tempo dentro de leituras/escritas de persistência (exclusivo). */
+  persistExclusiveMs: number
+  /** Maior número de preparações simultâneas observado (≤ 2). */
+  detailMaxConcurrency: number
 }
 
 const LIST_WAIT_TIMEOUT = Symbol("list-wait-timeout")
@@ -214,6 +249,15 @@ function resultFromRun(
 export async function runOverdueDiscoveryBatch<
   TRow extends { invoicePk: string | null } = { invoicePk: string | null },
 >(input: DiscoveryRunnerDeps<TRow>): Promise<DiscoveryBatchResult> {
+  const pipe: DiscoveryPipelineMetrics = { detailWaitMs: 0, persistExclusiveMs: 0, detailMaxConcurrency: 0 }
+  const result = await runOverdueDiscoveryBatchInner(input, pipe)
+  return { ...result, pipelineMetrics: { ...pipe } }
+}
+
+async function runOverdueDiscoveryBatchInner<
+  TRow extends { invoicePk: string | null } = { invoicePk: string | null },
+>(input: DiscoveryRunnerDeps<TRow>, pipe: DiscoveryPipelineMetrics): Promise<DiscoveryBatchResult> {
+  const detailConcurrency = resolveDetailConcurrency(input.detailConcurrency)
   const clock = input.clock ?? Date.now
   const startedAtMs = input.startedAtMs ?? clock()
   const budgetMs = input.budgetMs ?? COLLECTION_DISCOVERY_TIME_BUDGET_MS
@@ -785,113 +829,205 @@ export async function runOverdueDiscoveryBatch<
     // foi confirmado. Nunca pula fatura; erro técnico não vira skip.
     let confirmedPrefixPk: string | null = null
     let confirmedPrefixRows = 0
-    let stopReason: "budget" | "capacity_reached" | "persist_error" | null = null
+    let stopReason:
+      | "budget"
+      | "capacity_reached"
+      | "persist_error"
+      | "detail_timeout"
+      | "detail_error"
+      | null = null
     const persistStarted = clock()
-    for (const row of fetched.rows) {
-      const remainingForPersist = collectionDiscoveryRemainingBudgetMs({
-        startedAtMs,
-        nowMs: clock(),
-        budgetMs,
-      })
-      if (remainingForPersist < COLLECTION_DISCOVERY_RELEASE_SLACK_MS) {
-        processedAll = false
-        stopReason = "budget"
-        break
-      }
-      const invoice = input.toInvoice(row)
+    // Sprint 3.1E-BG: preparação (invoice_info) em janela de no máximo
+    // `detailConcurrency` (teto absoluto 2). Persistência continua estritamente
+    // sequencial na ordem invoice_pk ASC: a resposta posterior aguarda a
+    // anterior; falha/timeout anterior impede persistir a posterior. Sem retry.
+    // AbortSignal só deixa de aguardar; não prova cancelamento no ERP.
+    const pageAbort = new AbortController()
+    const rows = fetched.rows
+    type Mapped = { invoice: CollectionSyncInvoice | null; pk: string | null }
+    const mapped: Array<Mapped | undefined> = new Array(rows.length)
+    const preps: Array<Promise<PrepareOutcome> | undefined> = new Array(rows.length)
+    let inFlight = 0
+    const mapRow = (i: number): Mapped => {
+      const cached = mapped[i]
+      if (cached) return cached
+      const invoice = input.toInvoice(rows[i])
       const pk = invoice ? parseOverdueInvoicePk(invoice.invoicePk) : null
-      if (!invoice || !pk) {
-        incrementDiscoverySkip(skipReasons, classifyUnmappedDiscoveryRow(row))
-        counters.skippedCount += 1
-        confirmedPrefixPk = row.invoicePk ?? confirmedPrefixPk
-        confirmedPrefixRows += 1
-        continue
-      }
-      const existing = await input.repo.findByInvoicePk(pk)
-      // Sprint 3.1E-AU: capacidade por contrato distinto. Só contrato novo
-      // (sem caso ativo) consome vaga. Sem vaga → para ANTES de persistir;
-      // a fatura reaparece na próxima leva (nunca é pulada).
-      if (contractSlots != null && !existing) {
-        const contractKey = parseProvenPk(invoice.contractPk)
-        const wouldCreate =
-          decideDiscoveryPersistAction({
-            invoice,
-            existing: null,
-            now: frozenNow,
-            minimumDaysOverdue: input.minimumDaysOverdue,
-            collectionsEnabled: input.collectionsEnabled,
-          }) === "create"
-        if (wouldCreate && contractKey && !admittedContracts.has(contractKey)) {
-          const active = input.repo.isContractActive
-            ? await input.repo.isContractActive(contractKey)
-            : false
-          if (!active && contractsAdmitted >= contractSlots) {
-            processedAll = false
-            stopReason = "capacity_reached"
-            break
-          }
+      const m = { invoice, pk }
+      mapped[i] = m
+      return m
+    }
+    const startPrep = (i: number): void => {
+      const prepareInvoice = input.prepareInvoice
+      if (!prepareInvoice || preps[i] || pageAbort.signal.aborted) return
+      if (inFlight >= detailConcurrency) return
+      const m = mapRow(i)
+      if (!m.invoice || !m.pk) return
+      const timeoutMs = collectionDiscoveryCappedTimeoutMs({
+        remainingMs: collectionDiscoveryRemainingBudgetMs({ startedAtMs, nowMs: clock(), budgetMs }),
+        configuredTimeoutMs,
+        persistReleaseMarginMs: COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
+      })
+      if (timeoutMs == null) return
+      const invoice = m.invoice
+      const pk = m.pk
+      inFlight += 1
+      pipe.detailMaxConcurrency = Math.max(pipe.detailMaxConcurrency, inFlight)
+      preps[i] = (async (): Promise<PrepareOutcome> => {
+        try {
+          const existingForPrep = await input.repo.findByInvoicePk(pk)
+          const raw = await prepareInvoice(invoice, existingForPrep, frozenNow, {
+            signal: pageAbort.signal,
+            timeoutMs,
+          })
+          return normalizePrepareResult(raw)
+        } catch {
+          return { ok: false, failure: "thrown" }
+        } finally {
+          inFlight -= 1
         }
+      })()
+    }
+    const ensureWindow = (i: number): void => {
+      // Janela [i, i + detailConcurrency): nunca mais de `detailConcurrency` em voo.
+      for (let k = i; k < rows.length && k < i + detailConcurrency; k++) {
+        if (k > i && contractSlots != null && contractsAdmitted >= contractSlots) break
+        startPrep(k)
       }
+    }
+    const timedPersist = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const t = clock()
       try {
-        const hydrateTimeout = collectionDiscoveryCappedTimeoutMs({
-          remainingMs: remainingForPersist,
-          configuredTimeoutMs,
+        return await fn()
+      } finally {
+        pipe.persistExclusiveMs += Math.max(0, clock() - t)
+      }
+    }
+    try {
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]
+        const remainingForPersist = collectionDiscoveryRemainingBudgetMs({
+          startedAtMs,
+          nowMs: clock(),
+          budgetMs,
         })
-        if (input.prepareInvoice && hydrateTimeout == null) {
+        if (remainingForPersist < COLLECTION_DISCOVERY_RELEASE_SLACK_MS) {
           processedAll = false
+          stopReason = "budget"
           break
         }
-        const prepared = input.prepareInvoice
-          ? await input.prepareInvoice(invoice, existing, frozenNow)
-          : invoice
-        const persisted = await persistDiscoveredOverdueInvoice({
-          invoice: prepared,
-          existing,
-          now: frozenNow,
-          minimumDaysOverdue: input.minimumDaysOverdue,
-          collectionsEnabled: input.collectionsEnabled,
-          actorProfileId: input.actorProfileId,
-          repo: input.repo,
-          lease,
-          statementTimeoutMs: Math.max(
-            1,
-            remainingForPersist - COLLECTION_DISCOVERY_RELEASE_SLACK_MS
-          ),
-        })
-        if (persisted.staleLease) {
-          return fail("stale_lease", "Lease perdida. Worker antigo não gravou o restante da página.")
-        }
-        if (persisted.created) counters.createdCount += 1
-        if (persisted.updated) counters.updatedCount += 1
-        if (persisted.skipped) {
-          incrementDiscoverySkip(skipReasons, persisted.skipReason)
+        const { invoice, pk } = mapRow(i)
+        if (!invoice || !pk) {
+          incrementDiscoverySkip(skipReasons, classifyUnmappedDiscoveryRow(row))
           counters.skippedCount += 1
+          confirmedPrefixPk = row.invoicePk ?? confirmedPrefixPk
+          confirmedPrefixRows += 1
+          continue
         }
-        if (persisted.newlyAssigned) counters.assignedCount += 1
-        if (persisted.created && persisted.unassigned) counters.unassignedCount += 1
-        if (persisted.created) {
-          const contractKey = parseProvenPk(prepared.contractPk)
-          if (contractKey && !admittedContracts.has(contractKey)) {
-            admittedContracts.add(contractKey)
-            contractsAdmitted += 1
+        ensureWindow(i)
+        const existing = await timedPersist(() => input.repo.findByInvoicePk(pk))
+        // Sprint 3.1E-AU: capacidade por contrato distinto. Só contrato novo
+        // (sem caso ativo) consome vaga. Sem vaga → para ANTES de persistir;
+        // a fatura reaparece na próxima leva (nunca é pulada).
+        if (contractSlots != null && !existing) {
+          const contractKey = parseProvenPk(invoice.contractPk)
+          const wouldCreate =
+            decideDiscoveryPersistAction({
+              invoice,
+              existing: null,
+              now: frozenNow,
+              minimumDaysOverdue: input.minimumDaysOverdue,
+              collectionsEnabled: input.collectionsEnabled,
+            }) === "create"
+          if (wouldCreate && contractKey && !admittedContracts.has(contractKey)) {
+            const isActive = input.repo.isContractActive
+            const active = isActive ? await timedPersist(() => isActive(contractKey)) : false
+            if (!active && contractsAdmitted >= contractSlots) {
+              processedAll = false
+              stopReason = "capacity_reached"
+              break
+            }
           }
         }
-        if (persisted.technicalError) {
-          // erro técnico não vira skip: interrompe e preserva só o prefixo.
+        let prepared: CollectionSyncInvoice = invoice
+        if (input.prepareInvoice) {
+          const prep = preps[i]
+          if (!prep) {
+            // Orçamento insuficiente para iniciar o detalhe desta posição.
+            processedAll = false
+            stopReason = "budget"
+            break
+          }
+          const waitStarted = clock()
+          const outcome = await prep
+          pipe.detailWaitMs += Math.max(0, clock() - waitStarted)
+          if (!outcome.ok) {
+            processedAll = false
+            if (outcome.failure === "thrown") {
+              counters.errorCount += 1
+              stopReason = "persist_error"
+            } else {
+              stopReason = outcome.failure === "timeout" ? "detail_timeout" : "detail_error"
+            }
+            break
+          }
+          prepared = outcome.invoice
+        }
+        try {
+          const persisted = await timedPersist(() =>
+            persistDiscoveredOverdueInvoice({
+              invoice: prepared,
+              existing,
+              now: frozenNow,
+              minimumDaysOverdue: input.minimumDaysOverdue,
+              collectionsEnabled: input.collectionsEnabled,
+              actorProfileId: input.actorProfileId,
+              repo: input.repo,
+              lease,
+              statementTimeoutMs: Math.max(
+                1,
+                remainingForPersist - COLLECTION_DISCOVERY_RELEASE_SLACK_MS
+              ),
+            })
+          )
+          if (persisted.staleLease) {
+            return fail("stale_lease", "Lease perdida. Worker antigo não gravou o restante da página.")
+          }
+          if (persisted.created) counters.createdCount += 1
+          if (persisted.updated) counters.updatedCount += 1
+          if (persisted.skipped) {
+            incrementDiscoverySkip(skipReasons, persisted.skipReason)
+            counters.skippedCount += 1
+          }
+          if (persisted.newlyAssigned) counters.assignedCount += 1
+          if (persisted.created && persisted.unassigned) counters.unassignedCount += 1
+          if (persisted.created) {
+            const contractKey = parseProvenPk(prepared.contractPk)
+            if (contractKey && !admittedContracts.has(contractKey)) {
+              admittedContracts.add(contractKey)
+              contractsAdmitted += 1
+            }
+          }
+          if (persisted.technicalError) {
+            // erro técnico não vira skip: interrompe e preserva só o prefixo.
+            counters.errorCount += 1
+            processedAll = false
+            stopReason = "persist_error"
+            break
+          }
+          counters.scannedInvoices += 1
+          confirmedPrefixPk = invoice.invoicePk
+          confirmedPrefixRows += 1
+        } catch {
           counters.errorCount += 1
           processedAll = false
           stopReason = "persist_error"
           break
         }
-        counters.scannedInvoices += 1
-        confirmedPrefixPk = invoice.invoicePk
-        confirmedPrefixRows += 1
-      } catch {
-        counters.errorCount += 1
-        processedAll = false
-        stopReason = "persist_error"
-        break
       }
+    } finally {
+      // Fim da página/segmento: deixa de aguardar detalhes ainda em voo.
+      pageAbort.abort()
     }
     const persistenceDurationMs = Math.max(0, clock() - persistStarted)
 
@@ -901,6 +1037,42 @@ export async function runOverdueDiscoveryBatch<
         confirmedPrefixPk,
         confirmedPrefixRows,
       })
+      if (stopReason === "detail_timeout" || stopReason === "detail_error") {
+        const detailStage: DiscoveryPauseStage = stopReason
+        if (prefixAdvance.advance) {
+          const advancedDetail = await input.store.advance({
+            runId: run.id,
+            owner,
+            generation,
+            now: new Date(input.now.getTime() + Math.max(0, clock() - startedAtMs)),
+            cursorLastInvoicePk: prefixAdvance.cursor,
+            counters,
+          })
+          if (!advancedDetail.ok) {
+            return fail("stale_lease", "Lease perdida. Worker antigo não avançou o prefixo confirmado.")
+          }
+          run = advancedDetail.run
+          counters = countersFromRun(run)
+          return pause(
+            "Detalhe da fatura indisponível (sem retry). Cursor avançou só até a última fatura consecutiva confirmada; a fatura pendente reaparece.",
+            {
+              lastErrorClass: formatDiscoveryPauseClass(detailStage, 0),
+              pauseStage: detailStage,
+              progressMade: true,
+              consecutiveNoProgress: 0,
+              remainingBeforeListMs,
+              remainingAfterListMs,
+              listDurationMs,
+              persistenceDurationMs,
+            }
+          )
+        }
+        return pauseNoProgress(
+          detailStage,
+          "Detalhe da fatura indisponível na primeira posição (sem retry). Cursor não avançou.",
+          { remainingBeforeListMs, remainingAfterListMs, listDurationMs, persistenceDurationMs }
+        )
+      }
       if (stopReason === "persist_error") {
         if (prefixAdvance.advance) {
           const advancedBeforeError = await input.store.advance({

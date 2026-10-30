@@ -9,6 +9,7 @@ import {
   gateNextBatch,
   normalizeConfiguredCapacity,
 } from "@/lib/collections/operational-model"
+import { sanitizeFinancialProofHistogram } from "@/lib/collections/financial-proof"
 
 export const CONTRACT_CAPACITY_SOURCE = "contract_capacity" as const
 
@@ -117,6 +118,34 @@ export function nextBatchConfirmMessage(available: number): string {
   return `Carregar até ${available} novos contratos elegíveis?`
 }
 
+/** 3.1E-BG: alerta obrigatório no modal de confirmação. */
+export const NEXT_BATCH_RETRY_WARNING =
+  "Uma nova tentativa sem progresso pode bloquear temporariamente a descoberta e exigir liberação administrativa."
+
+/**
+ * 3.1E-BG: texto do modal com capacidade + estado atual (sem IDs/PII).
+ * Puro: o modal é a ÚNICA porta para criar operação (clique humano).
+ */
+export function nextBatchConfirmDetails(input: {
+  summary: Pick<NextBatchSummary, "availableCapacity" | "activeContracts" | "configuredCapacity" | "runStatus" | "runPauseStage">
+  lastOperationStatus?: string | null
+  lastStopReasonLabel?: string | null
+}): string {
+  const s = input.summary
+  const lines = [
+    nextBatchConfirmMessage(s.availableCapacity),
+    `Capacidade: ${s.activeContracts}/${s.configuredCapacity} contratos ativos (${s.availableCapacity} vagas).`,
+    `Descoberta: ${s.runStatus ?? "sem execução"}${s.runPauseStage ? ` (${s.runPauseStage})` : ""}.`,
+  ]
+  if (input.lastOperationStatus) {
+    lines.push(
+      `Última operação: ${input.lastOperationStatus}${input.lastStopReasonLabel ? ` — ${input.lastStopReasonLabel}` : ""}`
+    )
+  }
+  lines.push(NEXT_BATCH_RETRY_WARNING)
+  return lines.join("\n")
+}
+
 export type NextBatchDecision =
   | { proceed: true; slots: number }
   | { proceed: false; code: "capacity_full" | "busy" | "disabled" | "in_flight"; message: string }
@@ -172,6 +201,7 @@ export function sanitizeNextBatchResult(r: {
   segmentCreated?: number
   segmentUpdated?: number
   stageTimings?: Record<string, number | null> | null
+  financialProofReasons?: unknown
 }) {
   return {
     ok: r.ok,
@@ -194,6 +224,7 @@ export function sanitizeNextBatchResult(r: {
     segmentCreated: r.segmentCreated ?? 0,
     segmentUpdated: r.segmentUpdated ?? 0,
     stageTimings: sanitizeStageTimings(r.stageTimings),
+    financialProofReasons: sanitizeFinancialProofHistogram(r.financialProofReasons),
   }
 }
 
@@ -204,6 +235,7 @@ export function sanitizeStageTimings(raw: unknown): Record<string, number | null
   for (const key of [
     "loginMs", "listMs", "listRequests", "classificationMs", "detailLookups", "detailSkippedByList",
     "detailMs", "persistMs", "checkpointMs", "checkpoints", "releaseMs", "totalMs",
+    "detailWallMs", "detailRequestSumMs", "detailMaxConcurrency", "persistExclusiveMs",
   ]) {
     const v = (raw as Record<string, unknown>)[key]
     out[key] = typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : null
@@ -211,13 +243,23 @@ export function sanitizeStageTimings(raw: unknown): Record<string, number | null
   return out
 }
 
-/** Sprint 3.1E-BA: start (confirmação humana), continue (segmento N) ou stop. */
+/**
+ * Sprint 3.1E-BA/BG: start (confirmação humana), continue (segmento N) ou stop.
+ * 3.1E-BG: clientOperationNonce (UUID gerado UMA vez por confirmação) é
+ * obrigatório em start e continue. Ator e origem nunca vêm do body.
+ */
 export type NextBatchRequest =
-  | { kind: "start" }
-  | { kind: "continue"; batchOperationId: string; segment: number }
-  | { kind: "stop"; batchOperationId: string }
+  | { kind: "start"; clientOperationNonce: string }
+  | { kind: "continue"; batchOperationId: string; segment: number; clientOperationNonce: string }
+  | { kind: "stop"; batchOperationId: string; clientOperationNonce?: undefined }
 
 const OP_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const NONCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const FORBIDDEN_BODY_KEYS = [
+  "runId", "maxSegments", "max_segments", "nextSegment", "ttl",
+  "actor", "actorProfileId", "createdBy", "created_by", "initiationSource", "initiation_source",
+  "detailConcurrency", "concurrency",
+]
 
 export function readNextBatchRequest(
   body: unknown
@@ -228,9 +270,17 @@ export function readNextBatchRequest(
   if ("maxSegments" in r || "max_segments" in r || "nextSegment" in r || "ttl" in r) {
     return { ok: false, message: "maxSegments/nextSegment/ttl são definidos pelo servidor." }
   }
+  // 3.1E-BG: ator/origem/concorrência são do servidor.
+  if (FORBIDDEN_BODY_KEYS.some((k) => k in r)) {
+    return { ok: false, message: "Campo controlado pelo servidor não é aceito no body." }
+  }
   if (r.batchOperationId === undefined) {
     const base = readNextBatchBody(body)
-    return base.ok ? { ok: true, request: { kind: "start" } } : base
+    if (!base.ok) return base
+    if (typeof r.clientOperationNonce !== "string" || !NONCE.test(r.clientOperationNonce)) {
+      return { ok: false, message: "clientOperationNonce obrigatório (UUID da confirmação)." }
+    }
+    return { ok: true, request: { kind: "start", clientOperationNonce: r.clientOperationNonce.toLowerCase() } }
   }
   if (typeof r.batchOperationId !== "string" || !OP_ID.test(r.batchOperationId)) {
     return { ok: false, message: "batchOperationId inválido." }
@@ -240,5 +290,16 @@ export function readNextBatchRequest(
   if (typeof seg !== "number" || !Number.isInteger(seg) || seg < 2) {
     return { ok: false, message: "Segmento de continuação inválido." }
   }
-  return { ok: true, request: { kind: "continue", batchOperationId: r.batchOperationId, segment: seg } }
+  if (typeof r.clientOperationNonce !== "string" || !NONCE.test(r.clientOperationNonce)) {
+    return { ok: false, message: "clientOperationNonce obrigatório (mesma confirmação)." }
+  }
+  return {
+    ok: true,
+    request: {
+      kind: "continue",
+      batchOperationId: r.batchOperationId,
+      segment: seg,
+      clientOperationNonce: r.clientOperationNonce.toLowerCase(),
+    },
+  }
 }

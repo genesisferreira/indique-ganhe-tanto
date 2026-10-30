@@ -11,6 +11,7 @@ import {
   isControllrInvoicePaid,
 } from "@/lib/collections/eligibility"
 import {
+  COLLECTION_DETAIL_CONCURRENCY_DEFAULT,
   COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
   COLLECTION_DISCOVERY_LOGIN_TIMEOUT_MS,
   COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
@@ -30,8 +31,11 @@ import {
 } from "@/lib/collections/skip-reason"
 import {
   collectionInvoiceNeedsDetailFetch,
-  collectionListRowFinancialProven,
+  collectionListRowFinancialProof,
   decideInvoiceDetailLookup,
+  incrementFinancialProofReason,
+  sumFinancialProofHistogram,
+  type FinancialProofReasonHistogram,
   mergeInvoiceInfoIntoSyncInvoice,
   presentCollectionInvoiceFromListRow,
 } from "@/lib/collections/invoice-from-controllr"
@@ -73,8 +77,20 @@ export type CollectionsSyncResult = {
   segmentCreated?: number
   segmentUpdated?: number
   stageTimings?: DiscoveryStageTimings
+  /** 3.1E-BG: histograma agregado (allowlist) das razões de prova da listagem. */
+  financialProofReasons?: FinancialProofReasonHistogram
 }
 
+/**
+ * 3.1E-BG: métricas NÃO sobrepostas por caminho de código:
+ * loginMs, listMs, classificationMs, detailWallMs (laço bloqueado aguardando
+ * invoice_info), persistExclusiveMs (somente leituras/escritas de
+ * persistência), checkpointMs, releaseMs ⊂ totalMs.
+ * detailRequestSumMs = soma das durações individuais de invoice_info (pode
+ * exceder detailWallMs com paralelismo 2; não entra na partição).
+ * detailMs (BD) mantém a semântica de soma. persistMs (BD) fica null daqui em
+ * diante: o histórico incluía preparação/detalhe e não é reescrito.
+ */
 export type DiscoveryStageTimings = {
   loginMs: number
   listMs: number
@@ -82,8 +98,12 @@ export type DiscoveryStageTimings = {
   classificationMs: number
   detailLookups: number
   detailSkippedByList: number
-  detailMs: number
+  detailMs: number | null
   persistMs: number | null
+  detailWallMs: number
+  detailRequestSumMs: number
+  detailMaxConcurrency: number
+  persistExclusiveMs: number
   checkpointMs: number
   checkpoints: number
   releaseMs: number
@@ -91,6 +111,10 @@ export type DiscoveryStageTimings = {
 }
 
 type DetailStats = { lookups: number; skippedByList: number; durationMs: number }
+
+type HydrateOutcome =
+  | { ok: true; invoice: CollectionSyncInvoice }
+  | { ok: false; failure: "timeout" | "error" }
 
 async function hydrateInvoice(input: {
   invoice: CollectionSyncInvoice
@@ -101,7 +125,8 @@ async function hydrateInvoice(input: {
   cookie: string
   listFinancialProven?: boolean
   stats?: DetailStats
-}): Promise<CollectionSyncInvoice> {
+  signal?: AbortSignal
+}): Promise<HydrateOutcome> {
   const daysOverdue = computeDaysOverdue({
     invoiceDueDate: input.invoice.invoiceDueDate,
     now: input.now,
@@ -114,7 +139,7 @@ async function hydrateInvoice(input: {
       hasExistingCase: Boolean(input.existing),
     })
   ) {
-    return input.invoice
+    return { ok: true, invoice: input.invoice }
   }
 
   // Sprint 3.1E-BA: listagem já comprova os campos => sem invoice_info.
@@ -125,7 +150,7 @@ async function hydrateInvoice(input: {
     }) === "skip_list_sufficient"
   ) {
     if (input.stats) input.stats.skippedByList += 1
-    return input.invoice
+    return { ok: true, invoice: input.invoice }
   }
   const detailStarted = Date.now()
   if (input.stats) input.stats.lookups += 1
@@ -133,10 +158,18 @@ async function hydrateInvoice(input: {
     config: input.config,
     cookie: input.cookie,
     invoicePk: input.invoice.invoicePk,
+    signal: input.signal,
   })
   if (input.stats) input.stats.durationMs += Math.max(0, Date.now() - detailStarted)
-  if (!info.ok || !info.info) return input.invoice
-  return mergeInvoiceInfoIntoSyncInvoice({
+  // 3.1E-BG: detalhe necessário e indisponível => fail-closed. Sem retry; a
+  // fatura não é persistida e a posição seguinte não passa à frente.
+  if (!info.ok || !info.info) {
+    return {
+      ok: false,
+      failure: info.abortClass === "timeout" || info.abortClass === "external_abort" ? "timeout" : "error",
+    }
+  }
+  const merged = mergeInvoiceInfoIntoSyncInvoice({
     invoice: input.invoice,
     info: {
       invoiceMsg: info.info.invoiceMsg,
@@ -146,6 +179,7 @@ async function hydrateInvoice(input: {
       isPaid: isControllrInvoicePaid(info.info),
     },
   })
+  return { ok: true, invoice: merged }
 }
 
 export async function syncCollectionsFromControllr(input: {
@@ -257,6 +291,7 @@ export async function syncCollectionsFromControllr(input: {
   const detailStats: DetailStats = { lookups: 0, skippedByList: 0, durationMs: 0 }
   const stage = { listMs: 0, listRequests: 0, classificationMs: 0, checkpointMs: 0, checkpoints: 0, releaseMs: 0 }
   const provenInvoicePks = new Set<string>()
+  const financialProofReasons: FinancialProofReasonHistogram = {}
   let countersAtClaim: { scannedInvoices: number; createdCount: number; updatedCount: number } | null = null
   const baseStore = createOpsDiscoveryStore()
   const timedStore: DiscoveryStore = Object.assign(Object.create(baseStore) as DiscoveryStore, {
@@ -332,22 +367,31 @@ export async function syncCollectionsFromControllr(input: {
     toInvoice: (row) => {
       const t = clock()
       const presented = presentCollectionInvoiceFromListRow(row)
-      if (presented && collectionListRowFinancialProven(row)) provenInvoicePks.add(presented.invoicePk)
+      if (presented) {
+        const proof = collectionListRowFinancialProof(row)
+        incrementFinancialProofReason(financialProofReasons, proof.reason)
+        if (proof.proven) provenInvoicePks.add(presented.invoicePk)
+      }
       stage.classificationMs += Math.max(0, clock() - t)
       return presented
     },
-    prepareInvoice: async (invoice, existing, frozenNow) => {
+    // 3.1E-BG: concorrência fixa no servidor (teto absoluto 2); nunca do body.
+    detailConcurrency: COLLECTION_DETAIL_CONCURRENCY_DEFAULT,
+    prepareInvoice: async (invoice, existing, frozenNow, ctx) => {
       const remaining = collectionDiscoveryRemainingBudgetMs({
         startedAtMs,
         nowMs: clock(),
         budgetMs,
       })
-      const hydrateTimeout = collectionDiscoveryCappedTimeoutMs({
+      const capped = collectionDiscoveryCappedTimeoutMs({
         remainingMs: remaining,
         configuredTimeoutMs: config.timeoutMs,
+        persistReleaseMarginMs: COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
       })
-      if (hydrateTimeout == null) return invoice
+      if (capped == null) return { ok: false as const, failure: "timeout" as const }
+      const hydrateTimeout = ctx ? Math.min(capped, ctx.timeoutMs) : capped
       return hydrateInvoice({
+        signal: ctx?.signal,
         invoice,
         existing,
         minimumDaysOverdue: settings.minimumDaysOverdue,
@@ -398,14 +442,27 @@ export async function syncCollectionsFromControllr(input: {
     classificationMs: stage.classificationMs,
     detailLookups: detailStats.lookups,
     detailSkippedByList: detailStats.skippedByList,
+    // BD: detailMs sempre foi soma de durações; mantém a mesma semântica.
     detailMs: detailStats.durationMs,
-    persistMs: batch.persistenceDurationMs,
+    persistMs: null,
+    detailWallMs: batch.pipelineMetrics?.detailWaitMs ?? 0,
+    detailRequestSumMs: detailStats.durationMs,
+    detailMaxConcurrency: batch.pipelineMetrics?.detailMaxConcurrency ?? 0,
+    persistExclusiveMs: batch.pipelineMetrics?.persistExclusiveMs ?? 0,
     checkpointMs: stage.checkpointMs,
     checkpoints: stage.checkpoints,
     releaseMs: stage.releaseMs,
     totalMs: Math.max(0, clock() - startedAtMs),
   }
-  console.log(LOG_TAG, { scope: "discovery-stage-timings", ...stageTimings, segmentScannedInvoices, segmentCreated, segmentUpdated })
+  console.log(LOG_TAG, {
+    scope: "discovery-stage-timings",
+    ...stageTimings,
+    segmentScannedInvoices,
+    segmentCreated,
+    segmentUpdated,
+    financialProofReasons,
+    financialProofClassified: sumFinancialProofHistogram(financialProofReasons),
+  })
   console.log(LOG_TAG, {
     scope: "discovery-batch",
     pauseStage: batch.pauseStage,
@@ -451,6 +508,7 @@ export async function syncCollectionsFromControllr(input: {
     segmentCreated,
     segmentUpdated,
     stageTimings,
+    financialProofReasons,
     message: [
       batch.message,
       batch.unassigned > 0

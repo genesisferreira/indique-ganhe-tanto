@@ -3,6 +3,7 @@
  * e mocks de performance (sem ERP, sem banco, sem rede).
  */
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import {
@@ -287,9 +288,9 @@ describe("3.1E-BB batchOperationId durável (fluxo + store)", () => {
     let release: () => void = () => undefined
     const gate = new Promise<void>((r) => (release = r))
     const calls = { n: 0 }
-    const tabA = executeNextBatchRequest(deps(db, { calls, run: async () => { await gate; return okSeg } }), { actorProfileId: "x", request: { kind: "start" } })
+    const tabA = executeNextBatchRequest(deps(db, { calls, run: async () => { await gate; return okSeg } }), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     await new Promise((r) => setTimeout(r, 5))
-    const tabB = await executeNextBatchRequest(deps(db, { calls }), { actorProfileId: "x", request: { kind: "start" } })
+    const tabB = await executeNextBatchRequest(deps(db, { calls }), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(tabB.status, 409)
     assert.equal(tabB.body.code, "operation_active")
     release()
@@ -300,24 +301,24 @@ describe("3.1E-BB batchOperationId durável (fluxo + store)", () => {
   it("instância A cria/executa seg1; B reconhece e continua seg2; ordinal não pula", async () => {
     const db = createFakeDurableStore()
     const A = deps(db), B = deps(db)
-    const s1 = await executeNextBatchRequest(A, { actorProfileId: "x", request: { kind: "start" } })
+    const s1 = await executeNextBatchRequest(A, { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(s1.body.continue, true)
     assert.equal(s1.body.nextSegment, 2)
     const id = String(s1.body.batchOperationId)
     const seen = await db.get(null)
     assert.equal(seen.operation?.id, id)
-    const skip = await executeNextBatchRequest(B, { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: 3 } })
+    const skip = await executeNextBatchRequest(B, { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: 3, clientOperationNonce: randomUUID() } })
     assert.equal(skip.body.code, "segment_out_of_order")
-    const s2 = await executeNextBatchRequest(B, { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: 2 } })
+    const s2 = await executeNextBatchRequest(B, { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: 2, clientOperationNonce: randomUUID() } })
     assert.equal(s2.body.segment, 2)
   })
   it("limite 5 global (env 100 => teto 10; default 5) e maxSegments no body recusado", async () => {
     const db = createFakeDurableStore()
     let id = ""
-    let r = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "start" } })
+    let r = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     id = String(r.body.batchOperationId)
     for (let seg = 2; seg <= 7; seg++) {
-      r = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: seg } })
+      r = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: seg, clientOperationNonce: randomUUID() } })
       if (r.body.continue !== true) break
     }
     assert.equal(r.body.operationStatus, "max_segments")
@@ -334,7 +335,7 @@ describe("3.1E-BB batchOperationId durável (fluxo + store)", () => {
     ] as const) {
       const db = createFakeDurableStore()
       const calls = { n: 0 }
-      const r = await executeNextBatchRequest(deps(db, { run, calls }), { actorProfileId: "x", request: { kind: "start" } })
+      const r = await executeNextBatchRequest(deps(db, { run, calls }), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
       assert.equal(r.body.operationStatus, "failed")
       assert.equal(r.body.stopReason, reason)
       assert.equal(r.body.continue, false)
@@ -345,30 +346,30 @@ describe("3.1E-BB batchOperationId durável (fluxo + store)", () => {
     const db = createFakeDurableStore()
     let avail = 1
     const calls = { n: 0 }
-    const r = await executeNextBatchRequest(deps(db, { available: () => avail, calls, run: async () => { avail = 0; return okSeg } }), { actorProfileId: "x", request: { kind: "start" } })
+    const r = await executeNextBatchRequest(deps(db, { available: () => avail, calls, run: async () => { avail = 0; return okSeg } }), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(r.body.operationStatus, "capacity_reached")
     const db2 = createFakeDurableStore()
-    const p = await executeNextBatchRequest(deps(db2, { run: async () => ({ ...okSeg, discoveryStatus: "pagination_ended" }) }), { actorProfileId: "x", request: { kind: "start" } })
+    const p = await executeNextBatchRequest(deps(db2, { run: async () => ({ ...okSeg, discoveryStatus: "pagination_ended" }) }), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(p.body.operationStatus, "pagination_ended")
     const db3 = createFakeDurableStore()
     const c3 = { n: 0 }
-    const full = await executeNextBatchRequest(deps(db3, { available: () => 0, calls: c3 }), { actorProfileId: "x", request: { kind: "start" } })
+    const full = await executeNextBatchRequest(deps(db3, { available: () => 0, calls: c3 }), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(full.body.code, "capacity_full")
     assert.equal(c3.n, 0)
     // capacidade enche entre segmentos (outra instância) => seg2 não chama ERP
     const db4 = createFakeDurableStore()
     let a4 = 5
     const c4 = { n: 0 }
-    const s1 = await executeNextBatchRequest(deps(db4, { available: () => a4, calls: c4 }), { actorProfileId: "x", request: { kind: "start" } })
+    const s1 = await executeNextBatchRequest(deps(db4, { available: () => a4, calls: c4 }), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     a4 = 0
-    const s2 = await executeNextBatchRequest(deps(db4, { available: () => a4, calls: c4 }), { actorProfileId: "x", request: { kind: "continue", batchOperationId: String(s1.body.batchOperationId), segment: 2 } })
+    const s2 = await executeNextBatchRequest(deps(db4, { available: () => a4, calls: c4 }), { actorProfileId: "x", request: { kind: "continue", batchOperationId: String(s1.body.batchOperationId), segment: 2, clientOperationNonce: randomUUID() } })
     assert.equal(s2.body.operationStatus, "capacity_reached")
     assert.equal(c4.n, 1)
   })
   it("run lease ativa (busy) continua barrando: segmento não chama ERP", async () => {
     const db = createFakeDurableStore()
     const calls = { n: 0 }
-    const r = await executeNextBatchRequest(deps(db, { busy: () => true, calls }), { actorProfileId: "x", request: { kind: "start" } })
+    const r = await executeNextBatchRequest(deps(db, { busy: () => true, calls }), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(r.status, 409)
     assert.equal(calls.n, 0)
     assert.equal(r.body.operationStatus, "failed")
@@ -377,7 +378,7 @@ describe("3.1E-BB batchOperationId durável (fluxo + store)", () => {
     const db = createFakeDurableStore()
     let release: () => void = () => undefined
     const gate = new Promise<void>((r) => (release = r))
-    const p = executeNextBatchRequest(deps(db, { run: async () => { await gate; return okSeg } }), { actorProfileId: "x", request: { kind: "start" } })
+    const p = executeNextBatchRequest(deps(db, { run: async () => { await gate; return okSeg } }), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     await new Promise((r) => setTimeout(r, 5))
     const id = db.rows[0].id
     const stop = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "stop", batchOperationId: id } })
@@ -385,22 +386,22 @@ describe("3.1E-BB batchOperationId durável (fluxo + store)", () => {
     release()
     const r = await p
     assert.equal(r.body.operationStatus, "stopped")
-    const next = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: 2 } })
+    const next = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "continue", batchOperationId: id, segment: 2, clientOperationNonce: randomUUID() } })
     assert.equal(next.body.code, "operation_stopped")
   })
   it("TTL entre instâncias e refresh: expira, não continua sozinho; terminal não bloqueia nova", async () => {
     let clock = 0
     const db = createFakeDurableStore({ now: () => clock, ttlMs: 1000 })
-    const s1 = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "start" } })
+    const s1 = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(s1.body.operationStatus, "awaiting_next")
     // "refresh": nada roda sozinho; GET só lê
     const state = await db.get(null)
     assert.equal(state.operation?.status, "awaiting_next")
     assert.equal(db.rows[0].completed, 1)
     clock += 5000
-    const late = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "continue", batchOperationId: String(s1.body.batchOperationId), segment: 2 } })
+    const late = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "continue", batchOperationId: String(s1.body.batchOperationId), segment: 2, clientOperationNonce: randomUUID() } })
     assert.equal(late.body.code, "operation_expired")
-    const fresh = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "start" } })
+    const fresh = await executeNextBatchRequest(deps(db), { actorProfileId: "x", request: { kind: "start", clientOperationNonce: randomUUID() } })
     assert.equal(fresh.body.code, "loaded")
   })
   it("conclusão repetida é idempotente", async () => {
@@ -424,11 +425,14 @@ describe("3.1E-BB batchOperationId durável (fluxo + store)", () => {
   it("corpo: runId recusado; start exige confirm; continue exige segmento >=2", () => {
     assert.equal(readNextBatchRequest({ runId: "x", confirm: true }).ok, false)
     assert.equal(readNextBatchRequest({}).ok, false)
-    assert.deepEqual(readNextBatchRequest({ confirm: true }), { ok: true, request: { kind: "start" } })
+    assert.equal(readNextBatchRequest({ confirm: true }).ok, false) // 3.1E-BG: nonce obrigatório
+    const n0 = randomUUID()
+    assert.deepEqual(readNextBatchRequest({ confirm: true, clientOperationNonce: n0 }), { ok: true, request: { kind: "start", clientOperationNonce: n0 } })
     const id = "00000000-0000-4000-8000-000000000001"
     assert.equal(readNextBatchRequest({ batchOperationId: id, segment: 1 }).ok, false)
     assert.equal(readNextBatchRequest({ batchOperationId: "nope", segment: 2 }).ok, false)
-    assert.equal(readNextBatchRequest({ batchOperationId: id, segment: 2 }).ok, true)
+    assert.equal(readNextBatchRequest({ batchOperationId: id, segment: 2 }).ok, false)
+    assert.equal(readNextBatchRequest({ batchOperationId: id, segment: 2, clientOperationNonce: randomUUID() }).ok, true)
     assert.equal(readNextBatchRequest({ batchOperationId: id, stop: true }).ok, true)
   })
   it("retomada só explícita: readResumableOperation exige awaiting_next", () => {

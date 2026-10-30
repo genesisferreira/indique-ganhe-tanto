@@ -15,7 +15,11 @@ import {
   type NextBatchProgressView,
 } from "@/lib/collections/contract-card"
 import { CONTRACT_SCOPE_NOTICE } from "@/lib/collections/operational-model"
-import { nextBatchConfirmMessage, readCapacitySummaryResponse } from "@/lib/collections/next-batch"
+import {
+  NEXT_BATCH_RETRY_WARNING,
+  nextBatchConfirmDetails,
+  readCapacitySummaryResponse,
+} from "@/lib/collections/next-batch"
 import {
   CASES_URL,
   NEXT_BATCH_URL,
@@ -44,14 +48,23 @@ export default function CobrancaPage() {
   const summary = readySummary(summaryState)
   const [submitting, setSubmitting] = useState(false)
   const inFlight = useRef(false)
+  // 3.1E-BG: nonce por operação, só em memória desta aba (nunca persistido).
+  // Refresh/outra aba => sem nonce => retomada recusada (nova confirmação).
+  const operationNonces = useRef(new Map<string, string>())
   const stopAfterCurrent = useRef(false)
   const [stopRequested, setStopRequested] = useState(false)
   const [progress, setProgress] = useState<NextBatchProgressView | null>(null)
   // 3.1E-BB: estado durável lido do servidor (fonte da verdade); sem auto-continuar.
   const [pendingOp, setPendingOp] = useState<{ id: string; nextSegment: number } | null>(null)
+  // 3.1E-BG: estado da última operação exibido no modal de confirmação.
+  const [lastOp, setLastOp] = useState<{ status: string | null; label: string | null }>({ status: null, label: null })
 
   const applyOperation = useCallback((op: Record<string, unknown> | null) => {
     setPendingOp(readResumableOperation(op))
+    setLastOp({
+      status: op && typeof op.operationStatus === "string" ? op.operationStatus : null,
+      label: op && typeof op.stopReasonLabel === "string" ? op.stopReasonLabel : null,
+    })
     if (op && typeof op.segment === "number" && op.segment > 0) setProgress(readNextBatchProgress(op, false))
   }, [])
 
@@ -118,15 +131,36 @@ export default function CobrancaPage() {
     const button = nextBatchButtonState({ summary, submitting, loading: summaryState.status !== "ready" })
     if (button.disabled) return
     // Uma confirmação humana => até maxSegments (servidor) segmentos sequenciais. Sem retry.
-    if (!window.confirm(nextBatchConfirmMessage(summary.availableCapacity))) return
-    await runSegments({ confirm: true })
+    // 3.1E-BG: ÚNICO ponto que cria operação; nunca em mount/refresh/catch/finally.
+    inFlight.current = true
+    let confirmed = false
+    try {
+      confirmed = window.confirm(
+        nextBatchConfirmDetails({ summary, lastOperationStatus: lastOp.status, lastStopReasonLabel: lastOp.label })
+      )
+    } finally {
+      if (!confirmed) inFlight.current = false
+    }
+    if (!confirmed) return
+    // Nonce gerado UMA vez por confirmação; reenvio/duplo clique => replay.
+    const clientOperationNonce = crypto.randomUUID()
+    await runSegments({ confirm: true, clientOperationNonce }, clientOperationNonce)
   }
 
   /** Retomada EXPLÍCITA de uma operação durável ainda válida (awaiting_next). */
   async function resumeOperation() {
     if (inFlight.current || !pendingOp || summaryState.status !== "ready") return
-    if (!window.confirm("Retomar a operação de próxima leva a partir do próximo segmento?")) return
-    await runSegments({ batchOperationId: pendingOp.id, segment: pendingOp.nextSegment })
+    // 3.1E-BG: só a confirmação dona (mesmo nonce, mesma aba) pode continuar.
+    const nonce = operationNonces.current.get(pendingOp.id) ?? null
+    if (!nonce) {
+      toast.message("Esta operação pertence a outra confirmação/aba. Pare a operação ou aguarde expirar.")
+      return
+    }
+    if (!window.confirm(`Retomar a operação de próxima leva a partir do próximo segmento?\n${NEXT_BATCH_RETRY_WARNING}`)) return
+    await runSegments(
+      { batchOperationId: pendingOp.id, segment: pendingOp.nextSegment, clientOperationNonce: nonce },
+      nonce
+    )
   }
 
   async function stopPendingOperation() {
@@ -142,7 +176,7 @@ export default function CobrancaPage() {
     await refreshAll()
   }
 
-  async function runSegments(initial: Record<string, unknown>) {
+  async function runSegments(initial: Record<string, unknown>, clientOperationNonce: string) {
     inFlight.current = true
     stopAfterCurrent.current = false
     setStopRequested(false)
@@ -162,7 +196,11 @@ export default function CobrancaPage() {
           return { httpOk: res.ok, json: (await res.json().catch(() => null)) as Record<string, unknown> | null }
         },
         refresh: refreshAll,
-        onSegment: (json, running) => setProgress(readNextBatchProgress(json, running)),
+        onSegment: (json, running) => {
+          if (typeof json?.batchOperationId === "string") operationNonces.current.set(json.batchOperationId, clientOperationNonce)
+          setProgress(readNextBatchProgress(json, running))
+        },
+        clientOperationNonce,
         onRefreshing: () => undefined,
         onRefreshed: () => undefined,
         stopRequested: () => stopAfterCurrent.current,

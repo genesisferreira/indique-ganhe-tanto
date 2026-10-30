@@ -669,7 +669,7 @@ describe("orçamento de duração com relógio controlado", () => {
       collectionsEnabled: true,
       startedAtMs: 0,
       clock: () => nowMs,
-      budgetMs: 45_000,
+      budgetMs: 49_000, // 3.1E-BG: reserva persist/release 8s -> 12s (+4s)
       configuredTimeoutMs: 30_000,
       maxPages: 4,
       fetchPage: async ({ afterInvoicePk, timeoutMs }) => {
@@ -705,7 +705,7 @@ describe("orçamento de duração com relógio controlado", () => {
       collectionsEnabled: true,
       startedAtMs: 0,
       clock: () => nowMs,
-      budgetMs: 45_000,
+      budgetMs: 49_000, // 3.1E-BG: reserva persist/release 8s -> 12s (+4s)
       configuredTimeoutMs: 30_000,
       maxPages: 1,
       fetchPage: async ({ afterInvoicePk }) => {
@@ -1076,7 +1076,7 @@ describe("3.1E-V garantia de progresso", () => {
   it("login rápido + listagem rápida persiste a página e avança o cursor", async () => {
     assert.equal(
       collectionDiscoveryListTimeoutMs({ remainingMs: 20_000, configuredTimeoutMs: 30_000 }),
-      12_000
+      20_000 - COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS
     )
     const store = createMemoryDiscoveryStore()
     const repo = createMemoryDiscoveryCaseRepo()

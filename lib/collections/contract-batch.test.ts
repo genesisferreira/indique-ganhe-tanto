@@ -404,7 +404,8 @@ describe("3.1E-AU UI por contrato", () => {
   })
   it("AW/AY/AZ — confirmação mostra vagas; aviso contract-only; sem PII em toasts/logs", () => {
     const page = readFileSync("app/cobranca/page.tsx", "utf8")
-    assert.match(page, /nextBatchConfirmMessage\(summary\.availableCapacity\)/)
+    // 3.1E-BG: modal com capacidade + estado + alerta (nextBatchConfirmDetails).
+    assert.match(page, /nextBatchConfirmDetails\(/)
     assert.match(page, /CONTRACT_SCOPE_NOTICE/)
     assert.match(page, /inFlight\.current/)
     assert.equal(/body: JSON\.stringify\(\{[^}]*runId/.test(page), false)

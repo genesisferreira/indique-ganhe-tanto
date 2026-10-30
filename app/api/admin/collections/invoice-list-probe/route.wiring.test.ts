@@ -118,7 +118,7 @@ describe("invoice-list-probe wiring", () => {
     assert.match(route, /runOverdueFirstPageHealthProbe/)
     assert.match(route, /OVERDUE_FIRST_PAGE_HEALTH_MODE/)
     assert.match(route, /runInvoiceListProbe/)
-    assert.match(sync, /maxDuration = 120/)
+    assert.match(sync, /maxDuration = 240/ /* 3.1E-BG: Sync usa o mesmo orçamento 220s */)
     assert.match(healthResult, /OVERDUE_FIRST_PAGE_HEALTH_TIMEOUT_MAX_MS = 60_000/)
     assert.match(healthResult, /OVERDUE_FIRST_PAGE_HEALTH_ATTEMPTS = 1/)
     assert.equal(oldProbe.includes("listOverdueInvoices"), false)

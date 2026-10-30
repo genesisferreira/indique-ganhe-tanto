@@ -99,6 +99,8 @@ export async function driveBatchSegments(input: {
   onRefreshed: (r: ServerRefreshResult) => void
   stopRequested: () => boolean
   guard?: number
+  /** 3.1E-BG: nonce da confirmação; enviado em TODOS os segmentos da operação. */
+  clientOperationNonce?: string
 }): Promise<{
   last: Record<string, unknown> | null
   segmentsPosted: number
@@ -148,7 +150,9 @@ export async function driveBatchSegments(input: {
       await doRefresh()
       break
     }
-    payload = { batchOperationId: opId, segment: nextSegment }
+    payload = input.clientOperationNonce
+      ? { batchOperationId: opId, segment: nextSegment, clientOperationNonce: input.clientOperationNonce }
+      : { batchOperationId: opId, segment: nextSegment }
   }
   return { last, segmentsPosted, refreshes, refreshFailed, stoppedByUser }
 }
