@@ -1,6 +1,7 @@
 import { decideConfirmedPrefixAdvance } from "@/lib/collections/discovery-prefix"
 import { parseOverdueInvoicePk } from "@/lib/brbyte/overdue-invoice-list-query"
 import {
+  COLLECTION_DISCOVERY_DETAIL_TIMEOUT_MS,
   COLLECTION_DISCOVERY_LEASE_MS,
   COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
   COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS,
@@ -10,6 +11,7 @@ import {
   COLLECTION_DISCOVERY_PERSIST_RELEASE_MARGIN_MS,
   COLLECTION_DISCOVERY_RELEASE_SLACK_MS,
   COLLECTION_DISCOVERY_TIME_BUDGET_MS,
+  collectionDetailWindowFits,
   collectionDiscoveryCappedTimeoutMs,
   collectionDiscoveryListTimeoutMs,
   collectionDiscoveryRemainingBudgetMs,
@@ -91,6 +93,8 @@ export type DiscoveryRunnerDeps<TRow extends { invoicePk: string | null } = { in
   ) => Promise<CollectionSyncInvoice | PrepareOutcome>
   /** 3.1E-BG: janela de detalhes; clamp [1, 2]. Nunca vem do body HTTP. */
   detailConcurrency?: number
+  /** 3.1E-BJ: timeout individual de invoice_info (default 60000). */
+  detailTimeoutMs?: number
   fetchInvoiceDetail?: (input: {
     invoicePk: string
     timeoutMs: number
@@ -258,6 +262,7 @@ async function runOverdueDiscoveryBatchInner<
   TRow extends { invoicePk: string | null } = { invoicePk: string | null },
 >(input: DiscoveryRunnerDeps<TRow>, pipe: DiscoveryPipelineMetrics): Promise<DiscoveryBatchResult> {
   const detailConcurrency = resolveDetailConcurrency(input.detailConcurrency)
+  const detailTimeoutMs = Math.max(1, input.detailTimeoutMs ?? COLLECTION_DISCOVERY_DETAIL_TIMEOUT_MS)
   const clock = input.clock ?? Date.now
   const startedAtMs = input.startedAtMs ?? clock()
   const budgetMs = input.budgetMs ?? COLLECTION_DISCOVERY_TIME_BUDGET_MS
@@ -835,6 +840,7 @@ async function runOverdueDiscoveryBatchInner<
       | "persist_error"
       | "detail_timeout"
       | "detail_error"
+      | "pre_detail_budget"
       | null = null
     const persistStarted = clock()
     // Sprint 3.1E-BG: preparação (invoice_info) em janela de no máximo
@@ -863,9 +869,14 @@ async function runOverdueDiscoveryBatchInner<
       if (inFlight >= detailConcurrency) return
       const m = mapRow(i)
       if (!m.invoice || !m.pk) return
+      // 3.1E-BJ: reserva pre-detalhe. So inicia se couber detail wall maximo
+      // + persistencia/checkpoint + release. Caso contrario nao inicia
+      // (pre_detail_budget), nunca uma chamada que matematicamente nao cabe.
+      const remainingForPrep = collectionDiscoveryRemainingBudgetMs({ startedAtMs, nowMs: clock(), budgetMs })
+      if (!collectionDetailWindowFits({ remainingMs: remainingForPrep, detailTimeoutMs })) return
       const timeoutMs = collectionDiscoveryCappedTimeoutMs({
-        remainingMs: collectionDiscoveryRemainingBudgetMs({ startedAtMs, nowMs: clock(), budgetMs }),
-        configuredTimeoutMs,
+        remainingMs: remainingForPrep,
+        configuredTimeoutMs: detailTimeoutMs,
         persistReleaseMarginMs: COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
       })
       if (timeoutMs == null) return
@@ -953,9 +964,10 @@ async function runOverdueDiscoveryBatchInner<
         if (input.prepareInvoice) {
           const prep = preps[i]
           if (!prep) {
+            // 3.1E-BJ: sem orcamento para iniciar o detalhe (pre_detail_budget).
             // Orçamento insuficiente para iniciar o detalhe desta posição.
             processedAll = false
-            stopReason = "budget"
+            stopReason = "pre_detail_budget"
             break
           }
           const waitStarted = clock()
@@ -1037,7 +1049,7 @@ async function runOverdueDiscoveryBatchInner<
         confirmedPrefixPk,
         confirmedPrefixRows,
       })
-      if (stopReason === "detail_timeout" || stopReason === "detail_error") {
+      if (stopReason === "detail_timeout" || stopReason === "detail_error" || stopReason === "pre_detail_budget") {
         const detailStage: DiscoveryPauseStage = stopReason
         if (prefixAdvance.advance) {
           const advancedDetail = await input.store.advance({

@@ -150,6 +150,8 @@ async function perfSegment(useListProof: boolean) {
     clock: () => t,
     budgetMs: 105_000,
     configuredTimeoutMs: 50_000,
+    // 3.1E-BJ: modelo historico (orcamento 105s); reserva pre-detalhe reduzida.
+    detailTimeoutMs: 1_000,
     maxPages: 1,
     fetchPage: async (a) => {
       t += 41_000
@@ -172,9 +174,10 @@ async function perfSegment(useListProof: boolean) {
 describe("3.1E-BA performance mocks (causa das 3 faturas)", () => {
   it("ANTES: invoice_info por linha esgota o orçamento após ~3 linhas (confirmed_prefix_budget)", async () => {
     const { result, detailLookups } = await perfSegment(false)
-    assert.equal(result.pauseStage, "confirmed_prefix_budget")
+    // 3.1E-BJ: reserva pre-detalhe pausa antes da chamada que nao cabe.
+    assert.ok(["confirmed_prefix_budget", "pre_detail_budget"].includes(String(result.pauseStage)))
     assert.ok(result.scannedInvoices <= 4, `scanned=${result.scannedInvoices}`)
-    assert.ok(detailLookups >= 3)
+    assert.ok(detailLookups >= 2, `lookups=${detailLookups}`)
   })
   it("DEPOIS: lista suficiente => 0 invoice_info e página inteira confirmada", async () => {
     const { result, detailLookups } = await perfSegment(true)

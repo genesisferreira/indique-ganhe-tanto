@@ -593,6 +593,7 @@ describe("orçamento de duração com relógio controlado", () => {
       clock: () => nowMs,
       budgetMs: 20_000,
       configuredTimeoutMs: 5_000,
+      detailTimeoutMs: 1_000,
       fetchPage: async ({ timeoutMs }) => {
         assert.equal(timeoutMs <= 5_000, true)
         nowMs += 3_000
@@ -610,7 +611,8 @@ describe("orçamento de duração com relógio controlado", () => {
     })
     assert.equal(result.status, "paused")
     assert.equal(result.resumable, true)
-    assert.equal(result.pauseStage, "confirmed_prefix_budget")
+    // 3.1E-BJ: reserva pre-detalhe pausa antes da chamada que nao cabe.
+    assert.equal(result.pauseStage, "pre_detail_budget")
     assert.equal(result.created >= 1, true)
     assert.equal(result.created < 15, true)
     assert.equal(result.cursorLastInvoicePk, String(9 + result.created))
@@ -1310,6 +1312,7 @@ describe("3.1E-V garantia de progresso", () => {
       store,
       repo,
       owner: "partial-1",
+      detailTimeoutMs: 1_000,
       actorProfileId: "actor-1",
       now,
       referenceInstant: now,
@@ -1330,7 +1333,7 @@ describe("3.1E-V garantia de progresso", () => {
       },
       toInvoice: (row) => invoice(String(row.invoicePk), 12),
     })
-    assert.equal(first.pauseStage, "confirmed_prefix_budget")
+    assert.equal(first.pauseStage, "pre_detail_budget")
     assert.equal(first.progressMade, true)
     assert.equal(first.consecutiveNoProgress, 0)
     assert.equal(first.created >= 1, true)

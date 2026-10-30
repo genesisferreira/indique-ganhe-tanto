@@ -12,6 +12,7 @@ import {
 } from "@/lib/collections/eligibility"
 import {
   COLLECTION_DETAIL_CONCURRENCY_DEFAULT,
+  COLLECTION_DISCOVERY_DETAIL_TIMEOUT_MS,
   COLLECTION_DISCOVERY_LIST_TIMEOUT_MS,
   COLLECTION_DISCOVERY_LOGIN_TIMEOUT_MS,
   COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
@@ -377,15 +378,17 @@ export async function syncCollectionsFromControllr(input: {
     },
     // 3.1E-BG: concorrência fixa no servidor (teto absoluto 2); nunca do body.
     detailConcurrency: COLLECTION_DETAIL_CONCURRENCY_DEFAULT,
+    detailTimeoutMs: COLLECTION_DISCOVERY_DETAIL_TIMEOUT_MS,
     prepareInvoice: async (invoice, existing, frozenNow, ctx) => {
       const remaining = collectionDiscoveryRemainingBudgetMs({
         startedAtMs,
         nowMs: clock(),
         budgetMs,
       })
+      // 3.1E-BJ: invoice_info com timeout proprio de 60s (antes config.timeoutMs ~30s).
       const capped = collectionDiscoveryCappedTimeoutMs({
         remainingMs: remaining,
-        configuredTimeoutMs: config.timeoutMs,
+        configuredTimeoutMs: COLLECTION_DISCOVERY_DETAIL_TIMEOUT_MS,
         persistReleaseMarginMs: COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS,
       })
       if (capped == null) return { ok: false as const, failure: "timeout" as const }

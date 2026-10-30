@@ -46,6 +46,12 @@ export const COLLECTION_DISCOVERY_BUDGET_HISTORY = {
   listTimeoutBeforeMs: 50_000,
 } as const
 /** 3.1E-BG: invoice_info em janelas de no máximo 2 (teto absoluto, não configurável pelo body). */
+/**
+ * 3.1E-BJ: timeout individual de invoice_info (inclui headers + corpo; deadline
+ * nao reinicia apos headers; sem retry). Antes: config.timeoutMs (~30000).
+ */
+export const COLLECTION_DISCOVERY_DETAIL_TIMEOUT_MS = 60_000
+export const COLLECTION_DISCOVERY_DETAIL_TIMEOUT_BEFORE_MS = 30_000
 export const COLLECTION_DETAIL_CONCURRENCY_DEFAULT = 2
 export const COLLECTION_DETAIL_CONCURRENCY_MAX = 2
 export function resolveDetailConcurrency(raw: unknown): number {
@@ -67,6 +73,25 @@ export const COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS = 12_000
 /** Folga mínima para o release depois da última escrita da página. */
 export const COLLECTION_DISCOVERY_RELEASE_SLACK_MS = 2_000
 export const COLLECTION_DISCOVERY_MIN_QUERY_TIMEOUT_MS = 1_000
+/**
+ * 3.1E-BJ: reserva exigida antes de iniciar uma chamada da janela de detalhe:
+ * detail wall maximo + persistencia/checkpoint + release. Se nao couber,
+ * a chamada nao inicia (pre_detail_budget; nao conta como timeout).
+ */
+export const COLLECTION_DISCOVERY_DETAIL_WINDOW_RESERVE_MS =
+  COLLECTION_DISCOVERY_DETAIL_TIMEOUT_MS +
+  COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS +
+  COLLECTION_DISCOVERY_RELEASE_SLACK_MS
+export function collectionDetailWindowFits(input: {
+  remainingMs: number
+  detailTimeoutMs?: number
+}): boolean {
+  const detail = input.detailTimeoutMs ?? COLLECTION_DISCOVERY_DETAIL_TIMEOUT_MS
+  return (
+    input.remainingMs >=
+    detail + COLLECTION_DISCOVERY_PAGE_PERSIST_RESERVE_MS + COLLECTION_DISCOVERY_RELEASE_SLACK_MS
+  )
+}
 export const COLLECTION_DISCOVERY_MAX_CONSECUTIVE_NO_PROGRESS = 2
 
 export type DiscoveryPauseStage =
@@ -86,6 +111,7 @@ export type DiscoveryPauseStage =
   | "stale_lease"
   | "detail_timeout"
   | "detail_error"
+  | "pre_detail_budget"
 
 const PAUSE_STAGE_SET: ReadonlySet<string> = new Set([
   "pre_list_budget",
@@ -104,6 +130,7 @@ const PAUSE_STAGE_SET: ReadonlySet<string> = new Set([
   "stale_lease",
   "detail_timeout",
   "detail_error",
+  "pre_detail_budget",
 ])
 
 export type CollectionDiscoveryStatus =
