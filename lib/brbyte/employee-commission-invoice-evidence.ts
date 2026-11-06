@@ -4,6 +4,9 @@ import { brbyteAdminLogin, brbyteAdminPostForm } from "@/lib/brbyte/admin-http"
 import { getBrbyteOperationalConfig } from "@/lib/brbyte/config"
 import {
   EMPLOYEE_EVIDENCE_ATTEMPTS,
+  EMPLOYEE_EVIDENCE_CONTRACT_FILTER_PROVEN,
+  buildEmployeeEvidenceGuardResponse,
+  type EmployeeEvidenceGuardResponse,
   buildEmployeeEvidenceFormFields,
   clampEmployeeEvidenceTimeoutMs,
   parseEmployeeEvidenceContractPk,
@@ -22,7 +25,11 @@ const LOG_TAG = "[employee-commission:invoice-evidence]"
 export async function runEmployeeCommissionInvoiceEvidence(input: {
   timeoutMs?: unknown
   contractPk?: unknown
-}): Promise<EmployeeEvidenceResult | { ok: false; error: "invalid_contract_pk" }> {
+}): Promise<
+  EmployeeEvidenceResult | EmployeeEvidenceGuardResponse | { ok: false; error: "invalid_contract_pk" }
+> {
+  // 3.1F-H6: defesa em profundidade — filtro de contrato não comprovado → sem login/ERP.
+  if (!EMPLOYEE_EVIDENCE_CONTRACT_FILTER_PROVEN) return buildEmployeeEvidenceGuardResponse()
   const contractPk = parseEmployeeEvidenceContractPk(input.contractPk)
   if (!contractPk) return { ok: false, error: "invalid_contract_pk" }
   const timeoutMs = clampEmployeeEvidenceTimeoutMs(input.timeoutMs)

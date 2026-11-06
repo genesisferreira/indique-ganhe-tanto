@@ -8,7 +8,12 @@ import { runClientIdentityHealthProbe } from "@/lib/brbyte/client-identity-probe
 import { CLIENT_IDENTITY_HEALTH_MODE } from "@/lib/brbyte/client-identity-probe-result"
 import { COLLECTION_SECTOR_CODE } from "@/types/collections"
 import { runEmployeeCommissionInvoiceEvidence } from "@/lib/brbyte/employee-commission-invoice-evidence"
-import { EMPLOYEE_COMMISSION_INVOICE_EVIDENCE_MODE } from "@/lib/brbyte/employee-commission-invoice-evidence-result"
+import {
+  EMPLOYEE_COMMISSION_INVOICE_EVIDENCE_MODE,
+  EMPLOYEE_EVIDENCE_CONTRACT_FILTER_PROVEN,
+  EMPLOYEE_EVIDENCE_GUARD_HTTP_STATUS,
+  buildEmployeeEvidenceGuardResponse,
+} from "@/lib/brbyte/employee-commission-invoice-evidence-result"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -55,6 +60,12 @@ export async function POST(request: Request) {
       if (auth.context?.role !== "admin_master") {
         return jsonError(403, "Somente Admin Master.")
       }
+      // 3.1F-H6: filtro de contrato não comprovado → 409 antes de login/ERP. Sem log.
+      if (!EMPLOYEE_EVIDENCE_CONTRACT_FILTER_PROVEN) {
+        return NextResponse.json(buildEmployeeEvidenceGuardResponse(), {
+          status: EMPLOYEE_EVIDENCE_GUARD_HTTP_STATUS,
+        })
+      }
       if (bodyParseFailed) {
         return jsonError(400, "Body JSON inválido.")
       }
@@ -62,6 +73,9 @@ export async function POST(request: Request) {
         timeoutMs: body.timeoutMs,
         contractPk: body.contractPk,
       })
+      if ("errorClass" in evidence) {
+        return NextResponse.json(evidence, { status: EMPLOYEE_EVIDENCE_GUARD_HTTP_STATUS })
+      }
       if ("error" in evidence) return jsonError(400, "contractPk inválido.")
       const evidenceStatus = evidence.ok
         ? 200

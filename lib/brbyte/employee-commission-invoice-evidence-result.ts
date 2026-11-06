@@ -16,6 +16,41 @@ export const EMPLOYEE_EVIDENCE_SORT_DIR = "ASC"
 /** null = campo oficial de emissão ainda não comprovado → ordem da 1ª fatura INCONCLUSIVE. */
 export const EMPLOYEE_EVIDENCE_OFFICIAL_ISSUE_DATE_FIELD: string | null = null
 
+/**
+ * 3.1F-H6 — guard. O filtro de contrato do builder (contract_pk oper 7 + número) gera
+ * SQL inválido (PostgreSQL 42601, ERP HTTP 400). O substituto (oper 5) ainda não tem
+ * prova oficial. Enquanto false, o modo falha ANTES do login/ERP.
+ */
+export const EMPLOYEE_EVIDENCE_CONTRACT_FILTER_PROVEN: boolean = false
+export const EMPLOYEE_EVIDENCE_GUARD_HTTP_STATUS = 409
+export const EMPLOYEE_EVIDENCE_GUARD_ERROR_CLASS = "contract_filter_not_proven" as const
+
+export type EmployeeEvidenceGuardResponse = {
+  ok: false
+  mode: typeof EMPLOYEE_COMMISSION_INVOICE_EVIDENCE_MODE
+  errorClass: typeof EMPLOYEE_EVIDENCE_GUARD_ERROR_CLASS
+  erpRequests: 0
+  attempts: 0
+  retryExecuted: false
+  databaseWrites: 0
+  contractFilterProven: false
+  firstInvoiceOrderProven: false
+}
+
+export function buildEmployeeEvidenceGuardResponse(): EmployeeEvidenceGuardResponse {
+  return {
+    ok: false,
+    mode: EMPLOYEE_COMMISSION_INVOICE_EVIDENCE_MODE,
+    errorClass: EMPLOYEE_EVIDENCE_GUARD_ERROR_CLASS,
+    erpRequests: 0,
+    attempts: 0,
+    retryExecuted: false,
+    databaseWrites: 0,
+    contractFilterProven: false,
+    firstInvoiceOrderProven: false,
+  }
+}
+
 export const EMPLOYEE_EVIDENCE_FIELDS = [
   "invoice_pk",
   "contract_pk",
