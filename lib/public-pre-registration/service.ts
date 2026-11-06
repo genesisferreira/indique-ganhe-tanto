@@ -278,6 +278,11 @@ export async function submitPublicPreRegistration(
     status: "pendente",
     source: channelMeta.source,
     reward_eligible: false,
+    // 3.1F-H1b: origem explícita (após a finalize o banco não tem default).
+    origin_kind:
+      channelMeta.source === NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE
+        ? "neutral_network"
+        : "web_preregistration",
     erp_lead_source: channelMeta.erpLeadSource,
     preferred_installation_period: payload.preferredInstallationPeriod,
     preferred_contact_period: payload.preferredContactPeriod,

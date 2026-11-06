@@ -8,6 +8,60 @@ export const NEUTRAL_NETWORK_ERP_LEAD_SOURCE = "Pré-cadastro Rede Neutra"
 export const EMPLOYEE_ORIGIN_KIND = "employee" as const
 export const EMPLOYEE_SALES_OPPORTUNITY_SOURCE = "employee_sales_opportunity" as const
 
+/**
+ * 3.1F-H1b (decisão congelada): origens que podem gerar reward do Indique e Ganhe.
+ * A ORIGEM prevalece sobre o papel: employee/web/neutral nunca são elegíveis.
+ * `legacy` (linhas anteriores ao discriminador) mantém a regra anterior.
+ */
+export const INDICATOR_REWARD_ORIGIN_KINDS = [
+  "indicator",
+  "assisted_indicator",
+] as const
+export const NON_REWARD_ORIGIN_KINDS = [
+  EMPLOYEE_ORIGIN_KIND,
+  "web_preregistration",
+  "neutral_network",
+] as const
+export const LEGACY_ORIGIN_KIND = "legacy" as const
+
+/**
+ * Papéis comprovados como beneficiário indicador (Indique e Ganhe).
+ * Não ampliar sem decisão explícita (admin_financeiro, funcionario, manager... ficam fora).
+ */
+export const INDICATOR_BENEFICIARY_ROLES = [
+  "indicador",
+  "comercial",
+  "admin_master",
+] as const
+
+export function isIndicatorBeneficiaryRole(role: string | null | undefined): boolean {
+  return (INDICATOR_BENEFICIARY_ROLES as readonly string[]).includes(role ?? "")
+}
+
+/**
+ * Espelha o trigger SQL de INSERT (trg_referrals_enforce_origin_kind): decide se
+ * uma oportunidade NOVA, dada origem + papel do indicador, pode manter
+ * reward_eligible=true. Não substitui os gates de isReferralRewardEligible.
+ */
+export function isIndicatorRewardContextAllowed(input: {
+  origin_kind: string | null | undefined
+  indicator_role: string | null | undefined
+  indicator_profile_id: string | null | undefined
+  reward_eligible: boolean | null | undefined
+}): boolean {
+  if (input.reward_eligible !== true) return false
+  if (!input.indicator_profile_id?.trim()) return false
+  if (input.origin_kind === LEGACY_ORIGIN_KIND) {
+    // legacy: sem regra exclusiva de papel (comportamento anterior), exceto o
+    // bloqueio de crossover de funcionário já existente na H1.
+    return input.indicator_role !== "funcionario"
+  }
+  if (!(INDICATOR_REWARD_ORIGIN_KINDS as readonly string[]).includes(input.origin_kind ?? "")) {
+    return false
+  }
+  return isIndicatorBeneficiaryRole(input.indicator_role)
+}
+
 /** Cadastro assistido pelo Comercial (Indique e Ganhe — reward para o indicador). */
 export const COMMERCIAL_ASSISTED_REFERRAL_SOURCE =
   "commercial_assisted_referral" as const
@@ -51,7 +105,9 @@ export function isReferralRewardEligible(
   input: ReferralRewardEligibilityInput
 ): boolean {
   if (input.reward_eligible === false) return false
-  if (input.origin_kind === EMPLOYEE_ORIGIN_KIND) return false
+  if ((NON_REWARD_ORIGIN_KINDS as readonly string[]).includes(input.origin_kind ?? "")) {
+    return false
+  }
   if (input.source === EMPLOYEE_SALES_OPPORTUNITY_SOURCE) return false
   if (isNonRewardPublicSource(input.source)) return false
   if (isNonRewardErpLeadSource(input.erp_lead_source)) return false

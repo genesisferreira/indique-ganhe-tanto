@@ -22,13 +22,18 @@ begin;
 -- ============================================================
 -- 1. origin_kind
 -- ============================================================
+-- 3.1F-H1b (EXPAND): default constante de metadata (PostgreSQL 11+ "fast default").
+-- Linhas existentes passam a LER origin_kind='legacy' sem reescrita da tabela e
+-- SEM UPDATE: nenhum trigger de linha dispara, updated_at não muda.
+-- Proibido aqui: UPDATE em massa, DISABLE TRIGGER, session_replication_role,
+-- escrita em updated_at, manipulação de catálogo, SET DEFAULT NULL.
+-- O DEFAULT 'legacy' permanece durante a janela expand -> deploy para que o
+-- código antigo (que omite origin_kind) continue funcionando. Ele só é removido
+-- pela migration finalize (patch-employee-origin-hardening-finalize-3-1f-h1b.sql).
+-- Reaplicável: se a coluna já existe (inclusive após a finalize), é no-op e o
+-- default NÃO é reintroduzido.
 alter table public.referrals
-  add column if not exists origin_kind text;
-
--- Linhas existentes: legacy (sem inferência; sem backfill especulativo).
-update public.referrals set origin_kind = 'legacy' where origin_kind is null;
-
-alter table public.referrals alter column origin_kind set default null;
+  add column if not exists origin_kind text not null default 'legacy';
 
 alter table public.referrals
   drop constraint if exists referrals_origin_kind_chk;
@@ -84,6 +89,7 @@ as $$
 declare
   v_indicator_role public.user_role;
   v_rpc text := coalesce(current_setting('igt.employee_opportunity_rpc', true), '');
+  v_expand_default boolean;
 begin
   if TG_OP = 'UPDATE' then
     if NEW.origin_kind is distinct from OLD.origin_kind then
@@ -93,24 +99,72 @@ begin
     if OLD.origin_kind = 'employee' then
       NEW.indicator_profile_id := null;
       NEW.reward_eligible := false;
+      return NEW;
+    end if;
+    if OLD.origin_kind in ('web_preregistration', 'neutral_network') then
+      NEW.reward_eligible := false;
+      return NEW;
+    end if;
+    -- 3.1F-H1b: indicator/assisted_indicator reavaliam o beneficiário somente se
+    -- indicador ou elegibilidade mudarem. legacy: regra anterior (sem filtro de papel).
+    if OLD.origin_kind in ('indicator', 'assisted_indicator')
+       and NEW.reward_eligible is true
+       and (NEW.indicator_profile_id is distinct from OLD.indicator_profile_id
+            or OLD.reward_eligible is distinct from true) then
+      if NEW.indicator_profile_id is null then
+        NEW.reward_eligible := false;
+        return NEW;
+      end if;
+      select p.role into v_indicator_role from public.profiles p where p.id = NEW.indicator_profile_id;
+      if v_indicator_role = 'funcionario' then
+        raise exception 'employee_must_use_employee_opportunity_rpc'
+          using errcode = '42501';
+      end if;
+      if v_indicator_role is null
+         or v_indicator_role::text not in ('indicador', 'comercial', 'admin_master') then
+        NEW.reward_eligible := false;
+      end if;
     end if;
     return NEW;
   end if;
 
-  -- INSERT: derivação apenas para linhas novas, a partir de campos já gravados.
+  -- INSERT. 3.1F-H1b: sem derivação silenciosa. Código novo envia origin_kind
+  -- explícito; código antigo (janela expand) omite e recebe o DEFAULT 'legacy'.
   if NEW.origin_kind is null then
-    NEW.origin_kind := case
-      when NEW.source = 'public_pre_registration' then 'web_preregistration'
-      when NEW.source = 'neutral_network_pre_registration' then 'neutral_network'
-      when NEW.source = 'commercial_assisted_referral' then 'assisted_indicator'
-      when NEW.source = 'employee_sales_opportunity' then 'employee'
-      else 'indicator'
-    end;
+    raise exception 'origin_kind_required'
+      using errcode = '23502';
   end if;
 
   if NEW.origin_kind = 'legacy' then
-    raise exception 'origin_kind_legacy_reserved'
-      using errcode = 'P0001';
+    -- legacy só é aceito em INSERT enquanto o DEFAULT de expand existir
+    -- (código antigo). Após a finalize, legacy explícito é recusado.
+    select exists (
+      select 1
+      from pg_catalog.pg_attribute a
+      join pg_catalog.pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+      where a.attrelid = 'public.referrals'::regclass
+        and a.attname = 'origin_kind'
+        and not a.attisdropped
+    ) into v_expand_default;
+    if v_expand_default is not true then
+      raise exception 'origin_kind_legacy_reserved'
+        using errcode = 'P0001';
+    end if;
+    if NEW.source = 'employee_sales_opportunity' then
+      raise exception 'employee_opportunity_requires_rpc'
+        using errcode = '42501';
+    end if;
+    if NEW.indicator_profile_id is not null then
+      select p.role into v_indicator_role from public.profiles p where p.id = NEW.indicator_profile_id;
+      if v_indicator_role = 'funcionario' then
+        -- Crossover (proteção H1 preservada): funcionário não vira indicador financeiro.
+        raise exception 'employee_must_use_employee_opportunity_rpc'
+          using errcode = '42501';
+      end if;
+    end if;
+    -- legacy: comportamento anterior preservado (sem regra exclusiva de papel);
+    -- gates financeiros continuam em referral_is_financially_eligible.
+    return NEW;
   end if;
 
   if NEW.origin_kind = 'employee' then
@@ -146,15 +200,17 @@ begin
       using errcode = '42501';
   end if;
 
-  if v_indicator_role is distinct from 'indicador' then
-    -- Fail-closed: beneficiário que não é indicador não gera direito financeiro.
+  -- 3.1F-H1b (decisão congelada): beneficiários indicadores comprovados são
+  -- indicador, comercial e admin_master. Demais papéis (admin_financeiro,
+  -- manager, ...) não ganham elegibilidade automaticamente.
+  if v_indicator_role is null
+     or v_indicator_role::text not in ('indicador', 'comercial', 'admin_master') then
     NEW.reward_eligible := false;
   end if;
 
   return NEW;
 end;
 $$;
-
 revoke all on function public.trg_referrals_enforce_origin_kind() from public, anon, authenticated;
 
 drop trigger if exists trg_referrals_enforce_origin_kind on public.referrals;
@@ -339,7 +395,8 @@ set search_path = public
 as $$
   select
     p_ref.reward_eligible is true
-    and coalesce(p_ref.origin_kind, 'legacy') in ('indicator', 'assisted_indicator', 'legacy')
+    -- origem prevalece sobre papel: employee/web/neutral nunca; legacy mantém a regra anterior.
+    and p_ref.origin_kind in ('indicator', 'assisted_indicator', 'legacy')
     and coalesce(p_ref.source, '') not in (
       'public_pre_registration',
       'neutral_network_pre_registration',

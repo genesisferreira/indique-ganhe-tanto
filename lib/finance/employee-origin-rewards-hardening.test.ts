@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { isReferralRewardEligible } from "@/lib/referral-reward-eligibility"
+import {
+  INDICATOR_BENEFICIARY_ROLES,
+  isIndicatorRewardContextAllowed,
+  isReferralRewardEligible,
+} from "@/lib/referral-reward-eligibility"
 import {
   EMPLOYEE_EVIDENCE_MAX_ROWS,
   EMPLOYEE_EVIDENCE_MAX_TIMEOUT_MS,
@@ -26,6 +30,65 @@ describe("3.1F-H1 eligibility (app layer)", () => {
   it("reward_eligible=false and null indicator block", () => {
     assert.equal(isReferralRewardEligible({ reward_eligible: false, indicator_profile_id: "x" }), false)
     assert.equal(isReferralRewardEligible({ reward_eligible: true, indicator_profile_id: null }), false)
+  })
+})
+
+const stripSqlComments = (sql: string) => sql.replace(/--.*$/gm, "")
+const FINALIZE = read("supabase/patch-employee-origin-hardening-finalize-3-1f-h1b.sql")
+const ctx = (origin_kind: string, indicator_role: string) =>
+  isIndicatorRewardContextAllowed({ origin_kind, indicator_role, indicator_profile_id: "x", reward_eligible: true })
+
+describe("3.1F-H1b context-confusion defense (origin prevails over role)", () => {
+  it("beneficiary roles are exactly indicador/comercial/admin_master", () => {
+    assert.deepEqual([...INDICATOR_BENEFICIARY_ROLES], ["indicador", "comercial", "admin_master"])
+  })
+  it("E1 comercial + indicator origin allowed", () => {
+    assert.equal(ctx("indicator", "comercial"), true)
+    assert.equal(ctx("assisted_indicator", "comercial"), true)
+  })
+  it("E2 comercial + employee origin blocked", () => assert.equal(ctx("employee", "comercial"), false))
+  it("E3 admin_master + indicator origin allowed", () => {
+    assert.equal(ctx("indicator", "admin_master"), true)
+    assert.equal(ctx("assisted_indicator", "admin_master"), true)
+  })
+  it("E4 admin_master + employee origin blocked", () => assert.equal(ctx("employee", "admin_master"), false))
+  it("E5 admin_financeiro + indicator origin blocked", () => assert.equal(ctx("indicator", "admin_financeiro"), false))
+  it("E6 funcionario + indicator origin blocked", () => assert.equal(ctx("indicator", "funcionario"), false))
+  it("E7 indicador + employee origin blocked", () => assert.equal(ctx("employee", "indicador"), false))
+  it("web/neutral never eligible regardless of role", () => {
+    for (const r of INDICATOR_BENEFICIARY_ROLES) {
+      assert.equal(ctx("web_preregistration", r), false)
+      assert.equal(ctx("neutral_network", r), false)
+    }
+    assert.equal(isReferralRewardEligible({ origin_kind: "web_preregistration", reward_eligible: true, indicator_profile_id: "x" }), false)
+    assert.equal(isReferralRewardEligible({ origin_kind: "neutral_network", reward_eligible: true, indicator_profile_id: "x" }), false)
+  })
+  it("legacy preserves previous rule (no exclusive role denial)", () => {
+    assert.equal(ctx("legacy", "comercial"), true)
+    assert.equal(ctx("legacy", "admin_master"), true)
+    assert.equal(isReferralRewardEligible({ origin_kind: "legacy", reward_eligible: true, indicator_profile_id: "x" }), true)
+    assert.equal(isReferralRewardEligible({ origin_kind: "legacy", reward_eligible: false, indicator_profile_id: "x" }), false)
+  })
+})
+
+describe("3.1F-H1b expand/finalize migrations (static)", () => {
+  it("expand uses metadata default and never UPDATEs referrals", () => {
+    assert.match(SQL, /add column if not exists origin_kind text not null default 'legacy'/)
+    assert.doesNotMatch(stripSqlComments(SQL), /update\s+public\.referrals\s+set/i)
+    assert.doesNotMatch(stripSqlComments(SQL), /disable\s+trigger|session_replication_role/i)
+    assert.doesNotMatch(stripSqlComments(SQL), /origin_kind\s+set\s+default\s+null|origin_kind\s+drop\s+default/i)
+  })
+  it("expand removed the exclusive 'indicador' rule", () => {
+    assert.doesNotMatch(SQL, /is distinct from 'indicador'/)
+    assert.match(SQL, /not in \('indicador', 'comercial', 'admin_master'\)/)
+  })
+  it("finalize drops default, fails closed, never writes rows", () => {
+    assert.match(FINALIZE, /alter column origin_kind drop default/)
+    assert.match(FINALIZE, /raise exception 'h1b_finalize_abort/)
+    assert.doesNotMatch(stripSqlComments(FINALIZE), /update\s+public\.(referrals|rewards)|delete\s+from|disable\s+trigger|session_replication_role/i)
+  })
+  it("public pre-registration sends explicit origin", () => {
+    assert.match(read("lib/public-pre-registration/service.ts"), /origin_kind:\s*\n?\s*channelMeta\.source === NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE/)
   })
 })
 

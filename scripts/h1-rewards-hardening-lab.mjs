@@ -15,6 +15,10 @@ const extra = [
   "supabase/patch-financial-reward-eligibility-hardening.sql",
   "supabase/patch-employee-origin-and-rewards-hardening-3-1f-h1.sql",
   "supabase/patch-employee-origin-and-rewards-hardening-3-1f-h1.sql",
+  // 3.1F-H1b: este lab valida o estado final (código novo + finalize, reaplicada).
+  // A janela expand -> deploy -> finalize é coberta em scripts/h1b-release-window-lab.mjs.
+  "supabase/patch-employee-origin-hardening-finalize-3-1f-h1b.sql",
+  "supabase/patch-employee-origin-hardening-finalize-3-1f-h1b.sql",
 ]
 const res = []
 const preIds = { ind: "22222222-0000-0000-0000-000000000001", r_ok: null, r_no: null }
@@ -50,14 +54,14 @@ try {
   const emp = (await c.query(`insert into public.employees(profile_id,status) values ($1,'active') returning id`, [ids.emp])).rows[0].id
   await c.query(`insert into public.employee_sector_memberships(employee_id,sector_id) values ($1,$2)`, [emp, sector])
   const legacyCount0 = (await c.query(`select count(*)::int n from public.referrals where origin_kind='legacy'`)).rows[0].n
-  const insRef = (uid, extra = "") => asUser(uid, `insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_type,reward_amount${extra ? "," + extra.split("=")[0] : ""}) values ($1,'n','1',$2,'pix',30${extra ? "," + extra.split("=")[1] : ""}) returning id, origin_kind, reward_eligible`, [uid, plan])
+  const insRef = (uid, extra = "") => asUser(uid, `insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_type,reward_amount,origin_kind${extra ? "," + extra.split("=")[0] : ""}) values ($1,'n','1',$2,'pix',30,'indicator'${extra ? "," + extra.split("=")[1] : ""}) returning id, origin_kind, reward_eligible`, [uid, plan])
   // indicator valid
   const r1 = (await insRef(ids.ind))[0]
   await t("2_indicator_origin_indicator_eligible", () => r1.origin_kind === "indicator" && r1.reward_eligible === true)
   // employee via createReferral crossover
-  await t("F1_createReferral_employee_blocked", () => denied(`insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_type,reward_amount) values ('${ids.emp}','n','1','${plan}','pix',30)`, "authenticated", ids.emp))
+  await t("F1_createReferral_employee_blocked", () => denied(`insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_type,reward_amount,origin_kind) values ('${ids.emp}','n','1','${plan}','pix',30,'indicator')`, "authenticated", ids.emp))
   await t("5_employee_origin_tampered_payload_blocked", () => denied(`insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_eligible,origin_kind) values (null,'n','1','${plan}',true,'employee')`, "authenticated", ids.adm))
-  await t("F2_assisted_employee_as_indicator_blocked", async () => { try { await c.query(`insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_eligible,source) values ($1,'n','1',$2,true,'commercial_assisted_referral')`, [ids.emp, plan]); return false } catch (e) { return /employee_must/.test(e.message) } })
+  await t("F2_assisted_employee_as_indicator_blocked", async () => { try { await c.query(`insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_eligible,source,origin_kind) values ($1,'n','1',$2,true,'commercial_assisted_referral','assisted_indicator')`, [ids.emp, plan]); return false } catch (e) { return /employee_must/.test(e.message) } })
   // ensure_referral_reward admin
   const e1 = (await asUser(ids.adm, `select public.ensure_referral_reward($1) r`, [r1.id]))[0].r
   const e1b = (await asUser(ids.adm, `select public.ensure_referral_reward($1) r`, [r1.id]))[0].r
@@ -77,11 +81,11 @@ try {
   await t("12_select_rls_no_cross_read", async () => (await asUser(ids.ind2, `select count(*)::int n from public.rewards`))[0].n === 0)
   await t("12b_own_reward_select_preserved_admin", async () => (await asUser(ids.adm, `select count(*)::int n from public.rewards`))[0].n === 1)
   // ineligible
-  const r3 = (await asUser(ids.ind, `insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_eligible) values ($1,'n','1',$2,false) returning id`, [ids.ind, plan]))[0]
+  const r3 = (await asUser(ids.ind, `insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_eligible,origin_kind) values ($1,'n','1',$2,false,'indicator') returning id`, [ids.ind, plan]))[0]
   await t("3_reward_eligible_false_blocks", async () => (await asUser(ids.adm, `select public.ensure_referral_reward($1) r`, [r3.id]))[0].r.code === "not_reward_eligible")
-  const web = (await c.query(`insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_eligible,source) values (null,'n','1',$1,false,'public_pre_registration') returning id, origin_kind`, [plan])).rows[0]
+  const web = (await c.query(`insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_eligible,source,origin_kind) values (null,'n','1',$1,false,'public_pre_registration','web_preregistration') returning id, origin_kind`, [plan])).rows[0]
   await t("4_null_indicator_web_blocks", async () => web.origin_kind === "web_preregistration" && (await asUser(ids.adm, `select public.ensure_referral_reward($1) r`, [web.id]))[0].r.code === "not_reward_eligible")
-  const nn = (await c.query(`insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_eligible,source) values (null,'n','1',$1,false,'neutral_network_pre_registration') returning id, origin_kind`, [plan])).rows[0]
+  const nn = (await c.query(`insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,reward_eligible,source,origin_kind) values (null,'n','1',$1,false,'neutral_network_pre_registration','neutral_network') returning id, origin_kind`, [plan])).rows[0]
   await t("neutral_network_no_reward", async () => nn.origin_kind === "neutral_network" && (await asUser(ids.adm, `select public.ensure_referral_reward($1) r`, [nn.id]))[0].r.code === "not_reward_eligible")
   await t("service_role_insert_web_reward_blocked_by_trigger", async () => { try { await c.query(`insert into public.rewards(referral_id,indicator_profile_id,amount,reward_type) values ($1,$2,1,'pix')`, [web.id, ids.ind]); return false } catch (e) { return /not_reward_eligible/.test(e.message) } })
   // employee RPC
@@ -114,6 +118,9 @@ try {
   await t("manager_no_financial_audit_access", () => denied(`select * from public.financial_security_audit_events`, "authenticated", ids.mgr))
   await t("comercial_not_assigned_cannot_ensure_reward", async () => (await asUser(ids.mgr, `select public.ensure_referral_reward($1) r`, [r1.id]))[0].r.code === "forbidden")
   await t("admin_cannot_update_reward_directly", () => denied(`update public.rewards set status='disponivel'`, "authenticated", ids.adm))
+  await t("H1b_post_finalize_insert_without_origin_fails", async () => { try { await asUser(ids.ind, `insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id) values ($1,'n','1',$2)`, [ids.ind, plan]); return false } catch (e) { return /origin_kind_required|null value/.test(e.message) } })
+  await t("H1b_post_finalize_explicit_legacy_rejected", async () => { try { await asUser(ids.ind, `insert into public.referrals(indicator_profile_id,referred_name,referred_phone,plan_id,origin_kind) values ($1,'n','1',$2,'legacy')`, [ids.ind, plan]); return false } catch (e) { return /origin_kind_legacy_reserved/.test(e.message) } })
+  await t("H1b_comercial_and_admin_master_indicator_eligible", async () => { const a = (await insRef(ids.mgr))[0]; const b = (await insRef(ids.adm))[0]; return a.origin_kind === "indicator" && a.reward_eligible === true && b.origin_kind === "indicator" && b.reward_eligible === true })
   await t("20_no_existing_reclassified", async () => (await c.query(`select count(*)::int n from public.referrals where origin_kind='legacy'`)).rows[0].n === legacyCount0)
   await t("audit_events_sanitized", async () => (await c.query(`select count(*)::int n from public.financial_security_audit_events where metadata ?| array['name','phone','amount','cpf']`)).rows[0].n === 0 && (await c.query(`select count(*)::int n from public.financial_security_audit_events`)).rows[0].n > 0)
   await t("audit_append_only", async () => { try { await c.query(`delete from public.financial_security_audit_events`); return false } catch { return true } })
