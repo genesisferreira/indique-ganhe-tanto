@@ -18,7 +18,8 @@
     "test:referral-brbyte": "npm run test:brbyte",
     "test:h1-rewards-hardening": "npx tsx --test lib/finance/employee-origin-rewards-hardening.test.ts",
     "test:h1-rewards-pg": "node scripts/h1-rewards-hardening-lab.mjs",
-    "test:h1b-release-window-pg": "node scripts/h1b-release-window-lab.mjs"
+    "test:h1b-release-window-pg": "node scripts/h1b-release-window-lab.mjs",
+    "test:h1c-finalize-pg": "node scripts/h1c-finalize-fail-closed-lab.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

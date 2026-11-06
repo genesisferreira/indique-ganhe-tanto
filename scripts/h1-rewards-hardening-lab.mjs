@@ -36,6 +36,9 @@ try {
   let granted = false
   for (const f of extra) {
     if (f.includes("3-1f-h1") && !granted) { await seedPreMigration();  granted = true; await c.query("grant all on all tables in schema public to anon, authenticated; grant all on all functions in schema public to anon, authenticated, public"); console.log("PRE_H1_SUPABASE_DEFAULT_GRANTS=ALL (mirrors prod drift)") }
+    // 3.1F-H1c: finalize exige o GUC com offset explícito (instante registrado antes da expand)
+    if (f.includes("3-1f-h1.sql") && !globalThis.__h1bStartedAt) { await new Promise(r => setTimeout(r, 1100)); globalThis.__h1bStartedAt = new Date().toISOString() }
+    if (f.includes("finalize")) await c.query(`select set_config('igt.h1b_expand_started_at',$1,false)`, [globalThis.__h1bStartedAt])
     try { await c.query(readFileSync(join(REPO_ROOT, f), "utf8")); res.push(["apply", f, "OK"]) }
     catch (e) { console.log("APPLY_ERR", f, e.message); await c.query("rollback").catch(()=>{}) }
   }

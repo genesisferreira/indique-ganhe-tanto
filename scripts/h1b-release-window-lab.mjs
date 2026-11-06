@@ -80,6 +80,9 @@ try {
   await t("EXPAND_rollback_atomic", async () => expandFailed && (await q(`select count(*)::int n from information_schema.columns where table_name='referrals' and column_name='origin_kind'`))[0].n === 0 && (await q(`select to_regclass('public.sales_opportunity_attributions') x`))[0].x === null && JSON.stringify(await refSnap()) === JSON.stringify(R0))
 
   // ---------- Expand x2 ----------
+  // 3.1F-H1c: EXPAND_STARTED_AT registrado imediatamente antes da expand (ISO 8601, UTC 'Z')
+  await new Promise(r => setTimeout(r, 1100))
+  const EXPAND_STARTED_AT = new Date().toISOString()
   await c.query(EXPAND); await c.query(EXPAND)
   await t("EXPAND_reapplicable", () => true)
   const R1 = await refSnap()
@@ -156,16 +159,16 @@ try {
   await t("S3_explicit_legacy_still_tolerated_during_window", () => legacyExplicitS3.ok || legacyExplicitS3)
 
   // ---------- Finalize: fail-closed (each inside a rolled-back tx) ----------
-  const finAbort = async (setup, re) => { await c.query("begin"); try { await c.query(setup); await c.query(FINALIZE_BODY); await c.query("rollback"); return "did not abort" } catch (e) { await c.query("rollback").catch(() => {}); return re.test(e.message) || e.message } }
-  await t("FIN_abort_column_missing", () => finAbort(`alter table public.referrals drop column origin_kind cascade`, /origin_kind column missing/))
-  await t("FIN_abort_check_missing", () => finAbort(`alter table public.referrals drop constraint referrals_origin_kind_chk`, /referrals_origin_kind_chk missing/))
-  await t("FIN_abort_employee_check_missing", () => finAbort(`alter table public.referrals drop constraint referrals_employee_origin_no_reward_chk`, /referrals_employee_origin_no_reward_chk missing/))
-  await t("FIN_abort_origin_trigger_disabled", () => finAbort(`alter table public.referrals disable trigger trg_referrals_enforce_origin_kind`, /missing or disabled/))
-  await t("FIN_abort_unexpected_default", () => finAbort(`alter table public.referrals alter column origin_kind set default 'indicator'`, /unexpected origin_kind default/))
-  await t("FIN_abort_not_null_missing", () => finAbort(`alter table public.referrals alter column origin_kind drop not null`, /not NOT NULL/))
+  const finAbort = async (setup, re) => { await c.query("begin"); try { await c.query(`select set_config('igt.h1b_expand_started_at',$1,true)`, [EXPAND_STARTED_AT]); await c.query(setup); await c.query(FINALIZE_BODY); await c.query("rollback"); return "did not abort" } catch (e) { await c.query("rollback").catch(() => {}); return re.test(e.message) || e.message } }
+  await t("FIN_abort_column_missing", () => finAbort(`alter table public.referrals drop column origin_kind cascade`, /h1b_finalize_abort:column_missing/))
+  await t("FIN_abort_check_missing", () => finAbort(`alter table public.referrals drop constraint referrals_origin_kind_chk`, /h1b_finalize_abort:check_missing name=referrals_origin_kind_chk/))
+  await t("FIN_abort_employee_check_missing", () => finAbort(`alter table public.referrals drop constraint referrals_employee_origin_no_reward_chk`, /h1b_finalize_abort:check_missing name=referrals_employee_origin_no_reward_chk/))
+  await t("FIN_abort_origin_trigger_disabled", () => finAbort(`alter table public.referrals disable trigger trg_referrals_enforce_origin_kind`, /h1b_finalize_abort:trigger_not_enabled/))
+  await t("FIN_abort_unexpected_default", () => finAbort(`alter table public.referrals alter column origin_kind set default 'indicator'`, /h1b_finalize_abort:unexpected_default/))
+  await t("FIN_abort_not_null_missing", () => finAbort(`alter table public.referrals alter column origin_kind drop not null`, /h1b_finalize_abort:column_not_null_missing/))
   const emp1 = (await q(`select id from public.referrals where origin_kind='employee' limit 1`))[0].id
-  await t("FIN_abort_reward_on_employee_row", () => finAbort(`alter table public.rewards disable trigger trg_rewards_enforce_financial_eligibility; insert into public.rewards(referral_id,indicator_profile_id,amount,reward_type) values ('${emp1}','${P.ind}',1,'pix')`, /rewards point at employee/))
-  await t("FIN_abort_invalid_window_guc", () => finAbort(`select set_config('igt.h1b_expand_started_at','not-a-date',true)`, /not a valid timestamptz/))
+  await t("FIN_abort_reward_on_employee_row", () => finAbort(`alter table public.rewards disable trigger trg_rewards_enforce_financial_eligibility; insert into public.rewards(referral_id,indicator_profile_id,amount,reward_type) values ('${emp1}','${P.ind}',1,'pix')`, /h1b_finalize_abort:data_employee_has_reward/))
+  await t("FIN_abort_invalid_window_guc", () => finAbort(`select set_config('igt.h1b_expand_started_at','not-a-date',true)`, /h1b_finalize_abort:guc_format_requires_iso8601_with_explicit_offset/))
   await t("FIN_aborts_left_default_in_place", async () => (await q(`select count(*)::int n from pg_attrdef d join pg_attribute a on d.adrelid=a.attrelid and d.adnum=a.attnum where a.attrelid='public.referrals'::regclass and a.attname='origin_kind'`))[0].n === 1)
 
   // ---------- Finalize x2 ----------
@@ -174,10 +177,10 @@ try {
   const allRewardIds = (await q(`select id from public.rewards`)).map(r => r.id)
   const WB = await rewSnap(allRewardIds); const CB = await tableCounts()
   const notices = []; c.on("notice", n => notices.push(n.message))
-  await q(`select set_config('igt.h1b_expand_started_at', (now() - interval '1 hour')::text, false)`)
+  await q(`select set_config('igt.h1b_expand_started_at', $1, false)`, [EXPAND_STARTED_AT])
   await c.query(FINALIZE); await c.query(FINALIZE)
   await t("FIN_reapplicable", () => true)
-  await t("FIN_reports_counts_only", () => notices.some(m => /legacy_created_in_release_window=\d+/.test(m)) && notices.some(m => /default_already_removed=true/.test(m)) && notices.every(m => !/[0-9a-f]{8}-[0-9a-f]{4}-/.test(m)) || notices)
+  await t("FIN_reports_counts_only", () => notices.some(m => /window_legacy indicator_role_indicador=\d+ indicator_role_comercial=\d+ indicator_role_admin_master=\d+ no_indicator_ineligible=\d+ admin_financeiro=0 funcionario=0 other_role=0/.test(m)) && notices.some(m => /default_already_removed=true/.test(m)) && notices.every(m => !/[0-9a-f]{8}-[0-9a-f]{4}-/.test(m)) || notices)
   await t("FIN_window_legacy_not_converted", async () => (await q(`select count(*)::int n from public.referrals where id = any($1::uuid[]) and origin_kind='legacy'`, [[o2i.rows[0].id, o2c.rows[0].id, o2a.rows[0].id, o2web.rows[0].id]]))[0].n === 4)
   await t("FIN_updated_at_and_rows_identical", async () => JSON.stringify((await q(`select to_jsonb(r) j from public.referrals r where id = any($1::uuid[]) order by id`, [allIdsBeforeFin])).map(r => r.j)) === RB)
   await t("FIN_rewards_byte_identical", async () => (await rewSnap(allRewardIds)) === WB)
