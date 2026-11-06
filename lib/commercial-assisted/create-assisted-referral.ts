@@ -94,6 +94,9 @@ export type AssistedReferralValidatedInput = {
   idempotencyKey: string
 }
 
+/** 3.1F-H1: assistido de indicador. Oportunidade de funcionário usa create_employee_sales_opportunity. */
+export const COMMERCIAL_ASSISTED_ORIGIN_KIND = "assisted_indicator" as const
+
 export type AssistedReferralInsertRow = {
   indicator_profile_id: string
   created_by_profile_id: string
@@ -134,6 +137,8 @@ export type AssistedReferralInsertRow = {
   assigned_at: string | null
   last_interaction_at: string | null
   assisted_idempotency_key: string
+  /** 3.1F-H1: origem estrutural explícita; DB valida e bloqueia funcionário. */
+  origin_kind: typeof COMMERCIAL_ASSISTED_ORIGIN_KIND
 }
 
 function asString(value: unknown): string {
@@ -371,6 +376,7 @@ export function buildAssistedReferralInsertRow(input: {
     assigned_at: isCommercial ? input.nowIso : null,
     last_interaction_at: isCommercial ? input.nowIso : null,
     assisted_idempotency_key: input.validated.idempotencyKey,
+    origin_kind: COMMERCIAL_ASSISTED_ORIGIN_KIND,
   }
 }
 
@@ -400,6 +406,7 @@ export function assertServerOwnsPrivilegedFields(
   if (row.source !== COMMERCIAL_ASSISTED_REFERRAL_SOURCE) return false
   if (row.erp_lead_source !== COMMERCIAL_ASSISTED_ERP_LEAD_SOURCE) return false
   if (row.reward_eligible !== true) return false
+  if (row.origin_kind !== COMMERCIAL_ASSISTED_ORIGIN_KIND) return false
   if (actorRole === "comercial" && row.commercial_profile_id !== actorProfileId) {
     return false
   }

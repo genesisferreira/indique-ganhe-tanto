@@ -2196,6 +2196,8 @@ export async function insertIndicadorReferral(
       reward_type: input.reward_type,
       reward_amount: null,
       reward_eligible: true,
+      // 3.1F-H1: origem explícita; o banco recusa funcionário como indicador.
+      origin_kind: "indicator" as const,
       commercial_profile_id: null,
       status: "pendente" as const,
       assigned_at: null,
@@ -5290,7 +5292,7 @@ export async function ensureRewardForReferralFromSupabase(
     const { data: refRow, error: refError } = await db
       .from("referrals")
       .select(
-        "id, indicator_profile_id, reward_amount, reward_type, status, source, reward_eligible, erp_lead_source"
+        "id, indicator_profile_id, reward_amount, reward_type, status, source, reward_eligible, erp_lead_source, origin_kind"
       )
       .eq("id", referralId)
       .maybeSingle()
@@ -5309,6 +5311,7 @@ export async function ensureRewardForReferralFromSupabase(
       source?: string | null
       reward_eligible?: boolean | null
       erp_lead_source?: string | null
+      origin_kind?: string | null
     }
 
     if (!isReferralRewardEligible(ref)) {
@@ -5330,94 +5333,41 @@ export async function ensureRewardForReferralFromSupabase(
       }
     }
 
-    const { data: existingRows, error: existingError } = await db
-      .from("rewards")
-      .select("id, referral_id, status, amount, created_at")
-      .eq("referral_id", referralId)
-      .order("created_at", { ascending: true })
-
-    if (existingError) {
-      return {
-        ok: false,
-        message: `Falha ao verificar recompensa: ${existingError.message}`,
+    // 3.1F-H1: sem INSERT direto em rewards pelo browser. RPC SECURITY DEFINER
+    // valida papel, comercial atribuído, elegibilidade e origem; idempotente.
+    const rpcDb = supabase as unknown as {
+      rpc: (
+        fn: string,
+        args: { p_referral_id: string }
+      ) => Promise<{ data: unknown; error: { message: string; code?: string } | null }>
+    }
+    const { data: rpcData, error: rpcError } = await rpcDb.rpc("ensure_referral_reward", {
+      p_referral_id: referralId,
+    })
+    if (rpcError) {
+      devLogEnsureReward("falha rpc ensure_referral_reward", { code: rpcError.code ?? null })
+      return { ok: false, message: `Falha ao criar recompensa: ${rpcError.message}` }
+    }
+    const rpcResult = (rpcData ?? {}) as {
+      ok?: boolean
+      created?: boolean
+      reward_id?: string | null
+      code?: string
+    }
+    if (!rpcResult.ok || !rpcResult.reward_id) {
+      if (rpcResult.code === "not_reward_eligible") {
+        return { ok: false, message: "Registro não elegível para recompensa." }
       }
-    }
-
-    const existingList = (existingRows ?? []) as {
-      id: string
-      referral_id: string
-      status: string
-      amount: number | string
-    }[]
-
-    if (existingList.length > 1) {
-      devLogEnsureReward("DUPLICATA: mais de uma reward para o mesmo referral_id", {
-        referralId,
-        rewardIds: existingList.map((r) => r.id),
-        count: existingList.length,
-      })
-    }
-
-    if (existingList.length > 0) {
-      const primary = existingList[0]
-      devLogEnsureReward("reward já existe", {
-        referralId,
-        rewardId: primary.id,
-        status: primary.status,
-        amount: Number(primary.amount),
-      })
-      return {
-        ok: true,
-        rewardId: primary.id,
-        created: false,
+      if (rpcResult.code === "forbidden") {
+        return { ok: false, message: "Sem permissão para gerar recompensa." }
       }
+      return { ok: false, message: "Falha ao criar recompensa." }
     }
-
-    const rewardType =
-      ref.reward_type === "desconto_fatura" ? "desconto_fatura" : "pix"
-
-    const rewardPayload = {
-      referral_id: referralId,
-      indicator_profile_id: ref.indicator_profile_id,
-      amount,
-      reward_type: rewardType,
-      status: "pendente" as const,
-      available_at: null,
-      paid_at: null,
+    if (!rpcResult.created) {
+      return { ok: true, rewardId: rpcResult.reward_id, created: false }
     }
-
-    const { data: insertedRows, error: insertError } = await db
-      .from("rewards")
-      .insert(rewardPayload)
-      .select("id")
-
-    if (insertError) {
-      const code = (insertError as { code?: string }).code
-      if (code === "23505") {
-        const { data: raced, error: racedError } = await db
-          .from("rewards")
-          .select("id")
-          .eq("referral_id", referralId)
-          .maybeSingle()
-        if (!racedError && raced) {
-          return {
-            ok: true,
-            rewardId: (raced as { id: string }).id,
-            created: false,
-          }
-        }
-      }
-      devLogEnsureReward("falha insert reward", { referralId, insertError })
-      return {
-        ok: false,
-        message: `Falha ao criar recompensa: ${insertError.message}`,
-      }
-    }
-
-    const rewardId = (insertedRows as { id?: string }[] | null)?.[0]?.id
-    if (!rewardId) {
-      return { ok: false, message: "Recompensa criada sem identificador retornado." }
-    }
+    const rewardId = rpcResult.reward_id
+    void amount
 
     devLogEnsureReward("reward criada", { referralId, rewardId })
 

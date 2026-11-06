@@ -7,6 +7,8 @@ import { OVERDUE_FIRST_PAGE_HEALTH_MODE } from "@/lib/brbyte/invoice-list-health
 import { runClientIdentityHealthProbe } from "@/lib/brbyte/client-identity-probe"
 import { CLIENT_IDENTITY_HEALTH_MODE } from "@/lib/brbyte/client-identity-probe-result"
 import { COLLECTION_SECTOR_CODE } from "@/types/collections"
+import { runEmployeeCommissionInvoiceEvidence } from "@/lib/brbyte/employee-commission-invoice-evidence"
+import { EMPLOYEE_COMMISSION_INVOICE_EVIDENCE_MODE } from "@/lib/brbyte/employee-commission-invoice-evidence-result"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -48,6 +50,26 @@ export async function POST(request: Request) {
   }
 
   if (body && Object.prototype.hasOwnProperty.call(body, "mode")) {
+    if (body.mode === EMPLOYEE_COMMISSION_INVOICE_EVIDENCE_MODE) {
+      // 3.1F-H1: Admin Master obrigatório; 1 tentativa; contractPk nunca logado/devolvido.
+      if (auth.context?.role !== "admin_master") {
+        return jsonError(403, "Somente Admin Master.")
+      }
+      if (bodyParseFailed) {
+        return jsonError(400, "Body JSON inválido.")
+      }
+      const evidence = await runEmployeeCommissionInvoiceEvidence({
+        timeoutMs: body.timeoutMs,
+        contractPk: body.contractPk,
+      })
+      if ("error" in evidence) return jsonError(400, "contractPk inválido.")
+      const evidenceStatus = evidence.ok
+        ? 200
+        : evidence.classification === "AUTH_OR_CONFIG_FAILURE"
+          ? 503
+          : 502
+      return NextResponse.json(evidence, { status: evidenceStatus })
+    }
     if (body.mode === CLIENT_IDENTITY_HEALTH_MODE) {
       if (bodyParseFailed) {
         return jsonError(400, "Body JSON inválido.")

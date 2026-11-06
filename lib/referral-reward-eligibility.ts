@@ -4,6 +4,10 @@ export const NEUTRAL_NETWORK_PRE_REGISTRATION_SOURCE =
 export const PUBLIC_ERP_LEAD_SOURCE = "Pré-cadastro Web"
 export const NEUTRAL_NETWORK_ERP_LEAD_SOURCE = "Pré-cadastro Rede Neutra"
 
+/** 3.1F-H1: oportunidade de funcionário — nunca participa de reward. */
+export const EMPLOYEE_ORIGIN_KIND = "employee" as const
+export const EMPLOYEE_SALES_OPPORTUNITY_SOURCE = "employee_sales_opportunity" as const
+
 /** Cadastro assistido pelo Comercial (Indique e Ganhe — reward para o indicador). */
 export const COMMERCIAL_ASSISTED_REFERRAL_SOURCE =
   "commercial_assisted_referral" as const
@@ -22,6 +26,8 @@ export type ReferralRewardEligibilityInput = {
   reward_eligible?: boolean | null
   indicator_profile_id?: string | null
   erp_lead_source?: string | null
+  /** 3.1F-H1: discriminador estrutural de origem. */
+  origin_kind?: string | null
 }
 
 function isNonRewardPublicSource(source: string | null | undefined): boolean {
@@ -45,6 +51,8 @@ export function isReferralRewardEligible(
   input: ReferralRewardEligibilityInput
 ): boolean {
   if (input.reward_eligible === false) return false
+  if (input.origin_kind === EMPLOYEE_ORIGIN_KIND) return false
+  if (input.source === EMPLOYEE_SALES_OPPORTUNITY_SOURCE) return false
   if (isNonRewardPublicSource(input.source)) return false
   if (isNonRewardErpLeadSource(input.erp_lead_source)) return false
   if (!input.indicator_profile_id?.trim()) return false
