@@ -21,7 +21,8 @@
     "test:h1b-release-window-pg": "node scripts/h1b-release-window-lab.mjs",
     "test:h1c-finalize-pg": "node scripts/h1c-finalize-fail-closed-lab.mjs",
     "test:i1-ledger-foundation": "npx tsx --test lib/finance/employee-commission-payroll-ledger.architecture.test.ts",
-    "test:i1-ledger-pg": "node scripts/i1-ledger-foundation-lab.mjs"
+    "test:i1-ledger-pg": "node scripts/i1-ledger-foundation-lab.mjs",
+    "test:i1b-ledger-fixes-pg": "node scripts/i1b-ledger-fixes-lab.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

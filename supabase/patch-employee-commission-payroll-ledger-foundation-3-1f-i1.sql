@@ -20,10 +20,26 @@
 -- default; criar entitlements/competências/linhas; backfill; retroatividade;
 -- remoção em cascata de dado financeiro; ativar qualquer regra.
 --
--- Dinheiro: numeric(10,2) BRL, arredondamento explícito round(x, 2).
+-- Dinheiro: numeric(10,2) BRL. Percentual: fração numeric(7,6) (2% = 0.020000),
+-- sem arredondar a taxa; somente o valor monetário final usa round(x, 2).
 -- Tempo: timestamptz em UTC; competência em America/Sao_Paulo; date para dias.
+--
+-- 3.1F-I1B (correções da revisão I2, antes de qualquer aplicação remota):
+--   * attributions append-only + UNIQUE(opportunity_id, employee_id);
+--   * entitlements congelados após accrued, grafo de status somente adiante;
+--   * snapshots com esquema fechado (chaves + tipos);
+--   * linhas de folha com FKs explícitas (sem source_table/source_id livres);
+--   * finance_audit_events valida existência da entidade (CASE estático);
+--   * nenhuma SQL dinâmica (sem EXECUTE/format) nesta migration;
+--   * lock_timeout/statement_timeout locais: aborta inteira, sem retry interno.
 
 begin;
+
+-- Estratégia de lock (3.1F-I1B): nunca esperar indefinidamente. Se um lock não
+-- for obtido em 1500ms, a transação inteira aborta (nada fica aplicado). Não há
+-- retry dentro da migration; nova tentativa somente em sprint controlada.
+set local lock_timeout = '1500ms';
+set local statement_timeout = '60s';
 
 -- ============================================================
 -- 1. Helpers
@@ -58,6 +74,247 @@ as $$
   select p is not null
     and jsonb_typeof(p) = 'object'
     and not exists (select 1 from jsonb_object_keys(p) k where not (k = any(p_allowed)));
+$$;
+
+-- ---- 3.1F-I1B: validadores de esquema fechado (sem SQL dinâmica) ----
+-- Convenções de tipo nos snapshots:
+--   ids          -> string UUID canônica
+--   versões      -> número JSON inteiro >= 1
+--   valores (R$) -> string decimal com no máximo 2 casas (ex.: "30.00"); string
+--                   evita perda de precisão de número JSON em clientes
+--   taxa         -> string decimal fração 0 < x <= 1 com no máximo 6 casas
+--   datas        -> string 'YYYY-MM-DD'
+--   instantes    -> string ISO-8601 COM offset (Z ou +HH:MM)
+--   booleanos    -> boolean JSON
+--   enums        -> listas fechadas abaixo
+-- Qualquer chave fora da lista, valor aninhado ou tipo diferente aborta.
+create or replace function public.finance_json_is_uuid(p jsonb)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select jsonb_typeof(p) = 'string'
+    and (p #>> '{}') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+$$;
+
+create or replace function public.finance_json_is_pos_int(p jsonb)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select jsonb_typeof(p) = 'number'
+    and (p #>> '{}') ~ '^[0-9]{1,9}$'
+    and (p #>> '{}')::integer >= 1;
+$$;
+
+create or replace function public.finance_json_is_money(p jsonb)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select jsonb_typeof(p) = 'string'
+    and (p #>> '{}') ~ '^-?[0-9]{1,8}(\.[0-9]{1,2})?$';
+$$;
+
+create or replace function public.finance_json_is_rate(p jsonb)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select jsonb_typeof(p) = 'string'
+    and (p #>> '{}') ~ '^(0(\.[0-9]{1,6})?|1(\.0{1,6})?)$'
+    and (p #>> '{}')::numeric > 0;
+$$;
+
+create or replace function public.finance_json_is_date(p jsonb)
+returns boolean
+language plpgsql
+immutable
+set search_path = public, pg_temp
+as $$
+begin
+  if jsonb_typeof(p) is distinct from 'string' or (p #>> '{}') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then
+    return false;
+  end if;
+  return to_char((p #>> '{}')::date, 'YYYY-MM-DD') = (p #>> '{}');
+exception when others then
+  return false;
+end;
+$$;
+
+create or replace function public.finance_json_is_instant(p jsonb)
+returns boolean
+language plpgsql
+immutable
+set search_path = public, pg_temp
+as $$
+begin
+  if jsonb_typeof(p) is distinct from 'string'
+     or (p #>> '{}') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$' then
+    return false;
+  end if;
+  perform (p #>> '{}')::timestamptz;
+  return true;
+exception when others then
+  return false;
+end;
+$$;
+
+-- rule_snapshot: chaves permitidas ruleId, ruleVersion, method, trigger,
+-- fixedAmount, percentageRate, percentageBase, effectiveFrom, effectiveUntil,
+-- attributionRole, currency. Obrigatórias: ruleId, ruleVersion, method, trigger,
+-- attributionRole, currency. percentageBase: SOMENTE null nesta fundação (base
+-- ERP não comprovada; será ampliado na sprint que comprovar a base).
+create or replace function public.finance_rule_snapshot_valid(p jsonb)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select p is not null
+    and jsonb_typeof(p) = 'object'
+    and public.finance_jsonb_keys_allowed(p, array[
+      'ruleId', 'ruleVersion', 'method', 'trigger', 'fixedAmount', 'percentageRate',
+      'percentageBase', 'effectiveFrom', 'effectiveUntil', 'attributionRole', 'currency'
+    ])
+    and p ?& array['ruleId', 'ruleVersion', 'method', 'trigger', 'attributionRole', 'currency']
+    and public.finance_json_is_uuid(p -> 'ruleId')
+    and public.finance_json_is_pos_int(p -> 'ruleVersion')
+    and jsonb_typeof(p -> 'method') = 'string'
+    and (p ->> 'method') in ('fixed_amount', 'percentage', 'first_invoice_value')
+    and jsonb_typeof(p -> 'trigger') = 'string'
+    and (p ->> 'trigger') in ('first_valid_invoice_generated', 'first_valid_invoice_fully_paid')
+    and jsonb_typeof(p -> 'attributionRole') = 'string'
+    and (p ->> 'attributionRole') in ('technician_originator', 'external_sales_originator', 'internal_sales_responsible')
+    and jsonb_typeof(p -> 'currency') = 'string'
+    and (p ->> 'currency') = 'BRL'
+    and (not (p ? 'fixedAmount') or jsonb_typeof(p -> 'fixedAmount') = 'null' or public.finance_json_is_money(p -> 'fixedAmount'))
+    and (not (p ? 'percentageRate') or jsonb_typeof(p -> 'percentageRate') = 'null' or public.finance_json_is_rate(p -> 'percentageRate'))
+    and (not (p ? 'percentageBase') or jsonb_typeof(p -> 'percentageBase') = 'null')
+    and (not (p ? 'effectiveFrom') or public.finance_json_is_date(p -> 'effectiveFrom'))
+    and (not (p ? 'effectiveUntil') or jsonb_typeof(p -> 'effectiveUntil') = 'null' or public.finance_json_is_date(p -> 'effectiveUntil'));
+$$;
+
+-- evidence_snapshot: chaves técnicas neutras. Os campos ERP NÃO estão
+-- comprovados: evidenceKind/evidenceSource aceitam somente placeholders de
+-- fundação ('not_collected', 'manual_review'), que NÃO provam nenhum campo ERP.
+-- Todos os valores podem ser null/ausentes; '{}' é válido.
+create or replace function public.finance_evidence_snapshot_valid(p jsonb)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select p is not null
+    and jsonb_typeof(p) = 'object'
+    and public.finance_jsonb_keys_allowed(p, array[
+      'evidenceKind', 'contractIdentityPresent', 'invoiceIdentityPresent', 'invoiceGeneratedAt',
+      'invoicePaidAt', 'documentAmount', 'paidAmount', 'fullPaymentProven', 'evidenceSource', 'evidenceVersion'
+    ])
+    and (not (p ? 'evidenceKind') or jsonb_typeof(p -> 'evidenceKind') = 'null'
+         or (jsonb_typeof(p -> 'evidenceKind') = 'string' and (p ->> 'evidenceKind') in ('not_collected', 'manual_review')))
+    and (not (p ? 'evidenceSource') or jsonb_typeof(p -> 'evidenceSource') = 'null'
+         or (jsonb_typeof(p -> 'evidenceSource') = 'string' and (p ->> 'evidenceSource') in ('not_collected', 'manual_review')))
+    and (not (p ? 'contractIdentityPresent') or jsonb_typeof(p -> 'contractIdentityPresent') in ('null', 'boolean'))
+    and (not (p ? 'invoiceIdentityPresent') or jsonb_typeof(p -> 'invoiceIdentityPresent') in ('null', 'boolean'))
+    and (not (p ? 'fullPaymentProven') or jsonb_typeof(p -> 'fullPaymentProven') in ('null', 'boolean'))
+    and (not (p ? 'invoiceGeneratedAt') or jsonb_typeof(p -> 'invoiceGeneratedAt') = 'null' or public.finance_json_is_instant(p -> 'invoiceGeneratedAt'))
+    and (not (p ? 'invoicePaidAt') or jsonb_typeof(p -> 'invoicePaidAt') = 'null' or public.finance_json_is_instant(p -> 'invoicePaidAt'))
+    and (not (p ? 'documentAmount') or jsonb_typeof(p -> 'documentAmount') = 'null' or public.finance_json_is_money(p -> 'documentAmount'))
+    and (not (p ? 'paidAmount') or jsonb_typeof(p -> 'paidAmount') = 'null' or public.finance_json_is_money(p -> 'paidAmount'))
+    and (not (p ? 'evidenceVersion') or jsonb_typeof(p -> 'evidenceVersion') = 'null' or public.finance_json_is_pos_int(p -> 'evidenceVersion'));
+$$;
+
+-- before_state/after_state de finance_audit_events: allow-list compartilhada,
+-- cada chave com tipo fechado. Sem texto livre.
+create or replace function public.finance_audit_snapshot_valid(p jsonb)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select p is not null
+    and jsonb_typeof(p) = 'object'
+    and public.finance_jsonb_keys_allowed(p, array[
+      'attribution_role', 'reward_created', 'method', 'trigger_kind', 'status', 'previous_status',
+      'active', 'retroactive', 'version', 'meal_eligible', 'line_type', 'competence_status', 'amount'
+    ])
+    and (not (p ? 'attribution_role') or (jsonb_typeof(p -> 'attribution_role') = 'string'
+         and (p ->> 'attribution_role') in ('technician_originator', 'external_sales_originator', 'internal_sales_responsible')))
+    and (not (p ? 'method') or (jsonb_typeof(p -> 'method') = 'string'
+         and (p ->> 'method') in ('fixed_amount', 'percentage', 'first_invoice_value')))
+    and (not (p ? 'trigger_kind') or (jsonb_typeof(p -> 'trigger_kind') = 'string'
+         and (p ->> 'trigger_kind') in ('first_valid_invoice_generated', 'first_valid_invoice_fully_paid')))
+    and (not (p ? 'status') or (jsonb_typeof(p -> 'status') = 'string' and (p ->> 'status') in (
+         'draft', 'superseded', 'inactive', 'worked', 'absent', 'vacation', 'leave', 'holiday', 'compensated',
+         'calculated', 'reviewed', 'pending_evidence', 'accrued', 'approved', 'included_in_payroll', 'paid', 'reversed', 'rejected')))
+    and (not (p ? 'previous_status') or (jsonb_typeof(p -> 'previous_status') = 'string'
+         and (p ->> 'previous_status') in ('draft', 'superseded', 'inactive')))
+    and (not (p ? 'competence_status') or (jsonb_typeof(p -> 'competence_status') = 'string'
+         and (p ->> 'competence_status') in ('draft', 'calculated', 'reviewed', 'reopened')))
+    and (not (p ? 'line_type') or (jsonb_typeof(p -> 'line_type') = 'string'
+         and (p ->> 'line_type') in ('adjustment', 'discount', 'other_earning')))
+    and (not (p ? 'reward_created') or jsonb_typeof(p -> 'reward_created') = 'boolean')
+    and (not (p ? 'active') or jsonb_typeof(p -> 'active') = 'boolean')
+    and (not (p ? 'retroactive') or jsonb_typeof(p -> 'retroactive') = 'boolean')
+    and (not (p ? 'meal_eligible') or jsonb_typeof(p -> 'meal_eligible') = 'boolean')
+    and (not (p ? 'version') or public.finance_json_is_pos_int(p -> 'version'))
+    and (not (p ? 'amount') or public.finance_json_is_money(p -> 'amount'));
+$$;
+
+-- snapshot de employee_compensation_profiles: {version:int, components:{salary,meal,transport,fuel:boolean}}.
+create or replace function public.finance_compensation_snapshot_valid(p jsonb)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select p is not null
+    and jsonb_typeof(p) = 'object'
+    and public.finance_jsonb_keys_allowed(p, array['version', 'components'])
+    and (not (p ? 'version') or public.finance_json_is_pos_int(p -> 'version'))
+    and (not (p ? 'components') or (
+      jsonb_typeof(p -> 'components') = 'object'
+      and public.finance_jsonb_keys_allowed(p -> 'components', array['salary', 'meal', 'transport', 'fuel'])
+      and not exists (
+        select 1 from jsonb_each(p -> 'components') e where jsonb_typeof(e.value) <> 'boolean'
+      )
+    ));
+$$;
+
+-- ---- 3.1F-I1B: convenção de percentual e arredondamento ----
+-- Percentual armazenado como FRAÇÃO numeric(7,6): 2% = 0.020000; 1,5% = 0.015000;
+-- 100% = 1.000000. Entrada válida: 0 < taxa <= 1 com no máximo 6 casas
+-- decimais; mais de 6 casas é REJEITADO (nunca arredondado silenciosamente).
+create or replace function public.finance_percentage_rate_valid(p_rate numeric)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select p_rate is not null and p_rate > 0 and p_rate <= 1 and p_rate = round(p_rate, 6);
+$$;
+
+-- Cálculo FUTURO (não usado por nenhuma RPC nesta sprint; função pura):
+--   gross_amount = percentage_base_amount * percentage_rate   (numeric exato)
+--   final_amount = round(gross_amount, 2)                     (numeric(10,2))
+-- round(numeric, 2) do PostgreSQL arredonda meio centavo para longe do zero:
+--   0.25 * 0.020000 = 0.005 -> 0.01; 10.25 * 0.5 = 5.125 -> 5.13;
+--   -5.125 -> -5.13 (estornos negativos simétricos). Nunca float/double.
+create or replace function public.finance_percentage_amount(p_base_amount numeric, p_rate numeric)
+returns numeric(10,2)
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select case
+    when p_base_amount is null or not public.finance_percentage_rate_valid(p_rate) then null
+    else round(p_base_amount * p_rate, 2)::numeric(10,2)
+  end;
 $$;
 
 -- Competência (primeiro dia do mês) de um instante, no calendário America/Sao_Paulo.
@@ -108,20 +365,41 @@ as $$
     and p.role in ('admin_master', 'admin_financeiro');
 $$;
 
-revoke all on function public.finance_jsonb_is_sanitized(jsonb) from public, anon, authenticated;
-revoke all on function public.finance_jsonb_keys_allowed(jsonb, text[]) from public, anon, authenticated;
-revoke all on function public.payroll_competence_month_for(timestamptz) from public, anon, authenticated;
-revoke all on function public.payroll_competence_period_end(date) from public, anon, authenticated;
-revoke all on function public.payroll_daily_benefit_preview(numeric, integer) from public, anon, authenticated;
+revoke all on function public.finance_jsonb_is_sanitized(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_jsonb_keys_allowed(jsonb, text[]) from public, anon, authenticated, service_role;
+revoke all on function public.payroll_competence_month_for(timestamptz) from public, anon, authenticated, service_role;
+revoke all on function public.payroll_competence_period_end(date) from public, anon, authenticated, service_role;
+revoke all on function public.payroll_daily_benefit_preview(numeric, integer) from public, anon, authenticated, service_role;
 revoke all on function public.finance_admin_actor_role() from public, anon, authenticated, service_role;
+revoke all on function public.finance_json_is_uuid(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_json_is_pos_int(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_json_is_money(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_json_is_rate(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_json_is_date(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_json_is_instant(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_rule_snapshot_valid(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_evidence_snapshot_valid(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_audit_snapshot_valid(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_compensation_snapshot_valid(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.finance_percentage_rate_valid(numeric) from public, anon, authenticated, service_role;
+revoke all on function public.finance_percentage_amount(numeric, numeric) from public, anon, authenticated, service_role;
 
 -- ============================================================
 -- 2. sales_opportunity_attributions — extensão ADITIVA
 -- ============================================================
--- Tabela criada em 3.1F-H1. Mantida a chave única existente
--- sales_opportunity_attributions_role_uq UNIQUE (opportunity_id, attribution_role):
--- um funcionário por papel por oportunidade (impede dois técnicos e, por
--- consequência, o mesmo funcionário duas vezes no mesmo papel).
+-- Tabela criada em 3.1F-H1. Decisão de produto congelada (3.1F-I1B):
+--   * até três papéis por oportunidade (technician_originator,
+--     external_sales_originator, internal_sales_responsible);
+--   * cada papel no máximo um funcionário: mantida a chave existente
+--     sales_opportunity_attributions_role_uq UNIQUE (opportunity_id, attribution_role);
+--   * o mesmo funcionário ocupa no máximo UM papel remunerável por oportunidade:
+--     nova chave sales_opportunity_attributions_employee_uq UNIQUE (opportunity_id, employee_id);
+--   * se a pessoa exerceu mais de uma função, Admin/Financeiro escolhe o papel
+--     principal; sem acúmulo automático; diferença futura somente por ajuste
+--     financeiro auditado; nenhum override nesta sprint;
+--   * sem reatribuição: linhas existentes são imutáveis (append-only). Uma
+--     reatribuição futura exigirá RPC específica + motivo + auditoria.
+-- Produção tem 0 attributions (preflight I2): a nova chave não exige backfill.
 -- "Responsável interno" mantém o nome comprovado internal_sales_responsible.
 alter table public.sales_opportunity_attributions
   add column if not exists idempotency_key text;
@@ -142,6 +420,54 @@ alter table public.sales_opportunity_attributions
   add constraint sales_opportunity_attributions_source_chk
   check (source in ('employee_opportunity_rpc', 'attribution_rpc'));
 
+-- UNIQUE (opportunity_id, employee_id): criada somente se ausente (reaplicação
+-- não reconstrói o índice). SQL estática, sem EXECUTE.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.sales_opportunity_attributions'::regclass
+      and conname = 'sales_opportunity_attributions_employee_uq'
+  ) then
+    alter table public.sales_opportunity_attributions
+      add constraint sales_opportunity_attributions_employee_uq unique (opportunity_id, employee_id);
+  end if;
+end$$;
+
+-- Imutabilidade: nenhuma coluna pode mudar (opportunity_id, employee_id,
+-- attribution_role, source, idempotency_key, attributed_at, attributed_by,
+-- created_at e também sector/membership/metadata), DELETE e TRUNCATE proibidos.
+-- Nenhuma coluna administrativa é necessária nesta fundação => append-only.
+-- Triggers disparam também para o owner da tabela (não depende de RLS).
+-- Efeito colateral documentado: attributed_by tem FK ON DELETE SET NULL (H1);
+-- excluir um perfil que atribuiu uma oportunidade passa a falhar (desativar o
+-- perfil em vez de excluí-lo), como já ocorre com finance_audit_events.actor_id.
+create or replace function public.trg_sales_opportunity_attributions_immutable()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if TG_OP = 'DELETE' then
+    raise exception 'sales_opportunity_attribution_no_delete' using errcode = 'P0001';
+  elsif TG_OP = 'TRUNCATE' then
+    raise exception 'sales_opportunity_attributions_append_only' using errcode = 'P0001';
+  end if;
+  raise exception 'sales_opportunity_attribution_immutable' using errcode = 'P0001';
+end;
+$$;
+revoke all on function public.trg_sales_opportunity_attributions_immutable() from public, anon, authenticated, service_role;
+
+drop trigger if exists trg_sales_opportunity_attributions_immutable on public.sales_opportunity_attributions;
+create trigger trg_sales_opportunity_attributions_immutable
+before update or delete on public.sales_opportunity_attributions
+for each row execute function public.trg_sales_opportunity_attributions_immutable();
+
+drop trigger if exists trg_sales_opportunity_attributions_no_truncate on public.sales_opportunity_attributions;
+create trigger trg_sales_opportunity_attributions_no_truncate
+before truncate on public.sales_opportunity_attributions
+for each statement execute function public.trg_sales_opportunity_attributions_immutable();
+
 alter table public.sales_opportunity_attributions enable row level security;
 
 -- ============================================================
@@ -153,11 +479,11 @@ create table if not exists public.finance_audit_events (
   actor_role text,
   action text not null,
   entity_type text not null,
-  entity_id uuid,
+  entity_id uuid not null,
   before_state jsonb not null default '{}'::jsonb,
   after_state jsonb not null default '{}'::jsonb,
   reason text,
-  operation_id text,
+  operation_id text not null,
   idempotency_key text,
   created_at timestamptz not null default timezone('utc', now()),
   constraint finance_audit_events_action_chk check (action in (
@@ -185,8 +511,13 @@ create table if not exists public.finance_audit_events (
     action not in ('approve', 'adjust', 'reverse', 'reopen', 'pay', 'payroll_adjustment_added')
     or char_length(btrim(coalesce(reason, ''))) >= 3
   ),
-  constraint finance_audit_events_before_safe_chk check (public.finance_jsonb_is_sanitized(before_state)),
-  constraint finance_audit_events_after_safe_chk check (public.finance_jsonb_is_sanitized(after_state)),
+  -- Allow-list fechada com tipos (finance_audit_snapshot_valid): sem chaves livres.
+  constraint finance_audit_events_before_safe_chk check (public.finance_audit_snapshot_valid(before_state)),
+  constraint finance_audit_events_after_safe_chk check (public.finance_audit_snapshot_valid(after_state)),
+  constraint finance_audit_events_operation_chk check (operation_id ~ '^[A-Za-z0-9_-]{16,128}$'),
+  constraint finance_audit_events_idem_chk check (
+    idempotency_key is null or idempotency_key ~ '^[A-Za-z0-9_-]{16,128}$'
+  ),
   constraint finance_audit_events_actor_role_chk check (
     actor_role is null or actor_role in ('admin_master', 'admin_financeiro', 'system')
   )
@@ -206,7 +537,7 @@ begin
   raise exception '%_append_only', TG_TABLE_NAME using errcode = 'P0001';
 end;
 $$;
-revoke all on function public.trg_finance_append_only() from public, anon, authenticated;
+revoke all on function public.trg_finance_append_only() from public, anon, authenticated, service_role;
 
 drop trigger if exists trg_finance_audit_events_append_only on public.finance_audit_events;
 create trigger trg_finance_audit_events_append_only
@@ -218,6 +549,49 @@ create trigger trg_finance_audit_events_no_truncate
 before truncate on public.finance_audit_events
 for each statement execute function public.trg_finance_append_only();
 
+-- Referência polimórfica validada no INSERT: entity_type é enum fechado e
+-- entity_id precisa existir na tabela correspondente (CASE estático, sem SQL
+-- dinâmica). Tipo/ID incompatíveis => entidade não encontrada => rejeitado.
+-- Os alvos não podem ser apagados (triggers no_delete / FK RESTRICT), logo o
+-- evento nunca fica órfão e nunca precisa ser apagado.
+create or replace function public.trg_finance_audit_events_validate_entity()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+declare
+  v_exists boolean;
+begin
+  v_exists := case NEW.entity_type
+    when 'sales_opportunity_attribution' then
+      exists (select 1 from public.sales_opportunity_attributions x where x.id = NEW.entity_id)
+    when 'employee_commission_rule' then
+      exists (select 1 from public.employee_commission_rules x where x.id = NEW.entity_id)
+    when 'employee_commission_entitlement' then
+      exists (select 1 from public.employee_commission_entitlements x where x.id = NEW.entity_id)
+    when 'employee_compensation_profile' then
+      exists (select 1 from public.employee_compensation_profiles x where x.id = NEW.entity_id)
+    when 'employee_worked_day' then
+      exists (select 1 from public.employee_worked_days x where x.id = NEW.entity_id)
+    when 'payroll_competence' then
+      exists (select 1 from public.payroll_competences x where x.id = NEW.entity_id)
+    when 'payroll_competence_line' then
+      exists (select 1 from public.payroll_competence_lines x where x.id = NEW.entity_id)
+    else false
+  end;
+  if NEW.entity_id is null or not coalesce(v_exists, false) then
+    raise exception 'finance_audit_entity_not_found' using errcode = 'P0001';
+  end if;
+  return NEW;
+end;
+$$;
+revoke all on function public.trg_finance_audit_events_validate_entity() from public, anon, authenticated, service_role;
+
+drop trigger if exists trg_finance_audit_events_validate_entity on public.finance_audit_events;
+create trigger trg_finance_audit_events_validate_entity
+before insert on public.finance_audit_events
+for each row execute function public.trg_finance_audit_events_validate_entity();
+
 create or replace function public.finance_audit_log(
   p_action text,
   p_entity_type text,
@@ -227,7 +601,7 @@ create or replace function public.finance_audit_log(
   p_reason text,
   p_operation_id text
 )
-returns void
+returns uuid
 language sql
 security definer
 set search_path = public, pg_temp
@@ -238,7 +612,8 @@ as $$
   values (
     auth.uid(), public.finance_admin_actor_role(), p_action, p_entity_type, p_entity_id,
     coalesce(p_before, '{}'::jsonb), coalesce(p_after, '{}'::jsonb), p_reason, p_operation_id
-  );
+  )
+  returning id;
 $$;
 revoke all on function public.finance_audit_log(text, text, uuid, jsonb, jsonb, text, text) from public, anon, authenticated, service_role;
 
@@ -359,7 +734,7 @@ begin
   return NEW;
 end;
 $$;
-revoke all on function public.trg_employee_commission_rules_immutable() from public, anon, authenticated;
+revoke all on function public.trg_employee_commission_rules_immutable() from public, anon, authenticated, service_role;
 
 drop trigger if exists trg_employee_commission_rules_immutable on public.employee_commission_rules;
 create trigger trg_employee_commission_rules_immutable
@@ -433,15 +808,13 @@ create table if not exists public.employee_commission_entitlements (
   constraint employee_commission_entitlements_paid_chk check (
     (status = 'paid') = (paid_at is not null and paid_by is not null)
   ),
+  -- 3.1F-I1B: esquemas FECHADOS (chaves + tipos). Sem PII, payload ERP,
+  -- tokens, cookies, resposta HTTP, observações livres ou chave extra.
   constraint employee_commission_entitlements_rule_snapshot_chk check (
-    public.finance_jsonb_is_sanitized(rule_snapshot)
+    public.finance_rule_snapshot_valid(rule_snapshot)
   ),
-  -- Forma sanitizada: somente chaves da allowlist; sem payload ERP/PII.
   constraint employee_commission_entitlements_evidence_shape_chk check (
-    public.finance_jsonb_is_sanitized(evidence_snapshot)
-    and public.finance_jsonb_keys_allowed(evidence_snapshot, array[
-      'evidence_kind', 'trigger_kind', 'evidence_at', 'proof_version', 'source', 'checks'
-    ])
+    public.finance_evidence_snapshot_valid(evidence_snapshot)
   )
 );
 
@@ -475,44 +848,88 @@ begin
   return NEW;
 end;
 $$;
-revoke all on function public.trg_employee_commission_entitlements_origin_guard() from public, anon, authenticated;
+revoke all on function public.trg_employee_commission_entitlements_origin_guard() from public, anon, authenticated, service_role;
 
 drop trigger if exists trg_employee_commission_entitlements_a_origin_guard on public.employee_commission_entitlements;
 create trigger trg_employee_commission_entitlements_a_origin_guard
 before insert or update of opportunity_id on public.employee_commission_entitlements
 for each row execute function public.trg_employee_commission_entitlements_origin_guard();
 
--- (b) Imutabilidade após accrued; paid somente a partir de included_in_payroll.
+-- (b) Imutabilidade + grafo de status somente adiante (3.1F-I1B).
+-- Grafo permitido (qualquer outra transição é proibida, inclusive regressão):
+--   pending_evidence    -> accrued | rejected
+--   accrued             -> approved | reversed | rejected
+--   approved            -> included_in_payroll | reversed
+--   included_in_payroll -> paid | reversed
+--   paid, reversed, rejected: TERMINAIS.
+-- Identidade (opportunity/employee/attribution/rule/role/trigger/idempotency/
+-- rule_snapshot/source/reversal_of/currency/created_at) nunca muda.
+-- Com OLD.status em (accrued, approved, included_in_payroll, paid, reversed,
+-- rejected) TODAS as colunas ficam congeladas (amount, competence_month,
+-- evidence_at, accrued_at, triggering_*_pk, evidence_snapshot...), exceto:
+--   status (pelo grafo), updated_at, approved_at/approved_by somente na
+--   transição para approved, paid_at/paid_by somente na transição para paid.
+-- amount nunca é recalculado; correção futura = nova linha reversal/adjustment.
+-- DELETE e TRUNCATE proibidos. O owner também passa por este trigger.
+-- Limitação aceita: superusuário com session_replication_role=replica não
+-- dispara triggers; não há defesa contra superusuário.
 create or replace function public.trg_employee_commission_entitlements_immutable()
 returns trigger
 language plpgsql
 set search_path = public, pg_temp
 as $$
+declare
+  v_allowed text[] := array['status', 'updated_at'];
 begin
   if TG_OP = 'DELETE' then
     raise exception 'employee_commission_entitlements_no_delete' using errcode = 'P0001';
+  elsif TG_OP = 'TRUNCATE' then
+    raise exception 'employee_commission_entitlements_no_delete' using errcode = 'P0001';
   end if;
-  if OLD.status <> 'pending_evidence' and (
-       NEW.employee_id is distinct from OLD.employee_id
-       or NEW.amount is distinct from OLD.amount
-       or NEW.rule_snapshot is distinct from OLD.rule_snapshot
-       or NEW.source is distinct from OLD.source
-       or NEW.rule_id is distinct from OLD.rule_id
-       or NEW.opportunity_id is distinct from OLD.opportunity_id) then
+
+  if (NEW.opportunity_id, NEW.employee_id, NEW.attribution_id, NEW.rule_id, NEW.attribution_role,
+      NEW.trigger_kind, NEW.idempotency_key, NEW.rule_snapshot, NEW.source, NEW.reversal_of,
+      NEW.currency, NEW.created_at)
+     is distinct from
+     (OLD.opportunity_id, OLD.employee_id, OLD.attribution_id, OLD.rule_id, OLD.attribution_role,
+      OLD.trigger_kind, OLD.idempotency_key, OLD.rule_snapshot, OLD.source, OLD.reversal_of,
+      OLD.currency, OLD.created_at) then
     raise exception 'employee_commission_entitlement_immutable_after_accrued' using errcode = 'P0001';
   end if;
-  if NEW.status = 'paid' and OLD.status is distinct from 'paid' and OLD.status <> 'included_in_payroll' then
-    raise exception 'employee_commission_entitlement_paid_requires_payroll' using errcode = 'P0001';
+
+  if NEW.status is distinct from OLD.status and not (
+       (OLD.status = 'pending_evidence' and NEW.status in ('accrued', 'rejected'))
+    or (OLD.status = 'accrued' and NEW.status in ('approved', 'reversed', 'rejected'))
+    or (OLD.status = 'approved' and NEW.status in ('included_in_payroll', 'reversed'))
+    or (OLD.status = 'included_in_payroll' and NEW.status in ('paid', 'reversed'))
+  ) then
+    raise exception 'employee_commission_entitlement_transition_forbidden' using errcode = 'P0001';
+  end if;
+
+  if OLD.status in ('accrued', 'approved', 'included_in_payroll', 'paid', 'reversed', 'rejected') then
+    if NEW.status = 'approved' and OLD.status <> 'approved' then
+      v_allowed := v_allowed || array['approved_at', 'approved_by'];
+    elsif NEW.status = 'paid' and OLD.status <> 'paid' then
+      v_allowed := v_allowed || array['paid_at', 'paid_by'];
+    end if;
+    if (to_jsonb(NEW) - v_allowed) is distinct from (to_jsonb(OLD) - v_allowed) then
+      raise exception 'employee_commission_entitlement_immutable_after_accrued' using errcode = 'P0001';
+    end if;
   end if;
   return NEW;
 end;
 $$;
-revoke all on function public.trg_employee_commission_entitlements_immutable() from public, anon, authenticated;
+revoke all on function public.trg_employee_commission_entitlements_immutable() from public, anon, authenticated, service_role;
 
 drop trigger if exists trg_employee_commission_entitlements_b_immutable on public.employee_commission_entitlements;
 create trigger trg_employee_commission_entitlements_b_immutable
 before update or delete on public.employee_commission_entitlements
 for each row execute function public.trg_employee_commission_entitlements_immutable();
+
+drop trigger if exists trg_employee_commission_entitlements_no_truncate on public.employee_commission_entitlements;
+create trigger trg_employee_commission_entitlements_no_truncate
+before truncate on public.employee_commission_entitlements
+for each statement execute function public.trg_employee_commission_entitlements_immutable();
 
 -- (z) PORTÃO DA FUNDAÇÃO: nenhuma linha pode ser criada nesta sprint.
 create or replace function public.trg_employee_commission_entitlements_foundation_gate()
@@ -524,7 +941,7 @@ begin
   raise exception 'financial_rules_inactive' using errcode = 'P0001';
 end;
 $$;
-revoke all on function public.trg_employee_commission_entitlements_foundation_gate() from public, anon, authenticated;
+revoke all on function public.trg_employee_commission_entitlements_foundation_gate() from public, anon, authenticated, service_role;
 
 drop trigger if exists trg_employee_commission_entitlements_z_foundation_gate on public.employee_commission_entitlements;
 create trigger trg_employee_commission_entitlements_z_foundation_gate
@@ -593,7 +1010,7 @@ create table if not exists public.employee_compensation_profiles (
   constraint employee_compensation_profiles_status_chk check (status in ('draft', 'active', 'inactive')),
   -- PORTÃO DA FUNDAÇÃO: nenhuma configuração ativa nesta sprint.
   constraint employee_compensation_profiles_foundation_inactive_chk check (status <> 'active'),
-  constraint employee_compensation_profiles_snapshot_chk check (public.finance_jsonb_is_sanitized(snapshot))
+  constraint employee_compensation_profiles_snapshot_chk check (public.finance_compensation_snapshot_valid(snapshot))
 );
 
 comment on table public.employee_compensation_profiles is
@@ -623,7 +1040,7 @@ begin
   return NEW;
 end;
 $$;
-revoke all on function public.trg_employee_compensation_profiles_immutable() from public, anon, authenticated;
+revoke all on function public.trg_employee_compensation_profiles_immutable() from public, anon, authenticated, service_role;
 
 drop trigger if exists trg_employee_compensation_profiles_immutable on public.employee_compensation_profiles;
 create trigger trg_employee_compensation_profiles_immutable
@@ -646,7 +1063,7 @@ as $$
     case when p.fuel_enabled and p.show_fuel then 'fuel' end
   ], null);
 $$;
-revoke all on function public.employee_compensation_visible_components(public.employee_compensation_profiles) from public, anon, authenticated;
+revoke all on function public.employee_compensation_visible_components(public.employee_compensation_profiles) from public, anon, authenticated, service_role;
 
 -- ============================================================
 -- 7. payroll_competences (antes de worked_days: o guard a referencia)
@@ -701,7 +1118,8 @@ create table if not exists public.payroll_competences (
   ),
   -- PORTÃO DA FUNDAÇÃO: fechamento/pagamento não existem nesta sprint.
   constraint payroll_competences_foundation_no_close_pay_chk check (status not in ('closed', 'paid')),
-  constraint payroll_competences_metadata_chk check (public.finance_jsonb_is_sanitized(metadata))
+  -- Metadados livres não existem nesta fundação: somente objeto vazio.
+  constraint payroll_competences_metadata_chk check (metadata = '{}'::jsonb)
 );
 
 -- Uma versão vigente por funcionário + competência.
@@ -732,7 +1150,7 @@ begin
   return NEW;
 end;
 $$;
-revoke all on function public.trg_payroll_competences_guard() from public, anon, authenticated;
+revoke all on function public.trg_payroll_competences_guard() from public, anon, authenticated, service_role;
 
 drop trigger if exists trg_payroll_competences_guard on public.payroll_competences;
 create trigger trg_payroll_competences_guard
@@ -793,10 +1211,16 @@ begin
   )) then
     raise exception 'competence_closed_requires_adjustment' using errcode = 'P0001';
   end if;
+  -- Dia que já explica uma linha de folha (meal) não pode mudar (3.1F-I1B).
+  if TG_OP = 'UPDATE' and exists (
+    select 1 from public.payroll_competence_lines l where l.worked_day_id = OLD.id
+  ) then
+    raise exception 'worked_day_referenced_by_payroll_line' using errcode = 'P0001';
+  end if;
   return NEW;
 end;
 $$;
-revoke all on function public.trg_employee_worked_days_closed_guard() from public, anon, authenticated;
+revoke all on function public.trg_employee_worked_days_closed_guard() from public, anon, authenticated, service_role;
 
 drop trigger if exists trg_employee_worked_days_closed_guard on public.employee_worked_days;
 create trigger trg_employee_worked_days_closed_guard
@@ -810,8 +1234,13 @@ create table if not exists public.payroll_competence_lines (
   id uuid primary key default gen_random_uuid(),
   competence_id uuid not null references public.payroll_competences(id) on delete restrict,
   line_type text not null,
-  source_table text,
-  source_id uuid,
+  -- 3.1F-I1B: referências EXPLÍCITAS (FK ON DELETE RESTRICT) em vez de
+  -- source_table/source_id livres. Exatamente as referências do tipo; demais NULL.
+  commission_entitlement_id uuid references public.employee_commission_entitlements(id) on delete restrict,
+  compensation_profile_id uuid references public.employee_compensation_profiles(id) on delete restrict,
+  worked_day_id uuid references public.employee_worked_days(id) on delete restrict,
+  adjustment_audit_event_id uuid references public.finance_audit_events(id) on delete restrict,
+  reversal_of_line_id uuid references public.payroll_competence_lines(id) on delete restrict,
   description text not null,
   quantity numeric(10,2) not null default 1,
   unit_amount numeric(10,2),
@@ -826,10 +1255,29 @@ create table if not exists public.payroll_competence_lines (
     'base_salary', 'commission', 'meal', 'transport', 'fuel',
     'other_earning', 'discount', 'adjustment', 'reversal'
   )),
-  constraint payroll_competence_lines_source_chk check (
-    source_table is null or source_table in (
-      'employee_commission_entitlements', 'employee_worked_days', 'employee_compensation_profiles'
-    )
+  -- Referências por tipo de linha:
+  --   commission                      -> commission_entitlement_id
+  --   base_salary | transport | fuel  -> compensation_profile_id
+  --   meal                            -> compensation_profile_id + worked_day_id
+  --                                      (uma linha por dia trabalhado elegível, quantity = 1)
+  --   adjustment | other_earning | discount -> adjustment_audit_event_id (linha manual auditada)
+  --   reversal                        -> reversal_of_line_id
+  constraint payroll_competence_lines_refs_chk check (
+    (line_type = 'commission'
+      and commission_entitlement_id is not null and compensation_profile_id is null and worked_day_id is null
+      and adjustment_audit_event_id is null and reversal_of_line_id is null)
+    or (line_type in ('base_salary', 'transport', 'fuel')
+      and commission_entitlement_id is null and compensation_profile_id is not null and worked_day_id is null
+      and adjustment_audit_event_id is null and reversal_of_line_id is null)
+    or (line_type = 'meal'
+      and commission_entitlement_id is null and compensation_profile_id is not null and worked_day_id is not null
+      and adjustment_audit_event_id is null and reversal_of_line_id is null and quantity = 1)
+    or (line_type in ('adjustment', 'other_earning', 'discount')
+      and commission_entitlement_id is null and compensation_profile_id is null and worked_day_id is null
+      and adjustment_audit_event_id is not null and reversal_of_line_id is null)
+    or (line_type = 'reversal'
+      and commission_entitlement_id is null and compensation_profile_id is null and worked_day_id is null
+      and adjustment_audit_event_id is null and reversal_of_line_id is not null)
   ),
   -- Descrição sanitizada: curta, sem sequências longas de dígitos (documentos/telefones) nem e-mail.
   constraint payroll_competence_lines_description_chk check (
@@ -849,11 +1297,23 @@ create table if not exists public.payroll_competence_lines (
   constraint payroll_competence_lines_reason_chk check (
     line_type not in ('adjustment', 'reversal', 'discount') or char_length(btrim(coalesce(reason, ''))) >= 3
   ),
-  constraint payroll_competence_lines_snapshot_chk check (public.finance_jsonb_is_sanitized(snapshot))
+  -- Snapshot fechado: somente {"manual": boolean}.
+  constraint payroll_competence_lines_snapshot_chk check (
+    public.finance_jsonb_keys_allowed(snapshot, array['manual'])
+    and (not (snapshot ? 'manual') or jsonb_typeof(snapshot -> 'manual') = 'boolean')
+  )
 );
 
 create index if not exists payroll_competence_lines_competence_idx
   on public.payroll_competence_lines (competence_id);
+-- Um dia trabalhado gera no máximo uma linha de refeição; uma linha é estornada no máximo uma vez;
+-- um evento de auditoria explica no máximo uma linha manual.
+create unique index if not exists payroll_competence_lines_meal_day_uidx
+  on public.payroll_competence_lines (worked_day_id) where line_type = 'meal';
+create unique index if not exists payroll_competence_lines_reversal_uidx
+  on public.payroll_competence_lines (reversal_of_line_id) where reversal_of_line_id is not null;
+create unique index if not exists payroll_competence_lines_adjustment_event_uidx
+  on public.payroll_competence_lines (adjustment_audit_event_id) where adjustment_audit_event_id is not null;
 
 create or replace function public.trg_payroll_competence_lines_guard()
 returns trigger
@@ -861,19 +1321,75 @@ language plpgsql
 set search_path = public, pg_temp
 as $$
 declare
-  v_status text;
+  v_comp public.payroll_competences;
+  v_ok boolean := true;
 begin
   if TG_OP <> 'INSERT' then
     raise exception 'payroll_competence_lines_append_only' using errcode = 'P0001';
   end if;
-  select c.status into v_status from public.payroll_competences c where c.id = NEW.competence_id;
-  if v_status in ('closed', 'paid') then
+  select * into v_comp from public.payroll_competences c where c.id = NEW.competence_id;
+  if v_comp.status in ('closed', 'paid') then
     raise exception 'payroll_competence_closed_immutable' using errcode = 'P0001';
+  end if;
+
+  -- Coerência das referências explícitas (SQL estática; sem nomes de tabela dinâmicos).
+  if NEW.commission_entitlement_id is not null then
+    v_ok := exists (
+      select 1 from public.employee_commission_entitlements e
+      where e.id = NEW.commission_entitlement_id
+        and e.employee_id = v_comp.employee_id
+        and e.competence_month = v_comp.competence_month
+        and e.status in ('approved', 'included_in_payroll')
+    );
+  end if;
+  if v_ok and NEW.compensation_profile_id is not null then
+    v_ok := exists (
+      select 1 from public.employee_compensation_profiles p
+      where p.id = NEW.compensation_profile_id
+        and p.employee_id = v_comp.employee_id
+        and (NEW.line_type <> 'base_salary' or p.salary_enabled)
+        and (NEW.line_type <> 'meal' or p.meal_enabled)
+        and (NEW.line_type <> 'transport' or p.transport_enabled)
+        and (NEW.line_type <> 'fuel' or p.fuel_enabled)
+    );
+  end if;
+  if v_ok and NEW.worked_day_id is not null then
+    v_ok := exists (
+      select 1 from public.employee_worked_days w
+      where w.id = NEW.worked_day_id
+        and w.employee_id = v_comp.employee_id
+        and w.work_date between v_comp.period_start and v_comp.period_end
+        and w.status = 'worked'
+        and w.meal_eligible
+    );
+  end if;
+  if v_ok and NEW.adjustment_audit_event_id is not null then
+    v_ok := exists (
+      select 1 from public.finance_audit_events a
+      where a.id = NEW.adjustment_audit_event_id
+        and a.action = 'payroll_adjustment_added'
+        and a.entity_type = 'payroll_competence'
+        and a.entity_id = NEW.competence_id
+    );
+  end if;
+  if v_ok and NEW.reversal_of_line_id is not null then
+    v_ok := exists (
+      select 1 from public.payroll_competence_lines o
+      join public.payroll_competences oc on oc.id = o.competence_id
+      where o.id = NEW.reversal_of_line_id
+        and oc.employee_id = v_comp.employee_id
+        and o.line_type <> 'reversal'
+        and o.amount > 0
+        and NEW.amount = -o.amount
+    );
+  end if;
+  if not v_ok then
+    raise exception 'payroll_line_reference_invalid' using errcode = 'P0001';
   end if;
   return NEW;
 end;
 $$;
-revoke all on function public.trg_payroll_competence_lines_guard() from public, anon, authenticated;
+revoke all on function public.trg_payroll_competence_lines_guard() from public, anon, authenticated, service_role;
 
 drop trigger if exists trg_payroll_competence_lines_guard on public.payroll_competence_lines;
 create trigger trg_payroll_competence_lines_guard
@@ -890,24 +1406,28 @@ for each statement execute function public.trg_finance_append_only();
 -- para anon/authenticated, inclusive SELECT de salário entre funcionários),
 -- sem DML direto; service_role somente SELECT (sem DELETE/TRUNCATE).
 -- ============================================================
-do $$
-declare
-  v_t text;
-begin
-  foreach v_t in array array[
-    'finance_audit_events',
-    'employee_commission_rules',
-    'employee_commission_entitlements',
-    'employee_compensation_profiles',
-    'employee_worked_days',
-    'payroll_competences',
-    'payroll_competence_lines'
-  ] loop
-    execute format('alter table public.%I enable row level security', v_t);
-    execute format('revoke all on table public.%I from public, anon, authenticated, service_role', v_t);
-    execute format('grant select on table public.%I to service_role', v_t);
-  end loop;
-end$$;
+-- SQL estática (3.1F-I1B: sem EXECUTE/format).
+alter table public.finance_audit_events enable row level security;
+revoke all on table public.finance_audit_events from public, anon, authenticated, service_role;
+grant select on table public.finance_audit_events to service_role;
+alter table public.employee_commission_rules enable row level security;
+revoke all on table public.employee_commission_rules from public, anon, authenticated, service_role;
+grant select on table public.employee_commission_rules to service_role;
+alter table public.employee_commission_entitlements enable row level security;
+revoke all on table public.employee_commission_entitlements from public, anon, authenticated, service_role;
+grant select on table public.employee_commission_entitlements to service_role;
+alter table public.employee_compensation_profiles enable row level security;
+revoke all on table public.employee_compensation_profiles from public, anon, authenticated, service_role;
+grant select on table public.employee_compensation_profiles to service_role;
+alter table public.employee_worked_days enable row level security;
+revoke all on table public.employee_worked_days from public, anon, authenticated, service_role;
+grant select on table public.employee_worked_days to service_role;
+alter table public.payroll_competences enable row level security;
+revoke all on table public.payroll_competences from public, anon, authenticated, service_role;
+grant select on table public.payroll_competences to service_role;
+alter table public.payroll_competence_lines enable row level security;
+revoke all on table public.payroll_competence_lines from public, anon, authenticated, service_role;
+grant select on table public.payroll_competence_lines to service_role;
 
 -- ============================================================
 -- 10. RPCs internas (SECURITY DEFINER; papel validado internamente)
@@ -976,6 +1496,14 @@ begin
     return jsonb_build_object('ok', false, 'code', 'attribution_role_taken');
   end if;
 
+  -- Decisão congelada: um funcionário ocupa no máximo um papel por oportunidade.
+  if exists (
+    select 1 from public.sales_opportunity_attributions a
+    where a.opportunity_id = p_opportunity_id and a.employee_id = p_employee_id
+  ) then
+    return jsonb_build_object('ok', false, 'code', 'employee_already_attributed');
+  end if;
+
   if not exists (select 1 from public.employees e where e.id = p_employee_id and e.status = 'active') then
     return jsonb_build_object('ok', false, 'code', 'employee_not_active');
   end if;
@@ -998,15 +1526,20 @@ begin
     return jsonb_build_object('ok', false, 'code', 'membership_not_active');
   end if;
 
-  insert into public.sales_opportunity_attributions (
-    opportunity_id, employee_id, attribution_role, sector_id, membership_id,
-    attributed_by, source, metadata, idempotency_key
-  )
-  values (
-    p_opportunity_id, p_employee_id, p_attribution_role, p_sector_id, v_membership_id,
-    auth.uid(), 'attribution_rpc', jsonb_build_object('rpc', 'attribute_employee_sales_opportunity'), p_idempotency_key
-  )
-  returning id into v_id;
+  begin
+    insert into public.sales_opportunity_attributions (
+      opportunity_id, employee_id, attribution_role, sector_id, membership_id,
+      attributed_by, source, metadata, idempotency_key
+    )
+    values (
+      p_opportunity_id, p_employee_id, p_attribution_role, p_sector_id, v_membership_id,
+      auth.uid(), 'attribution_rpc', jsonb_build_object('rpc', 'attribute_employee_sales_opportunity'), p_idempotency_key
+    )
+    returning id into v_id;
+  exception when unique_violation then
+    -- Defesa em profundidade (o FOR UPDATE da oportunidade já serializa).
+    return jsonb_build_object('ok', false, 'code', 'attribution_conflict');
+  end;
 
   perform public.finance_audit_log(
     'attribution_created', 'sales_opportunity_attribution', v_id, '{}'::jsonb,
@@ -1046,6 +1579,10 @@ begin
   end if;
   if p_idempotency_key is null or p_idempotency_key !~ '^[A-Za-z0-9_-]{16,128}$' then
     return jsonb_build_object('ok', false, 'code', 'invalid_idempotency_key');
+  end if;
+  -- Taxa: fração 0 < x <= 1, no máximo 6 casas; nunca arredondada (3.1F-I1B).
+  if p_percentage_rate is not null and not public.finance_percentage_rate_valid(p_percentage_rate) then
+    return jsonb_build_object('ok', false, 'code', 'invalid_percentage_rate');
   end if;
   perform pg_advisory_xact_lock(hashtextextended('igt.commission_rule.idem:' || p_idempotency_key, 0));
   select r.id into v_existing from public.employee_commission_rules r where r.idempotency_key = p_idempotency_key;
@@ -1109,6 +1646,10 @@ begin
   end if;
   if p_idempotency_key is null or p_idempotency_key !~ '^[A-Za-z0-9_-]{16,128}$' then
     return jsonb_build_object('ok', false, 'code', 'invalid_idempotency_key');
+  end if;
+
+  if p_percentage_rate is not null and not public.finance_percentage_rate_valid(p_percentage_rate) then
+    return jsonb_build_object('ok', false, 'code', 'invalid_percentage_rate');
   end if;
 
   select * into v_prev from public.employee_commission_rules r where r.id = p_previous_rule_id;
@@ -1403,6 +1944,7 @@ declare
   v_status text;
   v_existing public.payroll_competence_lines;
   v_id uuid;
+  v_event_id uuid;
   v_amount numeric(10,2);
 begin
   if v_role is null then
@@ -1440,13 +1982,21 @@ begin
     return jsonb_build_object('ok', false, 'code', 'competence_not_adjustable');
   end if;
 
+  -- 3.1F-I1B: o evento de auditoria é criado PRIMEIRO (entidade = competência)
+  -- e a linha manual o referencia por adjustment_audit_event_id. Ambos no mesmo
+  -- bloco: se a linha falhar, o evento também é desfeito.
   begin
+    v_event_id := public.finance_audit_log(
+      'payroll_adjustment_added', 'payroll_competence', p_competence_id, '{}'::jsonb,
+      jsonb_build_object('line_type', p_line_type, 'competence_status', v_status, 'amount', v_amount::text),
+      btrim(p_reason), p_idempotency_key
+    );
     insert into public.payroll_competence_lines (
-      competence_id, line_type, source_table, source_id, description, quantity, unit_amount, amount,
+      competence_id, line_type, adjustment_audit_event_id, description, quantity, unit_amount, amount,
       reason, snapshot, idempotency_key, created_by
     )
     values (
-      p_competence_id, p_line_type, null, null, btrim(coalesce(p_description, '')), 1, v_amount, v_amount,
+      p_competence_id, p_line_type, v_event_id, btrim(coalesce(p_description, '')), 1, v_amount, v_amount,
       btrim(p_reason), jsonb_build_object('manual', true), p_idempotency_key, auth.uid()
     )
     returning id into v_id;
@@ -1454,33 +2004,27 @@ begin
     return jsonb_build_object('ok', false, 'code', 'invalid_adjustment');
   end;
 
-  perform public.finance_audit_log(
-    'payroll_adjustment_added', 'payroll_competence_line', v_id, '{}'::jsonb,
-    jsonb_build_object('line_type', p_line_type, 'competence_status', v_status),
-    btrim(p_reason), p_idempotency_key
-  );
-  return jsonb_build_object('ok', true, 'idempotent', false, 'line_id', v_id);
+  return jsonb_build_object('ok', true, 'idempotent', false, 'line_id', v_id, 'audit_event_id', v_event_id);
 end;
 $$;
 
 -- Grants das RPCs: somente authenticated (papel validado internamente);
 -- sem PUBLIC/anon/service_role.
-do $$
-declare
-  v_sig text;
-begin
-  foreach v_sig in array array[
-    'public.attribute_employee_sales_opportunity(text, uuid, uuid, text, uuid)',
-    'public.create_commission_rule_draft(text, uuid, text, text, text, numeric, numeric, text, date, date)',
-    'public.version_commission_rule_draft(text, uuid, text, text, numeric, numeric, text, date, date)',
-    'public.configure_employee_compensation_draft(text, uuid, date, date, numeric, numeric, numeric, text, numeric, text, boolean, boolean, boolean, boolean)',
-    'public.record_employee_worked_day(text, uuid, date, text, boolean)',
-    'public.open_payroll_competence_draft(text, uuid, date)',
-    'public.add_manual_payroll_adjustment(text, uuid, text, numeric, text, text)'
-  ] loop
-    execute format('revoke all on function %s from public, anon, authenticated, service_role', v_sig);
-    execute format('grant execute on function %s to authenticated', v_sig);
-  end loop;
-end$$;
+-- SQL estática (3.1F-I1B: sem EXECUTE/format). O caminho futuro encaminha o
+-- JWT do usuário (auth.uid()); service_role NÃO executa estas RPCs.
+revoke all on function public.attribute_employee_sales_opportunity(text, uuid, uuid, text, uuid) from public, anon, authenticated, service_role;
+grant execute on function public.attribute_employee_sales_opportunity(text, uuid, uuid, text, uuid) to authenticated;
+revoke all on function public.create_commission_rule_draft(text, uuid, text, text, text, numeric, numeric, text, date, date) from public, anon, authenticated, service_role;
+grant execute on function public.create_commission_rule_draft(text, uuid, text, text, text, numeric, numeric, text, date, date) to authenticated;
+revoke all on function public.version_commission_rule_draft(text, uuid, text, text, numeric, numeric, text, date, date) from public, anon, authenticated, service_role;
+grant execute on function public.version_commission_rule_draft(text, uuid, text, text, numeric, numeric, text, date, date) to authenticated;
+revoke all on function public.configure_employee_compensation_draft(text, uuid, date, date, numeric, numeric, numeric, text, numeric, text, boolean, boolean, boolean, boolean) from public, anon, authenticated, service_role;
+grant execute on function public.configure_employee_compensation_draft(text, uuid, date, date, numeric, numeric, numeric, text, numeric, text, boolean, boolean, boolean, boolean) to authenticated;
+revoke all on function public.record_employee_worked_day(text, uuid, date, text, boolean) from public, anon, authenticated, service_role;
+grant execute on function public.record_employee_worked_day(text, uuid, date, text, boolean) to authenticated;
+revoke all on function public.open_payroll_competence_draft(text, uuid, date) from public, anon, authenticated, service_role;
+grant execute on function public.open_payroll_competence_draft(text, uuid, date) to authenticated;
+revoke all on function public.add_manual_payroll_adjustment(text, uuid, text, numeric, text, text) from public, anon, authenticated, service_role;
+grant execute on function public.add_manual_payroll_adjustment(text, uuid, text, numeric, text, text) to authenticated;
 
 commit;
