@@ -8,8 +8,101 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { startJ2Lab, zeroWriteSnapshot, J2_PATCH, J2_PREFLIGHT, J2_VERIFY, J2_ROLLBACK } from "./j2-lab-chain.mjs"
 
+// ---------------------------------------------------------------------------
+// 3.1F-J2E — verificação SEMÂNTICA de ocultação em list_employee_competence_lines.
+// Sem varredura de substring no JSON: schema fechado, tipo de linha/componente por
+// allowlist, consistência de totais. createdAt é metadado (validado só como data).
+// ---------------------------------------------------------------------------
+const LINES_TOP_KEYS = ["competenceMonth", "components", "lines", "status", "total", "version"]
+const LINE_KEYS = ["amount", "createdAt", "description", "kind", "quantity", "type"]
+const TOTAL_KEYS = ["amount", "kind"]
+const LINE_KIND_BY_TYPE = { commission: "commission", meal: "meal", other_earning: "otherEarnings", discount: "discounts" }
+// Política do funcionário A no lab: salário/transporte ocultos, combustível desabilitado, estorno nunca exposto.
+const A_LINES_POLICY = {
+  visibleComponents: ["commission", "discounts", "meal", "otherEarnings"],
+  hiddenComponents: ["salary", "baseSalary", "transport", "fuel", "reversal"],
+  visibleLineTypes: ["commission", "meal", "other_earning", "discount"],
+  hiddenLineTypes: ["base_salary", "transport", "fuel", "reversal"],
+}
+const sameKeys = (o, keys) => o !== null && typeof o === "object" && !Array.isArray(o) && Object.keys(o).sort().join(",") === [...keys].sort().join(",")
+const money = (v) => Math.round(Number(v) * 100)
+
+/** true se a resposta respeita a política; caso contrário, objeto com o motivo (sem varrer texto). */
+function checkCompetenceLinesHidden(r, policy) {
+  if (!sameKeys(r, LINES_TOP_KEYS)) return { reason: "top_keys", keys: Object.keys(r ?? {}).sort() }
+  if (!sameKeys(r.total, TOTAL_KEYS) || !["expected", "closed"].includes(r.total.kind)) return { reason: "total_schema" }
+  const comps = r.components
+  if (comps === null || typeof comps !== "object" || Array.isArray(comps)) return { reason: "components_schema" }
+  for (const k of Object.keys(comps)) {
+    if (policy.hiddenComponents.includes(k)) return { reason: "hidden_component", component: k }
+    if (!policy.visibleComponents.includes(k)) return { reason: "unknown_component", component: k }
+    if (!Number.isFinite(Number(comps[k])) || typeof comps[k] === "object") return { reason: "component_not_numeric", component: k }
+  }
+  if (!Array.isArray(r.lines)) return { reason: "lines_schema" }
+  for (const [i, l] of r.lines.entries()) {
+    if (!sameKeys(l, LINE_KEYS)) return { reason: "line_keys", index: i, keys: Object.keys(l ?? {}).sort() }
+    if (policy.hiddenLineTypes.includes(l.type)) return { reason: "hidden_line_type", index: i, type: l.type }
+    if (!policy.visibleLineTypes.includes(l.type)) return { reason: "unknown_line_type", index: i, type: l.type }
+    if (LINE_KIND_BY_TYPE[l.type] !== l.kind || !policy.visibleComponents.includes(l.kind)) return { reason: "line_kind", index: i }
+    if (!Number.isFinite(Number(l.amount)) || typeof l.amount === "object") return { reason: "line_amount_not_numeric", index: i }
+    if (typeof l.createdAt !== "string" || Number.isNaN(Date.parse(l.createdAt))) return { reason: "line_created_at", index: i }
+  }
+  const linesSum = r.lines.reduce((a, l) => a + money(l.amount), 0)
+  const compsSum = Object.values(comps).reduce((a, v) => a + money(v), 0)
+  if (money(r.total.amount) !== linesSum) return { reason: "total_not_sum_of_visible_lines" }
+  if (compsSum !== linesSum) return { reason: "components_not_sum_of_visible_lines" }
+  for (const k of policy.visibleComponents) {
+    if (!(k in comps)) continue
+    const fromLines = r.lines.filter((l) => l.kind === k).reduce((a, l) => a + money(l.amount), 0)
+    if (money(comps[k]) !== fromLines) return { reason: "component_not_sum_of_its_lines", component: k }
+  }
+  return true
+}
+
+/** Casos explícitos do 3.1F-J2E (fixtures sintéticas, sem banco). */
+function semanticSelfTest() {
+  const ts = "2026-11-12T21:11:19.833187-03:00" // contém "187" e nada mais de financeiro
+  const ln = (type, amount, description, createdAt = "2026-11-12T10:00:00.000001-03:00") => ({ kind: LINE_KIND_BY_TYPE[type] ?? type, type, amount, quantity: 1, createdAt, description })
+  const base = () => ({
+    competenceMonth: "2026-11-01", status: "draft", version: 1,
+    components: { commission: 30, meal: 22, otherEarnings: 10, discounts: -5 },
+    total: { kind: "expected", amount: 57 },
+    lines: [ln("commission", 30, "Linha lab"), ln("meal", 22, "Vale refeicao"), ln("other_earning", 10, "Outro ganho"), ln("discount", -5, "Desconto")],
+  })
+  const reorder = (o) => Array.isArray(o) ? o.map(reorder) : o && typeof o === "object" ? Object.fromEntries(Object.entries(o).reverse().map(([k, v]) => [k, reorder(v)])) : o
+  const cases = [
+    ["1_hidden_number_only_in_createdAt_passes", true, () => { const r = base(); r.lines.forEach((l) => { l.createdAt = ts }); r.lines[0].createdAt = "2026-11-12T21:43:21.094321-03:00"; return r }],
+    ["2a_hidden_value_in_forbidden_component_fails", false, () => { const r = base(); r.components.transport = 187.65; return r }],
+    ["2b_hidden_salary_component_fails", false, () => { const r = base(); r.components.salary = 4321.09; return r }],
+    ["2c_hidden_value_leaks_into_total_fails", false, () => { const r = base(); r.total.amount = 57 + 187.65; return r }],
+    ["3a_hidden_line_type_transport_fails", false, () => { const r = base(); r.lines.push(ln("transport", 187.65, "Transporte")); return r }],
+    ["3b_hidden_line_type_base_salary_fails", false, () => { const r = base(); r.lines.push({ ...ln("commission", 0, "x"), type: "base_salary", kind: "salary", amount: 4321.09 }); return r }],
+    ["3c_hidden_line_type_reversal_fails", false, () => { const r = base(); r.lines.push({ ...ln("discount", -187.65, "Estorno transporte"), type: "reversal" }); return r }],
+    ["4_hidden_component_fully_omitted_passes", true, () => { const r = base(); return "transport" in r.components || "salary" in r.components ? null : r }],
+    ["5_allowed_other_component_equal_187_passes", true, () => { const r = base(); r.components.otherEarnings = 187; r.lines[2].amount = 187; r.total.amount = 30 + 22 + 187 - 5; return r }],
+    ["6a_extra_sensitive_line_key_fails", false, () => { const r = base(); r.lines[0].baseSalary = 4321.09; return r }],
+    ["6b_extra_sensitive_top_key_fails", false, () => { const r = base(); r.salary = { amount: 4321.09 }; return r }],
+    ["6c_extra_total_key_fails", false, () => { const r = base(); r.total.hiddenAmount = 187.65; return r }],
+    ["7_json_key_order_irrelevant_passes", true, () => reorder(base())],
+    ["8_variable_timestamps_irrelevant_passes", true, () => { const r = base(); r.lines.forEach((l, i) => { l.createdAt = new Date(Date.now() - i * 1234567).toISOString() }); return r }],
+  ]
+  return cases.map(([name, expectPass, build]) => {
+    const r = build()
+    const v = r === null ? { reason: "fixture_invalid" } : checkCompetenceLinesHidden(r, A_LINES_POLICY)
+    return [name, (v === true) === expectPass ? "PASS" : "FAIL " + JSON.stringify(v)]
+  })
+}
+
+const selfTest = semanticSelfTest()
+if (process.argv.includes("--semantic-selftest")) {
+  for (const r of selfTest) console.log(r.join(" | "))
+  const n = selfTest.filter((r) => r[1] === "PASS").length
+  console.log(`J2E_SEMANTIC_SELFTEST=${n}/${selfTest.length}`)
+  process.exit(n === selfTest.length ? 0 : 1)
+}
+
 const res = []
-let ok = true
+let ok = selfTest.every((r) => r[1] === "PASS")
 const lab = await startJ2Lab({ applyJ2: false })
 const { c, REPO_ROOT } = lab
 const q = async (sql, p = []) => (await c.query(sql, p)).rows
@@ -230,7 +323,15 @@ try {
   const ln2 = await call("authenticated", P.A, `public.list_employee_competence_lines('${month}'::date)`)
   const ln2txt = JSON.stringify(ln2.r ?? {})
   await t("P2_A_lines_components_exact", () => (ln2.ok && Object.keys(ln2.r.components).sort().join(",") === "commission,discounts,meal,otherEarnings") || ln2.r?.components)
-  await t("P2_A_lines_hidden_types_absent", () => (ln2.r.lines.every((l) => !["base_salary", "transport", "fuel", "reversal"].includes(l.type)) && !/4321|187|Salario|Transporte|Estorno/.test(ln2txt)) || ln2txt)
+  // 3.1F-J2E: verificação semântica (schema fechado + allowlist de tipos/componentes + totais)
+  // e conjunto EXATO de linhas visíveis esperadas para A; sem varredura de substring no JSON.
+  const A_VISIBLE_LINES = ["commission|30|Linha lab", "discount|-5|Desconto", "meal|22|Vale refeicao", "other_earning|10|Outro ganho"]
+  await t("P2_A_lines_hidden_types_absent", () => {
+    const sem = checkCompetenceLinesHidden(ln2.r, A_LINES_POLICY)
+    if (sem !== true) return { sem, ln2: ln2txt }
+    const got = ln2.r.lines.map((l) => `${l.type}|${money(l.amount) / 100}|${l.description}`).sort()
+    return JSON.stringify(got) === JSON.stringify(A_VISIBLE_LINES) || { got }
+  })
   await t("P2_A_lines_total_expected_57", () => (ln2.r.total.kind === "expected" && Number(ln2.r.total.amount) === 57) || ln2.r.total)
   const lnB = await call("authenticated", P.A, `public.list_employee_competence_lines('${prevMonth}'::date)`)
   await t("P2_A_prev_month_closed_lines", () => (lnB.ok && lnB.r.total.kind === "closed") || lnB)
@@ -263,6 +364,8 @@ try {
   await lab.stop()
 }
 for (const r of res) console.log(r.join(" | "))
+for (const r of selfTest) console.log(["J2E_SELFTEST_" + r[0], r[1]].join(" | "))
+console.log(`J2E_SEMANTIC_SELFTEST=${selfTest.filter((r) => r[1] === "PASS").length}/${selfTest.length}`)
 const pass = res.filter((r) => r[1] === "PASS").length
 console.log(`J2_PG_TESTS=${pass}/${res.length}`)
 console.log(ok ? "J2_PG_LAB=PASS" : "J2_PG_LAB=FAIL")

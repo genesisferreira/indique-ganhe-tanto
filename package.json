@@ -23,7 +23,9 @@
     "test:i1-ledger-foundation": "npx tsx --test lib/finance/employee-commission-payroll-ledger.architecture.test.ts",
     "test:i1-ledger-pg": "node scripts/i1-ledger-foundation-lab.mjs",
     "test:i1b-ledger-fixes-pg": "node scripts/i1b-ledger-fixes-lab.mjs",
-    "test:j2-employee-portal": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --test lib/employee-portal/contracts.test.ts lib/employee-portal/employee-portal.architecture.test.ts lib/admin-remuneracao/permissions.test.ts",
+    "test:j2-employee-portal": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --experimental-test-module-mocks --test lib/employee-portal/contracts.test.ts lib/employee-portal/employee-portal.architecture.test.ts lib/admin-remuneracao/permissions.test.ts lib/employee-portal/api-gate.test.ts lib/employee-portal/route-handlers.test.ts",
+    "test:employee-portal-route-handlers": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --experimental-test-module-mocks --test lib/employee-portal/route-handlers.test.ts",
+    "test:j2-semantic-selftest": "node scripts/j2-employee-read-rpcs-lab.mjs --semantic-selftest",
     "test:j2-employee-read-pg": "node scripts/j2-employee-read-rpcs-lab.mjs",
     "test:j2-e2e": "node scripts/j2-local-e2e/run.mjs"
   },

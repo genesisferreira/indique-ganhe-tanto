@@ -114,6 +114,10 @@ Telas: `/admin/comerciais`, `/admin/indicacoes`, `/admin/funcionarios` (arquivos
 
 ## 9. Testes
 
-- `node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --test lib/employee-portal/*.test.ts lib/admin-remuneracao/*.test.ts`
-- `node scripts/j2-employee-read-rpcs-lab.mjs` (PostgreSQL de lab; inclui rollback/reaplicação e zero-write)
+- `pnpm run test:j2-employee-portal` (contratos, arquitetura, permissões, gate e os 5 route handlers reais;
+  inclui `--experimental-test-module-mocks`; sem a flag a suíte de route handlers fica em skip)
+- `pnpm run test:employee-portal-route-handlers` (somente os 5 route handlers reais, Node >= 22.3)
+- `node scripts/j2-employee-read-rpcs-lab.mjs` (PostgreSQL de lab; inclui rollback/reaplicação e zero-write).
+  Ocultação financeira verificada semanticamente (schema fechado, allowlist de tipo/componente, totais),
+  sem varredura de substring; `pnpm run test:j2-semantic-selftest` roda só os casos sintéticos (3.1F-J2E).
 - `node scripts/j2-local-e2e/run.mjs` (build local apontando para Supabase simulado em 127.0.0.1; screenshots 360×800, 390×844, 1366×768)
