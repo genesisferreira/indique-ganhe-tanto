@@ -59,6 +59,11 @@ Rollback: `rollback-employee-read-rpcs-3-1f-j2.sql` remove somente as 9 funçõe
   acessos, 0 parse, 0 RPC). Exceção ou erro de infraestrutura no Auth/profiles/employees => 503
   fechado `{ ok, errorClass: "employee_portal_unavailable", message }` com no-store/Pragma/
   Expires/`Vary: Cookie`, sem detalhe interno; sem sessão continua 401 e ausência comprovada 403.
+- **Cliente da sessão (3.1F-J2D):** `createEmployeeSessionClient()` devolve resultado discriminado;
+  exceção em `createClient()` => `{ ok:false, reason:"unavailable" }` => mesmo 503 fechado (nunca
+  401, sem fallback service role, sem retry). Ordem: cliente → getUser → profile → employee →
+  URL/params → validação → RPC. Contrato do framework (aceito): `context.params`/`request.url`
+  são resolvidos após o gate e fora do try/catch do gate.
 - Logs: somente nome da função e código do erro, ou a classe `employee_portal_unavailable` (sem PII, sem valores).
 
 ## 4. Política de status do funcionário

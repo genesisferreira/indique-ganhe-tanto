@@ -85,9 +85,8 @@ export function evaluateEmployeeEligibility(
 
 /** Passos 1–3. Não lê path/query. */
 export async function gateEmployeeSession(
-  client: EmployeeSessionClient | null
+  client: EmployeeSessionClient
 ): Promise<{ ok: true } | { ok: false; kind: PortalErrorKind }> {
-  if (!client) return { ok: false, kind: "unauthenticated" }
   const authRes = await client.auth.getUser()
   const user = authRes?.data?.user ?? null
   const uid = user?.id ? String(user.id) : null
@@ -208,6 +207,15 @@ export type LazyRequest = { readonly url: string }
 export type LazyRouteContext = { readonly params: PromiseLike<Record<string, string | string[] | undefined>> }
 export type LazyApiSource = { request: LazyRequest; context?: LazyRouteContext }
 
+/**
+ * 3.1F-J2D: resultado discriminado da criação do cliente da sessão. Ausência de sessão é
+ * decidida SÓ pelo getUser (401); falha ao criar o cliente é infraestrutura (503).
+ * Nunca usar null para os dois casos.
+ */
+export type EmployeeSessionResult =
+  | { ok: true; client: EmployeeSessionClient }
+  | { ok: false; reason: "unavailable" }
+
 async function resolveInputAfterGate<P>(spec: EmployeeApiSpec<P>, source: LazyApiSource): Promise<ApiInput> {
   let path: string | null = null
   if (spec.pathParam) {
@@ -225,10 +233,16 @@ async function resolveInputAfterGate<P>(spec: EmployeeApiSpec<P>, source: LazyAp
  *   3. somente se permitido: params → URL/searchParams → validação → 4. exatamente uma RPC.
  */
 export async function runEmployeeGet<P>(
-  client: EmployeeSessionClient | null,
+  session: EmployeeSessionResult,
   spec: EmployeeApiSpec<P>,
   source: LazyApiSource
 ): Promise<ApiOutcome> {
+  // 3.1F-J2D: falha ao criar o cliente da sessão é infraestrutura => 503 (nunca 401).
+  if (!session.ok) {
+    console.warn(`[employee-portal] ${EMPLOYEE_PORTAL_UNAVAILABLE_CLASS}`)
+    return errorOutcome("unavailable")
+  }
+  const client = session.client
   let gate: Awaited<ReturnType<typeof gateEmployeeSession>>
   try {
     gate = await gateEmployeeSession(client)
@@ -241,7 +255,7 @@ export async function runEmployeeGet<P>(
   const input = await resolveInputAfterGate(spec, source)
   const parsed = spec.parse(input)
   if (!parsed.ok) return parsed.outcome
-  const { data, error } = await (client as EmployeeSessionClient).rpc(spec.rpc, spec.args(parsed.value))
+  const { data, error } = await client.rpc(spec.rpc, spec.args(parsed.value))
   if (error) {
     const kind = classifyRpcError(error)
     if (kind === "unavailable") {

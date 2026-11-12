@@ -7,6 +7,7 @@ import {
   runEmployeeGet,
   type EmployeeApiSpec,
   type EmployeeSessionClient,
+  type EmployeeSessionResult,
   type LazyApiSource,
 } from "@/lib/employee-portal/api-gate"
 
@@ -167,20 +168,24 @@ function spySource(spec: EmployeeApiSpec<any>, q: string, path: string | undefin
   return { source, spied, counts }
 }
 
-async function call(who: Who, spec: EmployeeApiSpec<any>, q: string, path?: string, client?: (f: ReturnType<typeof fakeClient>) => EmployeeSessionClient | null) {
+async function call(who: Who, spec: EmployeeApiSpec<any>, q: string, path?: string, client?: (f: ReturnType<typeof fakeClient>) => EmployeeSessionClient | EmployeeSessionResult) {
   const f = fakeClient(who)
   const gatePassed = () => ALLOWED.includes(who) && f.log.includes("select:employees")
   const { source, spied, counts } = spySource(spec, q, path, gatePassed)
-  const out = await runEmployeeGet(client ? client(f) : f.client, spied, source)
+  const picked = client ? client(f) : f.client
+  const session: EmployeeSessionResult = "ok" in picked ? picked : { ok: true, client: picked }
+  const out = await runEmployeeGet(session, spied, source)
   return { ...out, ...f, counts }
 }
 
 for (const route of ROUTES) {
   describe(`3.1F-J2B ${route.name}: auth → papel → validação → RPC`, () => {
-    it("sem cliente de sessão => 401, 0 RPC", async () => {
-      const r = await call("anon", route.spec, route.valid.q, route.valid.path, () => null)
-      assert.equal(r.status, 401)
+    it("3.1F-J2D: criação do cliente da sessão falhou => 503 (não 401), 0 leitura/parse/RPC", async () => {
+      const r = await call("funcionario", route.spec, route.valid.q, route.valid.path, () => ({ ok: false, reason: "unavailable" }))
+      assert.equal(r.status, 503)
       assert.deepEqual(r.counts, { url: 0, params: 0, parse: 0 })
+      assert.deepEqual(r.log, [])
+      assert.equal(r.rpcCalls.length, 0)
     })
     it("ausente + válido => 401, 0 RPC, nenhuma leitura", async () => {
       const r = await call("anon", route.spec, route.valid.q, route.valid.path)
@@ -276,7 +281,7 @@ describe("3.1F-J2B política de elegibilidade igual à RPC", () => {
       ...f.client,
       from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "x", code: "57014" } }) }) }) }),
     }
-    const out = await runEmployeeGet(broken, EMPLOYEE_API.dashboard, { request: { url: "http://lab.local/api/employee/dashboard" } })
+    const out = await runEmployeeGet({ ok: true, client: broken }, EMPLOYEE_API.dashboard, { request: { url: "http://lab.local/api/employee/dashboard" } })
     assert.equal(out.status, 503)
     assert.equal(f.rpcCalls.length, 0)
   })
@@ -418,3 +423,38 @@ describe("3.1F-J2C erros RETORNADOS (sem exceção): fail-closed sem ausência s
     assert.deepEqual(d.body, { ok: false, message: "Acesso não permitido para este perfil." })
   })
 })
+
+// ---------------------------------------------------------------------------
+// 3.1F-J2D — criação do cliente da sessão: matriz de 6 cenários por rota
+// ---------------------------------------------------------------------------
+for (const route of ROUTES) {
+  describe(`3.1F-J2D ${route.name}: createClient/sessão/JWT/getUser/profile/employee`, () => {
+    const noUser = (error: Record<string, unknown>) => (f: ReturnType<typeof fakeClient>): EmployeeSessionClient => ({
+      ...f.client,
+      auth: { getUser: async () => { f.log.push("auth.getUser"); return { data: { user: null }, error } } },
+    })
+    const cases: { label: string; status: number; client: (f: ReturnType<typeof fakeClient>) => EmployeeSessionClient | EmployeeSessionResult }[] = [
+      { label: "createClient lança", status: 503, client: () => ({ ok: false, reason: "unavailable" }) },
+      { label: "sem sessão normal", status: 401, client: noUser({ name: "AuthSessionMissingError", status: 400 }) },
+      { label: "JWT inválido normal", status: 401, client: noUser({ name: "AuthApiError", status: 403 }) },
+      { label: "getUser lança", status: 503, client: (f) => throwingClient(f, "getUser") },
+      { label: "profile lança", status: 503, client: (f) => throwingClient(f, "profiles") },
+      { label: "employee lança", status: 503, client: (f) => throwingClient(f, "employees") },
+    ]
+    for (const c of cases) {
+      it(`${c.label} => ${c.status}, URL 0, params 0, parse 0, RPC 0`, async () => {
+        const { value: r, warns } = await captureWarn(() => call("funcionario", route.spec, route.valid.q, route.valid.path, c.client))
+        assert.equal(r.status, c.status)
+        assert.deepEqual(r.counts, { url: 0, params: 0, parse: 0 })
+        assert.equal(r.rpcCalls.length, 0)
+        if (c.status === 503) {
+          assertClosedUnavailable(r.body)
+          assert.deepEqual(warns, [["[employee-portal] employee_portal_unavailable"]])
+        } else {
+          assert.deepEqual(r.body, { ok: false, message: "Sessão não encontrada. Faça login novamente." })
+          assert.deepEqual(warns, [])
+        }
+      })
+    }
+  })
+}

@@ -1,7 +1,7 @@
 import "server-only"
 
 import { createClient } from "@/lib/supabase/server"
-import type { EmployeeSessionClient } from "@/lib/employee-portal/api-gate"
+import type { EmployeeSessionClient, EmployeeSessionResult } from "@/lib/employee-portal/api-gate"
 import {
   classifyRpcError,
   toCompensationSummaryResponse,
@@ -63,13 +63,14 @@ async function sessionRpc(fn: ReadRpc, args: Record<string, unknown>): Promise<P
 
 /**
  * 3.1F-J2B: cliente da SESSÃO para as APIs GET (gate + RPC). Nunca service role.
- * Retorna null quando não há configuração/sessão utilizável (=> 401 no gate).
+ * 3.1F-J2D: exceção ao criar o cliente da sessão => { ok:false, reason:"unavailable" } (503).
+ * Sem inspecionar a exceção, sem log de detalhe, sem fallback service role e sem retry.
  */
-export async function createEmployeeSessionClient(): Promise<EmployeeSessionClient | null> {
+export async function createEmployeeSessionClient(): Promise<EmployeeSessionResult> {
   try {
-    return (await createClient()) as unknown as EmployeeSessionClient
+    return { ok: true, client: (await createClient()) as unknown as EmployeeSessionClient }
   } catch {
-    return null
+    return { ok: false, reason: "unavailable" }
   }
 }
 
