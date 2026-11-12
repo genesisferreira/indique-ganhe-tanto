@@ -175,14 +175,12 @@ export default function AdminDashboard() {
           value={totalIndicadores}
           subtitle={`${indicadoresAtivos} ativos`}
           icon={Users}
-          trend={{ value: 12, isPositive: true }}
         />
         <StatCard
           title="Taxa de Conversao"
           value={`${taxaConversao}%`}
           subtitle={`${indicacoesAprovadas} de ${totalIndicacoes}`}
           icon={TrendingUp}
-          trend={{ value: 5.2, isPositive: true }}
         />
         <StatCard
           title="Pagamentos Pendentes"

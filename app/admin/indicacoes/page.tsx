@@ -16,15 +16,24 @@ import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { LoaderStatus } from "@/components/ui/loader-status"
+import { useGuardedLoader } from "@/hooks/use-guarded-loader"
+import {
+  dataOutcome,
+  LOADER_TIMEOUT_MESSAGE,
+  loaderErrorMessage,
+} from "@/lib/client/guarded-loader"
+import {
+  loadAdminIndicacoesBundle,
+  type AdminIndicacoesBundle,
+} from "@/lib/admin-legacy/indicacoes-loader"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { indicacoes, comerciais } from "@/lib/services/mock-data.service"
 import {
   assignReferralToCommercialFromSupabase,
-  getAuthProfileBasicsFromSupabase,
-  loadAdminComerciaisFromSupabase,
-  loadAdminReferralsFromSupabase,
   updateAdminReferralStatusFromSupabase,
 } from "@/lib/services"
 import { Search, Eye, MoreHorizontal, UserPlus, RefreshCw } from "lucide-react"
@@ -61,85 +70,66 @@ export default function AdminIndicacoesPage() {
   const [statusFilter, setStatusFilter] = useState<string>("todos")
   const [lista, setLista] = useState<Indicacao[]>([])
   const [comerciaisLista, setComerciaisLista] = useState<Comercial[]>([])
-  const [carregando, setCarregando] = useState(true)
+  const [comerciaisDisponiveis, setComerciaisDisponiveis] = useState(true)
   const [authRole, setAuthRole] = useState<UserRole | null>(null)
   const [dataVersion, setDataVersion] = useState(0)
+  const [hasLoaded, setHasLoaded] = useState(false)
 
   const podeMutar = authRole === "admin_master" || authRole === "admin_financeiro"
 
-  const loadAdminReferrals = useCallback(async (opts?: { silent?: boolean }) => {
-    if (!opts?.silent) setCarregando(true)
+  // 3.1F-K1: um carregamento lógico = uma resolução de identidade (auth.getUser 1×).
+  // Estados explícitos; erro/timeout nunca viram "zero indicações"; sem retry automático.
+  const loadBundle = useCallback(async ({ signal }: { signal: AbortSignal }) => {
     if (isDataProviderMock()) {
-      setLista([...indicacoes])
-      setComerciaisLista([...comerciais])
-      if (process.env.NODE_ENV === "development") {
-        console.log("[page-data:debug]", {
-          page: "/admin/indicacoes",
-          source: "mock",
-          total: indicacoes.length,
-        })
+      const bundle: AdminIndicacoesBundle = {
+        lista: [...indicacoes],
+        comerciais: [...comerciais],
+        comerciaisDisponiveis: true,
+        role: "admin_master",
       }
-      setCarregando(false)
-      return
+      return dataOutcome(bundle, bundle.lista.length === 0)
     }
-    const [remote, comRemoto, basics] = await Promise.all([
-      loadAdminReferralsFromSupabase(),
-      loadAdminComerciaisFromSupabase(),
-      getAuthProfileBasicsFromSupabase(),
-    ])
-    setAuthRole(basics?.role ?? null)
-    if (!remote.ok) {
-      console.error("[admin-indicacoes:error]", remote.error, remote.meta)
-      toast.error(
-        remote.error ||
-          "Não foi possível carregar as indicações. Veja o console."
-      )
-      setLista([])
-      setComerciaisLista([...(comRemoto ?? [])])
-      setCarregando(false)
-      return
-    }
-    if (process.env.NODE_ENV === "development") {
-      console.log("[page-data:debug]", {
-        page: "/admin/indicacoes",
-        source: "supabase",
-        total: remote.data.length,
-        meta: remote.meta,
-      })
-    }
-    const listaRemota = [...remote.data]
-    setLista(listaRemota)
-    setComerciaisLista([...(comRemoto ?? [])])
+    return loadAdminIndicacoesBundle(signal)
+  }, [])
+  const { state, reload } = useGuardedLoader<AdminIndicacoesBundle>(loadBundle, "admin-indicacoes")
+  const carregando = state.status === "idle" || state.status === "loading"
+
+  useEffect(() => {
+    if (state.status !== "success" && state.status !== "empty") return
+    const bundle = state.data
+    setLista(bundle.lista)
+    setComerciaisLista(bundle.comerciais)
+    setComerciaisDisponiveis(bundle.comerciaisDisponiveis)
+    setAuthRole(bundle.role)
+    setHasLoaded(true)
+    setDataVersion((v) => v + 1)
     devLogCommercialSla("admin indicacoes", {
-      total: listaRemota.length,
+      total: bundle.lista.length,
       sla: {
-        warning: listaRemota.filter((i) => i.slaLevel === "warning").length,
-        critical: listaRemota.filter((i) => i.slaLevel === "critical").length,
-        redistribution_ready: listaRemota.filter(
+        warning: bundle.lista.filter((i) => i.slaLevel === "warning").length,
+        critical: bundle.lista.filter((i) => i.slaLevel === "critical").length,
+        redistribution_ready: bundle.lista.filter(
           (i) => i.slaLevel === "redistribution_ready"
         ).length,
       },
     })
-    setCarregando(false)
-  }, [])
+  }, [state])
 
-  useEffect(() => {
-    void loadAdminReferrals()
-  }, [loadAdminReferrals])
+  /** Recarregamento silencioso (realtime/mutação): coalescido, mantém a lista atual visível. */
+  const loadAdminReferrals = useCallback(
+    (opts?: { silent?: boolean }) => reload({ silent: opts?.silent ?? false }),
+    [reload]
+  )
 
   useEffect(() => {
     return subscribeReferralDataMutated(() => {
-      void loadAdminReferrals({ silent: true }).then(() => {
-        setDataVersion((v) => v + 1)
-      })
+      void loadAdminReferrals({ silent: true })
     })
   }, [loadAdminReferrals])
 
   useRealtimeReload(
     () => {
-      void loadAdminReferrals({ silent: true }).then(() => {
-        setDataVersion((v) => v + 1)
-      })
+      void loadAdminReferrals({ silent: true })
     },
     REALTIME_TABLES_ADMIN,
     { enabled: !isDataProviderMock() }
@@ -147,15 +137,14 @@ export default function AdminIndicacoesPage() {
 
   const refreshAfterMutation = useCallback(async () => {
     await loadAdminReferrals({ silent: true })
-    setDataVersion((v) => v + 1)
     emitReferralDataMutated()
     router.refresh()
   }, [loadAdminReferrals, router])
 
   const filteredIndicacoes = lista.filter((indicacao: Indicacao) => {
     const matchesSearch =
-      indicacao.nomeIndicado.toLowerCase().includes(search.toLowerCase()) ||
-      indicacao.telefoneIndicado.includes(search)
+      (indicacao.nomeIndicado ?? "").toLowerCase().includes(search.toLowerCase()) ||
+      (indicacao.telefoneIndicado ?? "").includes(search)
     const matchesStatus = statusFilter === "todos" || indicacao.status === statusFilter
     return matchesSearch && matchesStatus
   })
@@ -204,7 +193,6 @@ export default function AdminIndicacoesPage() {
       } else {
         toast.error(r.message)
         await loadAdminReferrals({ silent: true })
-        setDataVersion((v) => v + 1)
       }
     },
     [comerciaisLista, loadAdminReferrals, refreshAfterMutation]
@@ -231,7 +219,6 @@ export default function AdminIndicacoesPage() {
       } else {
         toast.error(r.message)
         await loadAdminReferrals({ silent: true })
-        setDataVersion((v) => v + 1)
       }
     },
     [loadAdminReferrals, refreshAfterMutation]
@@ -313,8 +300,8 @@ export default function AdminIndicacoesPage() {
         return (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon">
-              <MoreHorizontal className="h-4 w-4" />
+            <Button variant="ghost" size="icon" aria-label={`Ações para a indicação de ${indicacao.nomeIndicado || "indicado"}`}>
+              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -342,7 +329,11 @@ export default function AdminIndicacoesPage() {
                     </DropdownMenuItem>
                   ))}
                 {comerciaisAtribuicao.length === 0 ? (
-                  <DropdownMenuItem disabled>Nenhum comercial disponível</DropdownMenuItem>
+                  <DropdownMenuItem disabled>
+                    {comerciaisDisponiveis
+                      ? "Nenhum comercial disponível"
+                      : "Lista de comerciais indisponível no momento"}
+                  </DropdownMenuItem>
                 ) : null}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -370,7 +361,7 @@ export default function AdminIndicacoesPage() {
         )
       },
     },
-  ], [podeMutar, comerciaisLista, handleAtribuirComercial, handleAlterarStatus])
+  ], [podeMutar, comerciaisLista, comerciaisDisponiveis, handleAtribuirComercial, handleAlterarStatus])
 
   return (
     <div className="space-y-6">
@@ -389,8 +380,13 @@ export default function AdminIndicacoesPage() {
             <CardTitle className="text-lg">Lista de Indicações</CardTitle>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Label htmlFor="indicacoes-busca" className="sr-only">
+                  Buscar indicações por nome ou telefone
+                </Label>
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
                 <Input
+                  id="indicacoes-busca"
+                  type="search"
                   placeholder="Buscar por nome ou telefone..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -398,7 +394,7 @@ export default function AdminIndicacoesPage() {
                 />
               </div>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-full sm:w-[180px]">
+                <SelectTrigger className="w-full sm:w-[180px]" aria-label="Filtrar por status">
                   <SelectValue placeholder="Status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -412,20 +408,63 @@ export default function AdminIndicacoesPage() {
                   <SelectItem value="paga">Pagas</SelectItem>
                 </SelectContent>
               </Select>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => void reload()}
+                disabled={carregando}
+                aria-label="Atualizar lista de indicações"
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              </Button>
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {carregando ? (
-            <p className="text-sm text-muted-foreground">Carregando…</p>
+          {hasLoaded ? (
+            <div data-loader-state={state.status}>
+              {state.status === "error" || state.status === "timeout" ? (
+                <div
+                  role="alert"
+                  className="mb-4 flex flex-col items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <span>
+                    {state.status === "timeout" ? LOADER_TIMEOUT_MESSAGE : loaderErrorMessage(state.errorClass)}{" "}
+                    A lista abaixo pode estar desatualizada.
+                  </span>
+                  <Button type="button" variant="outline" size="sm" onClick={() => void reload()}>
+                    Tentar novamente
+                  </Button>
+                </div>
+              ) : null}
+              {carregando ? (
+                <p role="status" aria-live="polite" className="mb-2 text-xs text-muted-foreground">
+                  Atualizando…
+                </p>
+              ) : null}
+              <DataTable
+                key={dataVersion}
+                data={filteredIndicacoes}
+                getRowKey={(i) => i.id}
+                columns={columns}
+                emptyMessage={
+                  lista.length === 0
+                    ? "Nenhuma indicação cadastrada."
+                    : "Nenhuma indicação corresponde aos filtros."
+                }
+              />
+            </div>
           ) : (
-            <DataTable
-              key={dataVersion}
-              data={filteredIndicacoes}
-              getRowKey={(i) => i.id}
-              columns={columns}
-              emptyMessage="Nenhuma indicação encontrada"
-            />
+            <LoaderStatus
+              state={state}
+              onRetry={() => void reload()}
+              retryDisabled={carregando}
+              loadingLabel="Carregando indicações…"
+              emptyMessage="Nenhuma indicação cadastrada."
+            >
+              {() => null}
+            </LoaderStatus>
           )}
         </CardContent>
       </Card>

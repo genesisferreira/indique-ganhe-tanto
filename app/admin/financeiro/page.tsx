@@ -162,7 +162,6 @@ export default function AdminFinanceiroPage() {
           subtitle={`${pagamentosPagos.length} pagamentos`}
           icon={CheckCircle}
           variant="success"
-          trend={{ value: 12.5, isPositive: true }}
         />
         <StatCard
           title="Pendente"
@@ -300,7 +299,7 @@ export default function AdminFinanceiroPage() {
                   })}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {isDataProviderMock() ? "+8.2% vs mes anterior" : "Dados do Supabase"}
+                  {isDataProviderMock() ? "Dados de demonstração" : "Dados do Supabase"}
                 </p>
               </div>
             </div>

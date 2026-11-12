@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useState } from "react"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -13,52 +13,46 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { comerciais } from "@/lib/services/mock-data.service"
-import { loadAdminComerciaisFromSupabase } from "@/lib/services/supabase-data.service"
-import { Plus, Search, Eye, Edit, MoreHorizontal } from "lucide-react"
+import { loadAdminComerciaisResultFromSupabase } from "@/lib/services/supabase-data.service"
+import { LoaderStatus } from "@/components/ui/loader-status"
+import { useGuardedLoader } from "@/hooks/use-guarded-loader"
+import { errorOutcome, listOutcome, type LoaderErrorClass } from "@/lib/client/guarded-loader"
+import { Plus, Search, Eye, Edit, MoreHorizontal, RefreshCw } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import Link from "next/link"
 import type { Comercial } from "@/types"
+
+const ADMIN_LIST_ERROR_TO_LOADER: Record<string, LoaderErrorClass> = {
+  unauthenticated: "unauthenticated",
+  forbidden: "forbidden",
+  query_failed: "server_error",
+  invalid_response: "invalid_response",
+  unexpected: "unexpected",
+}
+
+function isComercialRow(item: unknown): boolean {
+  return Boolean(item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string")
+}
 
 export default function AdminComerciaisPage() {
   const [search, setSearch] = useState("")
   const [disponibilidadeFilter, setDisponibilidadeFilter] = useState<string>("todos")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [lista, setLista] = useState<Comercial[]>([])
-  const [carregando, setCarregando] = useState(true)
-
-  const recarregar = useCallback(async () => {
-    setCarregando(true)
-    if (isDataProviderMock()) {
-      setLista(comerciais)
-      if (process.env.NODE_ENV === "development") {
-        console.log("[page-data:debug]", {
-          page: "/admin/comerciais",
-          source: "mock",
-          total: comerciais.length,
-        })
-      }
-      setCarregando(false)
-      return
-    }
-    const remote = await loadAdminComerciaisFromSupabase()
-    if (process.env.NODE_ENV === "development") {
-      console.log("[page-data:debug]", {
-        page: "/admin/comerciais",
-        source: "supabase",
-        total: remote?.length ?? 0,
-      })
-    }
-    setLista(remote ?? [])
-    setCarregando(false)
+  // 3.1F-K1: estado explícito (loading/success/empty/error/timeout). Falha nunca vira lista vazia.
+  const loadComerciais = useCallback(async ({ signal }: { signal: AbortSignal }) => {
+    if (isDataProviderMock()) return listOutcome<Comercial>(comerciais)
+    const result = await loadAdminComerciaisResultFromSupabase({ signal })
+    if (!result.ok) return errorOutcome<Comercial[]>(ADMIN_LIST_ERROR_TO_LOADER[result.errorClass])
+    return listOutcome<Comercial>(result.data, isComercialRow)
   }, [])
+  const { state, reload } = useGuardedLoader<Comercial[]>(loadComerciais, "admin-comerciais")
+  const carregando = state.status === "idle" || state.status === "loading"
+  const lista: Comercial[] = state.status === "success" ? state.data : []
 
-  useEffect(() => {
-    void recarregar()
-  }, [recarregar])
-
+  const termo = search.toLowerCase()
   const filteredComerciais = lista.filter((comercial: Comercial) => {
-    const matchesSearch = comercial.nome.toLowerCase().includes(search.toLowerCase()) ||
-                         comercial.email.toLowerCase().includes(search.toLowerCase())
+    const matchesSearch = (comercial.nome ?? "").toLowerCase().includes(termo) ||
+                         (comercial.email ?? "").toLowerCase().includes(termo)
     const matchesDisponibilidade = disponibilidadeFilter === "todos" ||
                                    comercial.disponibilidade === disponibilidadeFilter
     return matchesSearch && matchesDisponibilidade
@@ -114,8 +108,8 @@ export default function AdminComerciaisPage() {
       cell: (comercial: Comercial) => (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon">
-              <MoreHorizontal className="h-4 w-4" />
+            <Button variant="ghost" size="icon" aria-label={`Ações para ${comercial.nome || "comercial"}`}>
+              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -196,8 +190,13 @@ export default function AdminComerciaisPage() {
             <CardTitle className="text-lg">Lista de Comerciais</CardTitle>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Label htmlFor="comerciais-busca" className="sr-only">
+                  Buscar comerciais por nome ou e-mail
+                </Label>
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
                 <Input
+                  id="comerciais-busca"
+                  type="search"
                   placeholder="Buscar por nome ou email..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -205,7 +204,7 @@ export default function AdminComerciaisPage() {
                 />
               </div>
               <Select value={disponibilidadeFilter} onValueChange={setDisponibilidadeFilter}>
-                <SelectTrigger className="w-full sm:w-[180px]">
+                <SelectTrigger className="w-full sm:w-[180px]" aria-label="Filtrar por disponibilidade">
                   <SelectValue placeholder="Disponibilidade" />
                 </SelectTrigger>
                 <SelectContent>
@@ -215,19 +214,36 @@ export default function AdminComerciaisPage() {
                   <SelectItem value="offline">Offline</SelectItem>
                 </SelectContent>
               </Select>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => void reload()}
+                disabled={carregando}
+                aria-label="Atualizar lista de comerciais"
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              </Button>
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {carregando ? (
-            <p className="text-sm text-muted-foreground">Carregando…</p>
-          ) : (
-            <DataTable
-              data={filteredComerciais}
-              columns={columns}
-              emptyMessage="Nenhum comercial encontrado"
-            />
-          )}
+          <LoaderStatus
+            state={state}
+            onRetry={() => void reload()}
+            retryDisabled={carregando}
+            loadingLabel="Carregando comerciais…"
+            emptyMessage="Nenhum comercial cadastrado."
+          >
+            {() => (
+              <DataTable
+                data={filteredComerciais}
+                columns={columns}
+                getRowKey={(comercial) => comercial.id}
+                emptyMessage="Nenhum comercial corresponde aos filtros."
+              />
+            )}
+          </LoaderStatus>
         </CardContent>
       </Card>
     </div>

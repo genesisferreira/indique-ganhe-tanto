@@ -142,7 +142,6 @@ export default function DesempenhoPage() {
           value={d.vendasRealizadas}
           icon={ShoppingCart}
           variant="success"
-          trend={{ value: 15, label: "este mês" }}
         />
         <StatCard
           title="Taxa de Conversão"

@@ -2422,7 +2422,7 @@ export async function loadIndicadorReferralsListFromSupabase(): Promise<
 
 // --- Admin: indicações e indicadores (lista global) -------------------------------
 
-const ADMIN_PORTAL_READ_ROLES = new Set([
+export const ADMIN_PORTAL_READ_ROLES: ReadonlySet<string> = new Set([
   "admin_master",
   "admin_financeiro",
   "admin_consulta",
@@ -2467,6 +2467,8 @@ export type ReferralsLoadResult<T> =
       ok: false
       data: []
       error: string
+      /** 3.1F-K1: classe sanitizada para a UI (nunca exibir `error` bruto). */
+      errorClass?: "unauthenticated" | "forbidden" | "query_failed" | "unexpected"
       code?: string
       details?: string
       hint?: string
@@ -2717,9 +2719,9 @@ async function loadPlansMapForReferralRows(
 /**
  * Todas as indicações (admin). Sem filtro de status/pipeline na query principal.
  */
-export async function loadAdminReferralsFromSupabase(): Promise<
-  ReferralsLoadResult<Indicacao>
-> {
+export async function loadAdminReferralsFromSupabase(
+  opts: { identity?: AdminLoadIdentity } = {}
+): Promise<ReferralsLoadResult<Indicacao>> {
   let meta = buildReferralsLoadMeta({
     queryLabel: "referrals.admin.all",
     filter: null,
@@ -2728,47 +2730,58 @@ export async function loadAdminReferralsFromSupabase(): Promise<
   try {
     const supabase = getSupabaseClient()
     const db = supabase as unknown as ReferralsDb
-    const {
-      data: { user },
-      error: authErr,
-    } = await supabase.auth.getUser()
+    if (opts.identity) {
+      // 3.1F-K1: identidade já validada por auth.getUser() neste carregamento lógico.
+      meta = { ...meta, authUserId: opts.identity.userId, profileId: opts.identity.userId, role: opts.identity.role }
+      if (!ADMIN_PORTAL_READ_ROLES.has(opts.identity.role)) {
+        return { ok: false, data: [], error: "Sem permissão admin", errorClass: "forbidden", meta }
+      }
+    } else {
+      const {
+        data: { user },
+        error: authErr,
+      } = await supabase.auth.getUser()
 
-    meta = { ...meta, authUserId: user?.id ?? null }
+      meta = { ...meta, authUserId: user?.id ?? null }
 
-    if (authErr || !user) {
-      const error = authErr?.message ?? "Sessão ausente"
-      console.error("[admin-indicacoes:error]", { step: "auth", error: authErr ?? error })
-      return { ok: false, data: [], error, meta }
-    }
+      if (authErr || !user) {
+        const error = authErr?.message ?? "Sessão ausente"
+        console.error("[admin-indicacoes:error]", { step: "auth", errorClass: "unauthenticated" })
+        return { ok: false, data: [], error, errorClass: "unauthenticated", meta }
+      }
 
-    const { data: profile, error: profileError } = await db
-      .from("profiles")
-      .select("id, role")
-      .eq("id", user.id)
-      .maybeSingle()
+      const { data: profile, error: profileError } = await db
+        .from("profiles")
+        .select("id, role")
+        .eq("id", user.id)
+        .maybeSingle()
 
-    const profileId = (profile as { id?: string } | null)?.id ?? user.id
-    const role = (profile as { role?: string } | null)?.role ?? null
-    meta = { ...meta, profileId, role }
+      const profileId = (profile as { id?: string } | null)?.id ?? user.id
+      const role = (profile as { role?: string } | null)?.role ?? null
+      meta = { ...meta, profileId, role }
 
-    console.log("[admin-indicacoes:session]", {
-      authUserId: user.id,
-      profileId,
-      role,
-      profileError: profileError?.message ?? null,
-    })
+      if (process.env.NODE_ENV === "development") {
+        console.log("[admin-indicacoes:session]", {
+          authUserId: user.id,
+          profileId,
+          role,
+          profileError: profileError?.message ?? null,
+        })
+      }
 
-    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
-      const error =
-        profileError?.message ??
-        `Sem permissão admin (role=${role ?? "ausente"})`
-      console.error("[admin-indicacoes:error]", { step: "profile", error })
-      return {
-        ok: false,
-        data: [],
-        error,
-        code: profileError?.code,
-        meta,
+      if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
+        const error =
+          profileError?.message ??
+          `Sem permissão admin (role=${role ?? "ausente"})`
+        console.error("[admin-indicacoes:error]", { step: "profile", errorClass: profileError ? "query_failed" : "forbidden" })
+        return {
+          ok: false,
+          data: [],
+          error,
+          errorClass: profileError ? "query_failed" : "forbidden",
+          code: profileError?.code,
+          meta,
+        }
       }
     }
 
@@ -2790,6 +2803,7 @@ export async function loadAdminReferralsFromSupabase(): Promise<
         ok: false,
         data: [],
         error: formatPostgrestError(refError),
+        errorClass: "query_failed",
         code: refError.code,
         details: refError.details,
         hint: refError.hint,
@@ -2887,20 +2901,22 @@ export async function loadAdminReferralsFromSupabase(): Promise<
       }
     })
 
-    console.log("[admin-indicacoes:result]", {
-      authUserId: meta.authUserId,
-      profileId: meta.profileId,
-      role: meta.role,
-      referralRowCount: meta.referralRowCount,
-      mappedCount: mapped.length,
-      commercialProfileIdsSample: meta.commercialProfileIdsSample,
-    })
+    if (process.env.NODE_ENV === "development") {
+      console.log("[admin-indicacoes:result]", {
+        authUserId: meta.authUserId,
+        profileId: meta.profileId,
+        role: meta.role,
+        referralRowCount: meta.referralRowCount,
+        mappedCount: mapped.length,
+        commercialProfileIdsSample: meta.commercialProfileIdsSample,
+      })
+    }
 
     return { ok: true, data: mapped, meta }
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e)
-    console.error("[admin-indicacoes:error]", e)
-    return { ok: false, data: [], error, meta }
+    console.error("[admin-indicacoes:error]", { step: "unexpected", errorClass: "unexpected" })
+    return { ok: false, data: [], error, errorClass: "unexpected", meta }
   }
 }
 
@@ -3798,39 +3814,79 @@ const REFERRAL_ACTIVE_FOR_COMMERCIAL_STATS = new Set([
   "em_negociacao",
 ])
 
+/** 3.1F-K1: identidade já resolvida (uma vez) no carregamento lógico da página. */
+export type AdminLoadIdentity = { userId: string; role: string }
+
+export type AdminListErrorClass =
+  | "unauthenticated"
+  | "forbidden"
+  | "query_failed"
+  | "invalid_response"
+  | "unexpected"
+
+/** 3.1F-K1: resultado discriminado — erro nunca é representado como lista vazia. */
+export type AdminListResult<T> =
+  | { ok: true; data: T[] }
+  | { ok: false; errorClass: AdminListErrorClass }
+
+async function resolveAdminLoadIdentity(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  identity: AdminLoadIdentity | undefined
+): Promise<{ ok: true; identity: AdminLoadIdentity } | { ok: false; errorClass: AdminListErrorClass }> {
+  if (identity) {
+    return ADMIN_PORTAL_READ_ROLES.has(identity.role)
+      ? { ok: true, identity }
+      : { ok: false, errorClass: "forbidden" }
+  }
+  const db = supabase as unknown as {
+    from: (t: string) => ReturnType<typeof supabase.from>
+  }
+  const {
+    data: { user },
+    error: authErr,
+  } = await supabase.auth.getUser()
+  if (authErr || !user) return { ok: false, errorClass: "unauthenticated" }
+  const { data: profile, error: profileError } = await db
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle()
+  if (profileError) return { ok: false, errorClass: "query_failed" }
+  const role = (profile as { role?: string } | null)?.role ?? null
+  if (!role || !ADMIN_PORTAL_READ_ROLES.has(role)) return { ok: false, errorClass: "forbidden" }
+  return { ok: true, identity: { userId: user.id, role } }
+}
+
 /**
- * Perfis comercial (admin). `null` só em erro / sem permissão.
+ * Perfis comercial (admin) com resultado discriminado (3.1F-K1).
+ * - `identity` (opcional): reutiliza a identidade já validada por `auth.getUser()` no mesmo carregamento;
+ * - `signal` (opcional): cancela as consultas principais (timeout/desmontagem).
+ * RLS permanece a única fronteira de autorização; o papel aqui é apenas pré-checagem de UX.
  */
-export async function loadAdminComerciaisFromSupabase(): Promise<Comercial[] | null> {
+export async function loadAdminComerciaisResultFromSupabase(
+  opts: { identity?: AdminLoadIdentity; signal?: AbortSignal } = {}
+): Promise<AdminListResult<Comercial>> {
   try {
     const supabase = getSupabaseClient()
     const db = supabase as unknown as {
       from: (t: string) => ReturnType<typeof supabase.from>
     }
-    const {
-      data: { user },
-      error: authErr,
-    } = await supabase.auth.getUser()
-    if (authErr || !user) return null
+    const who = await resolveAdminLoadIdentity(supabase, opts.identity)
+    if (!who.ok) return who
 
-    const { data: profile, error: profileError } = await db
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .maybeSingle()
-    const role = (profile as { role?: string } | null)?.role ?? null
-    if (profileError || !role || !ADMIN_PORTAL_READ_ROLES.has(role)) {
-      return null
-    }
-
-    const { data: profilesData, error: profErr } = await db
+    let profilesQuery = db
       .from("profiles")
       .select("id, full_name, email, phone, is_active, created_at, updated_at")
       .eq("role", "comercial")
       .order("created_at", { ascending: false })
+    if (opts.signal) profilesQuery = profilesQuery.abortSignal(opts.signal)
+    const { data: profilesData, error: profErr } = await profilesQuery
 
     if (profErr) {
-      return null
+      return { ok: false, errorClass: "query_failed" }
+    }
+    if (!Array.isArray(profilesData)) {
+      return { ok: false, errorClass: "invalid_response" }
     }
 
     const profs = (profilesData ?? []) as {
@@ -3871,13 +3927,15 @@ export async function loadAdminComerciaisFromSupabase(): Promise<Comercial[] | n
     }
 
     if (ids.length > 0) {
-      const { data: refRows, error: refErr } = await db
+      let refQuery = db
         .from("referrals")
         .select("commercial_profile_id, status")
         .in("commercial_profile_id", ids)
+      if (opts.signal) refQuery = refQuery.abortSignal(opts.signal)
+      const { data: refRows, error: refErr } = await refQuery
 
       if (refErr) {
-        return null
+        return { ok: false, errorClass: "query_failed" }
       }
       for (const row of (refRows ?? []) as {
         commercial_profile_id: string | null
@@ -3901,9 +3959,9 @@ export async function loadAdminComerciaisFromSupabase(): Promise<Comercial[] | n
         availabilityMap.get(p.id) ?? (p.is_active ? "disponivel" : "offline")
       return {
         id: p.id,
-        nome: p.full_name,
-        email: p.email,
-        telefone: p.phone,
+        nome: p.full_name ?? "",
+        email: p.email ?? "",
+        telefone: p.phone ?? "",
         role: "comercial",
         ativo: p.is_active,
         createdAt: new Date(p.created_at),
@@ -3915,10 +3973,19 @@ export async function loadAdminComerciaisFromSupabase(): Promise<Comercial[] | n
       }
     })
 
-    return mapped
+    return { ok: true, data: mapped }
   } catch {
-    return null
+    return { ok: false, errorClass: "unexpected" }
   }
+}
+
+/**
+ * Perfis comercial (admin). `null` só em erro / sem permissão.
+ * Mantido para compatibilidade; telas novas usam `loadAdminComerciaisResultFromSupabase`.
+ */
+export async function loadAdminComerciaisFromSupabase(): Promise<Comercial[] | null> {
+  const result = await loadAdminComerciaisResultFromSupabase()
+  return result.ok ? result.data : null
 }
 
 /**

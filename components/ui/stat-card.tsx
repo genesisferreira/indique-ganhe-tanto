@@ -1,16 +1,16 @@
 import { cn } from "@/lib/utils"
 import { LucideIcon } from "lucide-react"
+import { describeStatCardTrend, type StatCardTrend } from "@/components/ui/stat-card-trend"
+
+export type { StatCardTrend } from "@/components/ui/stat-card-trend"
 
 interface StatCardProps {
   title: string
   value: string | number
   subtitle?: string
   icon?: LucideIcon
-  trend?: {
-    value: number
-    label?: string
-    isPositive?: boolean
-  }
+  /** 3.1F-K1: somente comparação real e explícita; ausente => nenhuma tendência é exibida. */
+  trend?: StatCardTrend
   variant?: "default" | "primary" | "success" | "warning" | "destructive"
   className?: string
 }
@@ -31,6 +31,8 @@ export function StatCard({
     warning: "bg-warning/10 border-warning/20",
     destructive: "bg-destructive/10 border-destructive/20",
   }
+
+  const trendView = describeStatCardTrend(trend)
 
   const iconStyles = {
     default: "text-muted-foreground",
@@ -65,19 +67,22 @@ export function StatCard({
           </div>
         )}
       </div>
-      {trend && (
-        <div className="mt-3 flex items-center gap-1.5">
+      {trendView && (
+        <p className="mt-3 flex items-center gap-1.5 text-xs" data-stat-trend={trendView.tone}>
+          <span className="sr-only">{trendView.srText}</span>
           <span
+            aria-hidden="true"
             className={cn(
-              "text-xs font-medium",
-              (trend.isPositive ?? trend.value >= 0) ? "text-success" : "text-destructive"
+              "font-medium",
+              trendView.tone === "positive" && "text-success",
+              trendView.tone === "negative" && "text-destructive",
+              trendView.tone === "neutral" && "text-muted-foreground"
             )}
           >
-            {trend.value >= 0 ? "+" : ""}
-            {trend.value}%
+            {trendView.text}
           </span>
-          {trend.label && <span className="text-xs text-muted-foreground">{trend.label}</span>}
-        </div>
+          {trendView.label && <span className="text-muted-foreground">{trendView.label}</span>}
+        </p>
       )}
     </div>
   )

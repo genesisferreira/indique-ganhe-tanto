@@ -279,13 +279,6 @@ export default function AdminRelatoriosPage() {
     .filter((p: Pagamento) => p.status === "pago")
     .reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
 
-  const trendProps = isMock
-    ? ({ trend: { value: 12, isPositive: true } } as const)
-    : ({} as const)
-  const trendPropsTaxa = isMock
-    ? ({ trend: { value: 5.2, isPositive: true } } as const)
-    : ({} as const)
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -318,13 +311,11 @@ export default function AdminRelatoriosPage() {
           title="Total de Indicações"
           value={totalIndicacoes}
           icon={FileText}
-          {...trendProps}
         />
         <StatCard
           title="Taxa de Conversão"
           value={`${taxaGeral}%`}
           icon={TrendingUp}
-          {...trendPropsTaxa}
         />
         <StatCard title="Indicadores Ativos" value={indicadores.length} icon={Users} />
         <StatCard

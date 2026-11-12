@@ -41,7 +41,6 @@ export default function IndicadorDashboard() {
           title="Total de Indicações"
           value={dashboard.totalIndicacoes}
           icon={Users}
-          trend={{ value: 12, label: "este mês" }}
         />
         <StatCard
           title="Em Andamento"
