@@ -122,6 +122,13 @@ const funcionarioNav: NavGroup[] = [
     ],
   },
   {
+    title: "Meus resultados",
+    items: [
+      { label: "Minhas vendas", href: "/funcionario/vendas", icon: BarChart3 },
+      { label: "Minha remuneração", href: "/funcionario/remuneracao", icon: Receipt },
+    ],
+  },
+  {
     title: "Operação",
     items: [
       { label: "Cobrança", href: "/cobranca", icon: PhoneCall },
@@ -195,12 +202,13 @@ const adminNav: NavGroup[] = [
       { label: "Funcionários", href: "/admin/funcionarios", icon: UserCog },
       { label: "Administradores", href: "/admin/admins", icon: Shield },
       { label: "Setores", href: "/admin/setores", icon: Layers },
+      { label: "Remuneração de Funcionários", href: "/admin/remuneracao", icon: Receipt },
     ],
   },
   {
     title: "Financeiro",
     items: [
-      { label: "Recompensas", href: "/admin/financeiro", icon: Wallet },
+      { label: "Financeiro — Indique e Ganhe", href: "/admin/financeiro", icon: Wallet },
       { label: "Pagamentos Pendentes", href: "/admin/pagamentos-pendentes", icon: CreditCard },
       { label: "Histórico de Pagamentos", href: "/admin/historico-pagamentos", icon: History },
       { label: "Upload Comprovante", href: "/admin/upload-comprovante", icon: Upload },
@@ -477,6 +485,8 @@ export function Sidebar({
             size="icon"
             onClick={() => setIsOpen(!isOpen)}
             className="text-foreground"
+            aria-label={isOpen ? "Fechar menu" : "Abrir menu"}
+            aria-expanded={isOpen}
           >
             {isOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </Button>
@@ -588,7 +598,7 @@ export function Sidebar({
                     {initials}
                   </AvatarFallback>
                 </Avatar>
-                <div className="flex-1 text-left">
+                <div className="min-w-0 flex-1 text-left">
                   <p className="text-sm font-medium text-foreground truncate">
                     {userName}
                   </p>

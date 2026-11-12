@@ -75,3 +75,4 @@ Não são importados por `app/`, `components/` ou `lib/` e não entram no bundle
 | Q5 | O Gestor pode propor dias trabalhados? | Não na Fase 3; reavaliar depois de J9 |
 | Q6 | Renomear o grupo de menu "Financeiro" para "Financeiro — Indique e Ganhe"? | Sim, junto com J5 |
 | Q7 | Transporte/combustível por reembolso? | Fora da Fase 3; usar ajuste manual com motivo |
+- [16 — J2: leitura do funcionário e guards financeiros](16-j2-read-only.md)

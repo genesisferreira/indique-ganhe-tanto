@@ -5,6 +5,7 @@ import { loadOperationalActorContext } from "@/lib/collections/actor"
 import { operationalHrefForSectorCode } from "@/lib/auth/operational-routes"
 import { PageHeader } from "@/components/ui/page-header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { EmployeeDashboardSection } from "@/components/employee-portal/employee-dashboard-section"
 
 export const dynamic = "force-dynamic"
 
@@ -40,10 +41,12 @@ export default async function FuncionarioHomePage() {
       : []
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
+      <EmployeeDashboardSection />
       <PageHeader
         title="Operação"
         description="Módulos liberados pelos seus setores ativos."
+        className="pb-0"
       />
       {operational.length === 0 ? (
         <Card className="border-border/50 bg-card/50">

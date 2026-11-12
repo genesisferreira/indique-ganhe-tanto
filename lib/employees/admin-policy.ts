@@ -250,10 +250,23 @@ export function shouldShowSidebarHref(input: {
   role: UserRole | null
   membershipCodes: readonly string[]
 }): boolean {
+  if (
+    input.href === "/admin/remuneracao" ||
+    input.href.startsWith("/admin/remuneracao/")
+  ) {
+    // 3.1F-J2: somente Admin Master / Admin Financeiro (nunca admin_consulta).
+    return (
+      input.variant === "admin" &&
+      (input.role === "admin_master" || input.role === "admin_financeiro")
+    )
+  }
+
   if (input.variant === "indicador") return true
 
   if (input.variant === "funcionario") {
     if (input.href === "/funcionario" || input.href === "/notificacoes") return true
+    // 3.1F-J2: leitura dos próprios dados (sem "Nova oportunidade" até J3).
+    if (input.href === "/funcionario/vendas" || input.href === "/funcionario/remuneracao") return true
     if (input.href === "/cobranca") {
       return input.membershipCodes.includes("collections")
     }
@@ -328,12 +341,13 @@ export function adminNavGroupSpecs(): AdminNavGroupSpec[] {
         { label: "Funcionários", href: "/admin/funcionarios" },
         { label: "Administradores", href: "/admin/admins" },
         { label: "Setores", href: "/admin/setores" },
+        { label: "Remuneração de Funcionários", href: "/admin/remuneracao" },
       ],
     },
     {
       title: "Financeiro",
       items: [
-        { label: "Recompensas", href: "/admin/financeiro" },
+        { label: "Financeiro — Indique e Ganhe", href: "/admin/financeiro" },
         { label: "Pagamentos Pendentes", href: "/admin/pagamentos-pendentes" },
         { label: "Histórico de Pagamentos", href: "/admin/historico-pagamentos" },
         { label: "Upload Comprovante", href: "/admin/upload-comprovante" },
@@ -370,6 +384,13 @@ export function funcionarioNavGroupSpecs(): AdminNavGroupSpec[] {
       items: [
         { label: "Início", href: "/funcionario" },
         { label: "Notificações", href: "/notificacoes" },
+      ],
+    },
+    {
+      title: "Meus resultados",
+      items: [
+        { label: "Minhas vendas", href: "/funcionario/vendas" },
+        { label: "Minha remuneração", href: "/funcionario/remuneracao" },
       ],
     },
     {

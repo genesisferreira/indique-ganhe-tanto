@@ -1,6 +1,10 @@
 import type { UserRole } from "@/types/user"
 import { FIRST_ACCESS_PATH } from "@/lib/commercial-assisted/constants"
 import type { DashboardVariant } from "@/lib/auth/dashboard-variant"
+import {
+  ADMIN_REMUNERACAO_PREFIX,
+  canAccessAdminRemuneracao,
+} from "@/lib/admin-remuneracao/policy"
 
 export type AuthAuditPayload = {
   role: string | null
@@ -197,6 +201,19 @@ export function evaluateRouteAccessForRole(
     return {
       allowed: false,
       reason: `${pathname} exige funcionario, comercial ou admin; obtido: ${role}`,
+    }
+  }
+  if (
+    pathname === ADMIN_REMUNERACAO_PREFIX ||
+    pathname.startsWith(`${ADMIN_REMUNERACAO_PREFIX}/`)
+  ) {
+    // 3.1F-J2: Remuneração de Funcionários — admin_consulta NÃO herda /admin aqui.
+    if (canAccessAdminRemuneracao(role)) {
+      return { allowed: true, reason: "/admin/remuneracao + admin_master|admin_financeiro" }
+    }
+    return {
+      allowed: false,
+      reason: `/admin/remuneracao exige admin_master | admin_financeiro; obtido: ${role}`,
     }
   }
   if (pathname.startsWith("/admin")) {
