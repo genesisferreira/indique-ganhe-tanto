@@ -1,18 +1,13 @@
-import { parseOpportunityId, rejectIdentityParams } from "@/lib/employee-portal/contracts"
-import { employeeBadRequest, employeeError, employeeJson } from "@/lib/employee-portal/http"
-import { loadEmployeeSaleDetail } from "@/lib/employee-portal/service"
+import { EMPLOYEE_API, runEmployeeGet } from "@/lib/employee-portal/api-gate"
+import { employeeOutcome } from "@/lib/employee-portal/http"
+import { createEmployeeSessionClient } from "@/lib/employee-portal/service"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-/** GET somente leitura. Venda alheia ou inexistente => 404 idêntico. */
+/** GET somente leitura. Venda alheia ou inexistente => 404 idêntico. ID inválido (autorizado) => 400. */
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  const params = new URL(request.url).searchParams
-  if (rejectIdentityParams(params) || [...params.keys()].length > 0) return employeeBadRequest("Parâmetro não permitido.")
+  const searchParams = new URL(request.url).searchParams
   const { id } = await context.params
-  const opportunityId = parseOpportunityId(id)
-  if (!opportunityId) return employeeError("not_found")
-  const r = await loadEmployeeSaleDetail(opportunityId)
-  if (!r.ok) return employeeError(r.kind)
-  return employeeJson({ ok: true, data: r.data })
+  return employeeOutcome(await runEmployeeGet(await createEmployeeSessionClient(), EMPLOYEE_API.saleDetail, { searchParams, path: id }))
 }

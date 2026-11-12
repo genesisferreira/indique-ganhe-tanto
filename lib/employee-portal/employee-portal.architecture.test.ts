@@ -54,7 +54,7 @@ describe("3.1F-J2 arquitetura: APIs somente GET (F)", () => {
   }
   it("respostas financeiras com no-store (helper) ", () => {
     assert.match(read("lib/employee-portal/http.ts"), /applyNoStoreHeaders/)
-    for (const f of API_ROUTES.slice(0, 5)) assert.match(read(f), /employeeJson|employeeError|employeeBadRequest/)
+    for (const f of API_ROUTES.slice(0, 5)) assert.match(read(f), /employeeOutcome|employeeJson|employeeError|employeeBadRequest/)
     assert.match(read("app/api/admin/remuneracao/route.ts"), /applyNoStoreHeaders/)
   })
 })
@@ -78,10 +78,10 @@ describe("3.1F-J2 arquitetura: identidade e privilégios (E/F/Q)", () => {
     assert.equal(/p_employee_id|p_profile_id|employee_id|profile_id/.test(src), false)
   })
   it("sem escrita, rewards, wallet, saques, ERP ou Sync nos arquivos novos", () => {
-    for (const f of NEW_FILES.filter((x) => !x.endsWith("terminology.ts") && !x.endsWith("admin-remuneracao/guard.ts"))) {
+    for (const f of NEW_FILES.filter((x) => !x.endsWith("terminology.ts") && !x.endsWith("admin-remuneracao/guard.ts") && !x.endsWith("employee-portal/api-gate.ts"))) {
       const src = strip(read(f))
       assert.equal(/supabase[\s\S]{0,40}\.from\(|\.from\("[a-z_]+"\)|\.(insert|upsert)\(/.test(src), false, f)
-      if (!f.endsWith("service.ts") && !f.endsWith("guard.ts")) assert.equal(/\.rpc\(/.test(src), false, f)
+      if (!f.endsWith("service.ts") && !f.endsWith("guard.ts") && !f.endsWith("api-gate.ts")) assert.equal(/\.rpc\(/.test(src), false, f)
       assert.equal(/rewards|wallet|withdraw|pix_|saque|brbyte|controllr|collections\/sync|runSync|probe/i.test(src.replace(/Chave Pix|"Sacar"/g, "")), false, f)
     }
   })
@@ -90,6 +90,22 @@ describe("3.1F-J2 arquitetura: identidade e privilégios (E/F/Q)", () => {
     assert.deepEqual([...src.matchAll(/\.from\("([a-z_]+)"\)/g)].map((m) => m[1]), ["profiles"])
     assert.match(src, /\.select\("role, is_active"\)/)
     assert.equal(/\.(insert|update|upsert|delete)\(|\.rpc\(/.test(src), false)
+  })
+  it("3.1F-J2B: gate das APIs lê somente o próprio profiles/employees (SELECT) e as 5 RPCs de leitura", () => {
+    const src = strip(read("lib/employee-portal/api-gate.ts"))
+    assert.deepEqual([...src.matchAll(/\.from\("([a-z_]+)"\)/g)].map((m) => m[1]), ["profiles", "employees"])
+    assert.equal(/\.(insert|update|upsert|delete)\(|createServiceRoleClient|getOpsDb|service_role/.test(src), false)
+    const rpcs = [...src.matchAll(/rpc: "([a-z_]+)"/g)].map((m) => m[1]).sort()
+    assert.deepEqual(rpcs, ["employee_compensation_summary", "employee_sales_dashboard_summary", "get_employee_sale_detail", "list_employee_competence_lines", "list_employee_sales"])
+    const run = src.slice(src.indexOf("export async function runEmployeeGet"))
+    assert.ok(run.indexOf("gateEmployeeSession(") < run.indexOf("spec.parse(") && run.indexOf("spec.parse(") < run.indexOf(".rpc("))
+  })
+  it("3.1F-J2B: rotas GET não validam path/query antes do gate", () => {
+    for (const f of API_ROUTES.slice(0, 5)) {
+      const src = strip(read(f))
+      assert.match(src, /runEmployeeGet\(await createEmployeeSessionClient\(\), EMPLOYEE_API\.[a-zA-Z]+/)
+      assert.equal(/parse[A-Z]\w*\(|rejectIdentityParams|employeeBadRequest|\.rpc\(/.test(src), false, f)
+    }
   })
   it("rotas novas não importam código de ERP/rewards", () => {
     for (const f of [...API_ROUTES, ...EMPLOYEE_PAGES.slice(1)]) {

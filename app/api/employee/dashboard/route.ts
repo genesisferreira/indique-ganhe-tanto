@@ -1,16 +1,12 @@
-import { rejectIdentityParams } from "@/lib/employee-portal/contracts"
-import { employeeBadRequest, employeeError, employeeJson } from "@/lib/employee-portal/http"
-import { loadEmployeeDashboard } from "@/lib/employee-portal/service"
+import { EMPLOYEE_API, runEmployeeGet } from "@/lib/employee-portal/api-gate"
+import { employeeOutcome } from "@/lib/employee-portal/http"
+import { createEmployeeSessionClient } from "@/lib/employee-portal/service"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-/** GET somente leitura. Sem POST/PATCH/PUT/DELETE. */
+/** GET somente leitura. Ordem: sessão → papel/vínculo → query → RPC. Sem POST/PATCH/PUT/DELETE. */
 export async function GET(request: Request) {
-  const params = new URL(request.url).searchParams
-  if (rejectIdentityParams(params)) return employeeBadRequest("Parâmetro não permitido.")
-  if ([...params.keys()].length > 0) return employeeBadRequest("Parâmetro desconhecido.")
-  const r = await loadEmployeeDashboard()
-  if (!r.ok) return employeeError(r.kind)
-  return employeeJson({ ok: true, data: r.data })
+  const searchParams = new URL(request.url).searchParams
+  return employeeOutcome(await runEmployeeGet(await createEmployeeSessionClient(), EMPLOYEE_API.dashboard, { searchParams }))
 }

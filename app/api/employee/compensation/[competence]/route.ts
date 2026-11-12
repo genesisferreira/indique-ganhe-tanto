@@ -1,18 +1,13 @@
-import { parseCompetenceParam, rejectIdentityParams } from "@/lib/employee-portal/contracts"
-import { employeeBadRequest, employeeError, employeeJson } from "@/lib/employee-portal/http"
-import { loadEmployeeCompetence } from "@/lib/employee-portal/service"
+import { EMPLOYEE_API, runEmployeeGet } from "@/lib/employee-portal/api-gate"
+import { employeeOutcome } from "@/lib/employee-portal/http"
+import { createEmployeeSessionClient } from "@/lib/employee-portal/service"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-/** GET somente leitura: linhas visíveis de uma competência própria (YYYY-MM). */
+/** GET somente leitura: linhas visíveis de uma competência própria (YYYY-MM). Ordem: sessão → papel/vínculo → path → RPC. */
 export async function GET(request: Request, context: { params: Promise<{ competence: string }> }) {
-  const params = new URL(request.url).searchParams
-  if (rejectIdentityParams(params) || [...params.keys()].length > 0) return employeeBadRequest("Parâmetro não permitido.")
+  const searchParams = new URL(request.url).searchParams
   const { competence } = await context.params
-  const month = parseCompetenceParam(competence)
-  if (!month) return employeeBadRequest("Competência inválida.")
-  const r = await loadEmployeeCompetence(month)
-  if (!r.ok) return employeeError(r.kind)
-  return employeeJson({ ok: true, data: r.data })
+  return employeeOutcome(await runEmployeeGet(await createEmployeeSessionClient(), EMPLOYEE_API.competence, { searchParams, path: competence }))
 }

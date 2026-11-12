@@ -47,6 +47,13 @@ Rollback: `rollback-employee-read-rpcs-3-1f-j2.sql` remove somente as 9 funçõe
 - Query validada por allowlist; parâmetros de identidade (`employee_id`, `profile_id`, `user_id`, `uid`…) → 400.
 - Contratos fechados (`lib/employee-portal/contracts.ts`): chaves extras são descartadas.
 - 401 sem sessão, 403 papel sem acesso, 404 sem revelar existência, 400 inválido, 503 indisponível.
+- **Ordem obrigatória (3.1F-J2B, `lib/employee-portal/api-gate.ts`):** 1) sessão → 2) usuário →
+  3) papel `funcionario` + perfil ativo + vínculo `employees` em active/paused/vacation/away
+  (leitura da PRÓPRIA linha via sessão/RLS; mesma política da RPC) → 4) validação de path/query →
+  5) RPC. Anônimo recebe 401 e papel/vínculo recusado recebe 403 mesmo com parâmetro inválido,
+  sem mensagem de validação e sem chamar RPC. Autorizado com parâmetro inválido (inclusive UUID
+  ou competência malformados) recebe 400 sem chamar RPC; registro próprio inexistente ou de
+  terceiro recebe o mesmo 404.
 - Logs: somente nome da função e código do erro (sem PII, sem valores).
 
 ## 4. Política de status do funcionário

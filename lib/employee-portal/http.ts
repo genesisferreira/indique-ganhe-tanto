@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { applyNoStoreHeaders } from "@/lib/auth/cache-control"
+import type { ApiOutcome } from "@/lib/employee-portal/api-gate"
 import {
   PORTAL_ERROR_MESSAGE,
   PORTAL_ERROR_STATUS,
@@ -17,4 +18,9 @@ export function employeeError(kind: PortalErrorKind): NextResponse {
 
 export function employeeBadRequest(message: string): NextResponse {
   return employeeJson({ ok: false, message }, 400)
+}
+
+/** 3.1F-J2B: converte o resultado do gate/RPC em resposta no-store. */
+export function employeeOutcome(outcome: ApiOutcome): NextResponse {
+  return employeeJson(outcome.body, outcome.status)
 }

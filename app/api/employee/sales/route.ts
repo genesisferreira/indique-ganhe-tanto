@@ -1,15 +1,12 @@
-import { parseSalesQuery } from "@/lib/employee-portal/contracts"
-import { employeeBadRequest, employeeError, employeeJson } from "@/lib/employee-portal/http"
-import { loadEmployeeSales } from "@/lib/employee-portal/service"
+import { EMPLOYEE_API, runEmployeeGet } from "@/lib/employee-portal/api-gate"
+import { employeeOutcome } from "@/lib/employee-portal/http"
+import { createEmployeeSessionClient } from "@/lib/employee-portal/service"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-/** GET somente leitura: vendas atribuídas ao usuário autenticado. */
+/** GET somente leitura: vendas atribuídas ao usuário. Ordem: sessão → papel/vínculo → query → RPC. */
 export async function GET(request: Request) {
-  const parsed = parseSalesQuery(new URL(request.url).searchParams, { strict: true })
-  if (!parsed.ok) return employeeBadRequest(parsed.error)
-  const r = await loadEmployeeSales(parsed.value)
-  if (!r.ok) return employeeError(r.kind)
-  return employeeJson({ ok: true, data: r.data })
+  const searchParams = new URL(request.url).searchParams
+  return employeeOutcome(await runEmployeeGet(await createEmployeeSessionClient(), EMPLOYEE_API.sales, { searchParams }))
 }

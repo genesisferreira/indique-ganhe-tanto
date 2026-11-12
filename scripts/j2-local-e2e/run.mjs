@@ -93,7 +93,23 @@ try {
   const det = await get("/api/employee/sales/00000000-0000-4000-8000-000000000999", "A")
   const detBad = await get("/api/employee/sales/not-a-uuid", "A")
   const detBodyA = await json(det), detBodyB = await json(detBad)
-  await t("API_A_detail_unknown_404_same_body", () => (det.status === 404 && detBad.status === 404 && JSON.stringify(detBodyA) === JSON.stringify(detBodyB)) || [det.status, detBad.status])
+  await t("API_A_detail_unknown_404_and_bad_uuid_400", () => (det.status === 404 && detBad.status === 400 && detBodyA?.ok === false && detBodyB?.ok === false) || [det.status, detBad.status])
+  // 3.1F-J2B: autenticação/autorização ANTES da validação de path/query.
+  const INVALID = ["/api/employee/dashboard?foo=1", "/api/employee/sales?limit=999&sort=x", "/api/employee/sales/not-a-uuid", "/api/employee/compensation?offset=-1", "/api/employee/compensation/2026-11-15"]
+  const rpcTotal = () => Object.values(mock.stats.rpc).reduce((a, b) => a + b, 0)
+  const rpcBefore = rpcTotal()
+  for (const p of INVALID) {
+    const anon = await get(p, null)
+    const anonBody = await json(anon)
+    await t(`API_J2B_anon_invalid_401 ${p}`, () => (anon.status === 401 && anon.headers.get("cache-control")?.includes("no-store") && anon.headers.get("vary")?.includes("Cookie") && !/inválid|desconhecid|permitido|limit|sort|offset|Competência/i.test(String(anonBody?.message))) || [anon.status, anonBody])
+    for (const who of ["AC", "AM", "CM", "IN", "N", "D"]) {
+      const r = await get(p, who)
+      await t(`API_J2B_denied_invalid_403 ${who} ${p}`, () => r.status === 403 || r.status)
+    }
+    const ok = await get(p, "A")
+    await t(`API_J2B_authorized_invalid_400 ${p}`, () => ok.status === 400 || ok.status)
+  }
+  await t("API_J2B_no_rpc_for_anon_denied_or_invalid", () => rpcTotal() === rpcBefore || [rpcBefore, rpcTotal()])
   for (const [q, label] of [["limit=0", "limit_0"], ["limit=51", "limit_51"], ["sort=referred_phone", "sort"], ["stage=x", "stage"], ["status=x", "status"], ["commission=x", "commission"], ["from=2026-02-30", "date"], ["from=2026-03-01&to=2026-02-01", "range"], ["employee_id=66666666-0000-4000-8000-000000000002", "employee_id"], ["employeeId=x", "employeeId"], ["foo=1", "unknown"], ["offset=99999", "offset"]]) {
     const r = await get(`/api/employee/sales?${q}`, "A")
     await t(`API_query_validation_400 ${label}`, () => r.status === 400 || r.status)
