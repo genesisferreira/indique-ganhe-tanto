@@ -54,7 +54,12 @@ Rollback: `rollback-employee-read-rpcs-3-1f-j2.sql` remove somente as 9 funçõe
   sem mensagem de validação e sem chamar RPC. Autorizado com parâmetro inválido (inclusive UUID
   ou competência malformados) recebe 400 sem chamar RPC; registro próprio inexistente ou de
   terceiro recebe o mesmo 404.
-- Logs: somente nome da função e código do erro (sem PII, sem valores).
+- **Entrada preguiçosa (3.1F-J2C):** as rotas repassam `request`/`context` brutos; `request.url`,
+  `searchParams` e `context.params` só são lidos pelo helper depois do gate (anônimo/negado: 0
+  acessos, 0 parse, 0 RPC). Exceção ou erro de infraestrutura no Auth/profiles/employees => 503
+  fechado `{ ok, errorClass: "employee_portal_unavailable", message }` com no-store/Pragma/
+  Expires/`Vary: Cookie`, sem detalhe interno; sem sessão continua 401 e ausência comprovada 403.
+- Logs: somente nome da função e código do erro, ou a classe `employee_portal_unavailable` (sem PII, sem valores).
 
 ## 4. Política de status do funcionário
 

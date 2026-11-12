@@ -2,10 +2,12 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
   EMPLOYEE_API,
+  EMPLOYEE_PORTAL_UNAVAILABLE_CLASS,
   evaluateEmployeeEligibility,
   runEmployeeGet,
   type EmployeeApiSpec,
   type EmployeeSessionClient,
+  type LazyApiSource,
 } from "@/lib/employee-portal/api-gate"
 
 // ---------------------------------------------------------------------------
@@ -64,8 +66,6 @@ function fakeClient(who: Who) {
   }
   return { client, log, rpcCalls }
 }
-
-const qs = (s: string) => new URLSearchParams(s)
 
 type RouteCase = {
   name: string
@@ -137,17 +137,50 @@ const ROUTES: RouteCase[] = [
 const DENIED: Who[] = ["admin_master", "admin_financeiro", "admin_consulta", "comercial", "indicador", "no_employee"]
 const INELIGIBLE: Who[] = ["dismissed", "inactive_profile"]
 
-async function call(who: Who, spec: EmployeeApiSpec<any>, q: string, path?: string) {
+const ALLOWED: Who[] = ["funcionario", "paused", "vacation", "away"]
+
+/**
+ * 3.1F-J2C: Request/contexto espiões. Lançam erro se request.url for lido ou context.params
+ * acessado/aguardado antes de o gate liberar (funcionário elegível + leitura de employees concluída).
+ */
+function spySource(spec: EmployeeApiSpec<any>, q: string, path: string | undefined, gatePassed: () => boolean) {
+  const counts = { url: 0, params: 0, parse: 0 }
+  const request = {
+    get url() {
+      counts.url++
+      if (!gatePassed()) throw new Error("request.url lido antes do gate")
+      return `http://lab.local/api/employee/x${q ? "?" + q : ""}`
+    },
+  }
+  const source: LazyApiSource = { request }
+  if (spec.pathParam) {
+    const key = spec.pathParam
+    source.context = {
+      get params() {
+        counts.params++
+        if (!gatePassed()) throw new Error("context.params acessado antes do gate")
+        return Promise.resolve({ [key]: path ?? "" })
+      },
+    }
+  }
+  const spied: EmployeeApiSpec<any> = { ...spec, parse: (input) => { counts.parse++; return spec.parse(input) } }
+  return { source, spied, counts }
+}
+
+async function call(who: Who, spec: EmployeeApiSpec<any>, q: string, path?: string, client?: (f: ReturnType<typeof fakeClient>) => EmployeeSessionClient | null) {
   const f = fakeClient(who)
-  const out = await runEmployeeGet(f.client, spec, { searchParams: qs(q), path })
-  return { ...out, ...f }
+  const gatePassed = () => ALLOWED.includes(who) && f.log.includes("select:employees")
+  const { source, spied, counts } = spySource(spec, q, path, gatePassed)
+  const out = await runEmployeeGet(client ? client(f) : f.client, spied, source)
+  return { ...out, ...f, counts }
 }
 
 for (const route of ROUTES) {
   describe(`3.1F-J2B ${route.name}: auth → papel → validação → RPC`, () => {
     it("sem cliente de sessão => 401, 0 RPC", async () => {
-      const out = await runEmployeeGet(null, route.spec, { searchParams: qs(route.valid.q), path: route.valid.path })
-      assert.equal(out.status, 401)
+      const r = await call("anon", route.spec, route.valid.q, route.valid.path, () => null)
+      assert.equal(r.status, 401)
+      assert.deepEqual(r.counts, { url: 0, params: 0, parse: 0 })
     })
     it("ausente + válido => 401, 0 RPC, nenhuma leitura", async () => {
       const r = await call("anon", route.spec, route.valid.q, route.valid.path)
@@ -243,8 +276,145 @@ describe("3.1F-J2B política de elegibilidade igual à RPC", () => {
       ...f.client,
       from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "x", code: "57014" } }) }) }) }),
     }
-    const out = await runEmployeeGet(broken, EMPLOYEE_API.dashboard, { searchParams: qs("") })
+    const out = await runEmployeeGet(broken, EMPLOYEE_API.dashboard, { request: { url: "http://lab.local/api/employee/dashboard" } })
     assert.equal(out.status, 503)
     assert.equal(f.rpcCalls.length, 0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 3.1F-J2C — F1 (entrada preguiçosa) e F2 (exceção => 503 fechado)
+// ---------------------------------------------------------------------------
+type Throwing = "getUser" | "profiles" | "employees"
+
+function throwingClient(f: ReturnType<typeof fakeClient>, at: Throwing): EmployeeSessionClient {
+  return {
+    ...f.client,
+    auth: {
+      getUser: async () => {
+        f.log.push("auth.getUser")
+        if (at === "getUser") throw new Error("SECRET_AUTH_DETAIL jwt=eyJ.x.y user=u-1")
+        return f.client.auth.getUser()
+      },
+    },
+    from: (table: string) => {
+      if (table === at) {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => { throw new Error(`SECRET_DB_DETAIL relation ${table} stack`) } }) }) }
+      }
+      return f.client.from(table)
+    },
+  }
+}
+
+async function captureWarn<T>(fn: () => Promise<T>): Promise<{ value: T; warns: unknown[][] }> {
+  const original = console.warn
+  const warns: unknown[][] = []
+  console.warn = (...args: unknown[]) => { warns.push(args) }
+  try { return { value: await fn(), warns } } finally { console.warn = original }
+}
+
+function assertClosedUnavailable(body: Record<string, unknown>) {
+  assert.deepEqual(Object.keys(body).sort(), ["errorClass", "message", "ok"])
+  assert.equal(body.ok, false)
+  assert.equal(body.errorClass, EMPLOYEE_PORTAL_UNAVAILABLE_CLASS)
+  assert.equal(body.errorClass, "employee_portal_unavailable")
+  assert.equal(body.message, "Não foi possível carregar os dados agora. Tente novamente.")
+  const text = JSON.stringify(body).replace('"errorClass":"employee_portal_unavailable"', "")
+  assert.equal(/SECRET|jwt|eyJ|u-1|stack|relation|profiles|employees|auth|getUser|error|57014/i.test(text), false, text)
+}
+
+for (const route of ROUTES) {
+  const hasParams = Boolean(route.spec.pathParam)
+  describe(`3.1F-J2C ${route.name}: matriz D (URL/params/parse/RPC)`, () => {
+    it("anônimo => 401, URL 0, params 0, parse 0, RPC 0", async () => {
+      const r = await call("anon", route.spec, route.valid.q, route.valid.path)
+      assert.equal(r.status, 401)
+      assert.deepEqual(r.counts, { url: 0, params: 0, parse: 0 })
+      assert.equal(r.rpcCalls.length, 0)
+    })
+    for (const who of [...DENIED, ...INELIGIBLE]) {
+      it(`papel/vínculo negado (${who}) => 403, URL 0, params 0, parse 0, RPC 0`, async () => {
+        const r = await call(who, route.spec, route.valid.q, route.valid.path)
+        assert.equal(r.status, 403)
+        assert.deepEqual(r.counts, { url: 0, params: 0, parse: 0 })
+        assert.equal(r.rpcCalls.length, 0)
+      })
+    }
+    for (const at of ["getUser", "profiles", "employees"] as Throwing[]) {
+      it(`${at} lança => 503 fechado, URL 0, params 0, parse 0, RPC 0, log só com a classe`, async () => {
+        const { value: r, warns } = await captureWarn(() => call("funcionario", route.spec, route.valid.q, route.valid.path, (f) => throwingClient(f, at)))
+        assert.equal(r.status, 503)
+        assertClosedUnavailable(r.body)
+        assert.deepEqual(r.counts, { url: 0, params: 0, parse: 0 })
+        assert.equal(r.rpcCalls.length, 0)
+        assert.deepEqual(warns, [["[employee-portal] employee_portal_unavailable"]])
+      })
+    }
+    it(`autorizado inválido => 400, URL 1, params ${hasParams ? 1 : "N/A"}, parse 1, RPC 0`, async () => {
+      const bad = route.invalid[0]
+      const r = await call("funcionario", route.spec, bad.q, bad.path)
+      assert.equal(r.status, 400)
+      assert.deepEqual(r.counts, { url: 1, params: hasParams ? 1 : 0, parse: 1 })
+      assert.equal(r.rpcCalls.length, 0)
+    })
+    it(`autorizado válido => 200, URL 1, params ${hasParams ? 1 : "N/A"}, parse 1, RPC 1; schema de sucesso idêntico`, async () => {
+      const r = await call("funcionario", route.spec, route.valid.q, route.valid.path)
+      assert.equal(r.status, 200)
+      assert.deepEqual(r.counts, { url: 1, params: hasParams ? 1 : 0, parse: 1 })
+      assert.equal(r.rpcCalls.length, 1)
+      assert.deepEqual(r.body, { ok: true, data: route.spec.map({}) })
+    })
+  })
+}
+
+describe("3.1F-J2C erros RETORNADOS (sem exceção): fail-closed sem ausência silenciosa", () => {
+  const withAuth = (error: Record<string, unknown> | null) => (f: ReturnType<typeof fakeClient>): EmployeeSessionClient => ({
+    ...f.client,
+    auth: { getUser: async () => { f.log.push("auth.getUser"); return { data: { user: null }, error } } },
+  })
+  it("sem sessão normal (AuthSessionMissingError 400) => 401, não 503", async () => {
+    const r = await call("funcionario", EMPLOYEE_API.dashboard, "", undefined, withAuth({ name: "AuthSessionMissingError", status: 400, message: "x" }))
+    assert.equal(r.status, 401)
+    assert.deepEqual(r.counts, { url: 0, params: 0, parse: 0 })
+  })
+  it("JWT inválido (401/403) => 401", async () => {
+    for (const status of [401, 403]) {
+      const r = await call("funcionario", EMPLOYEE_API.dashboard, "", undefined, withAuth({ name: "AuthApiError", status, message: "x" }))
+      assert.equal(r.status, 401)
+    }
+  })
+  it("Auth indisponível (rede status 0, 5xx, AuthRetryableFetchError) => 503 fechado", async () => {
+    for (const error of [{ name: "AuthRetryableFetchError", status: 0 }, { name: "AuthUnknownError", status: 500 }, { name: "AuthApiError", status: 503 }]) {
+      const r = await call("funcionario", EMPLOYEE_API.saleDetail, "", OWN_SALE, withAuth(error))
+      assert.equal(r.status, 503)
+      assertClosedUnavailable(r.body)
+      assert.deepEqual(r.counts, { url: 0, params: 0, parse: 0 })
+      assert.equal(r.rpcCalls.length, 0)
+    }
+  })
+  for (const table of ["profiles", "employees"]) {
+    it(`${table} retorna erro => 503 fechado (não 403), 0 parse/RPC`, async () => {
+      const r = await call("funcionario", EMPLOYEE_API.competence, "", "2026-11", (f) => ({
+        ...f.client,
+        from: (t: string) => t === table
+          ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "SECRET timeout", code: "57014" } }) }) }) }
+          : f.client.from(t),
+      }))
+      assert.equal(r.status, 503)
+      assertClosedUnavailable(r.body)
+      assert.deepEqual(r.counts, { url: 0, params: 0, parse: 0 })
+      assert.equal(r.rpcCalls.length, 0)
+    })
+  }
+  it("ausência comprovada (sem erro, sem linha) => 403", async () => {
+    const r = await call("no_employee", EMPLOYEE_API.competence, "", "2026-11")
+    assert.equal(r.status, 403)
+    assert.equal(r.body.message, "Acesso não permitido para este perfil.")
+  })
+  it("401/403 normais mantêm o corpo anterior (sem errorClass)", async () => {
+    const a = await call("anon", EMPLOYEE_API.dashboard, "")
+    const d = await call("admin_master", EMPLOYEE_API.dashboard, "")
+    assert.deepEqual(a.body, { ok: false, message: "Sessão não encontrada. Faça login novamente." })
+    assert.deepEqual(d.body, { ok: false, message: "Acesso não permitido para este perfil." })
   })
 })

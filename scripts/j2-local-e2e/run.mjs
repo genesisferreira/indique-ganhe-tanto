@@ -110,6 +110,26 @@ try {
     await t(`API_J2B_authorized_invalid_400 ${p}`, () => ok.status === 400 || ok.status)
   }
   await t("API_J2B_no_rpc_for_anon_denied_or_invalid", () => rpcTotal() === rpcBefore || [rpcBefore, rpcTotal()])
+  // 3.1F-J2C: falha de infraestrutura no gate (Auth/profiles/employees) => 503 fechado, no-store, sem detalhe interno, 0 RPC.
+  const rpcBeforeC = rpcTotal()
+  for (const fault of ["auth", "profiles", "employees"]) {
+    if (fault === "auth") mock.faults.auth = true
+    else mock.faults.tables.add(fault)
+    for (const p of [...APIS, ...INVALID]) {
+      const r = await get(p, "A")
+      const txt = await r.text()
+      let b = null
+      try { b = JSON.parse(txt) } catch {}
+      await t(`API_J2C_${fault}_unavailable_503 ${p}`, () => (r.status === 503 && b && Object.keys(b).sort().join(",") === "errorClass,message,ok" && b.ok === false && b.errorClass === "employee_portal_unavailable" && !/SECRET|lab auth|lab db|XX000|stack/i.test(txt) && r.headers.get("cache-control")?.includes("no-store") && r.headers.get("pragma") === "no-cache" && r.headers.get("expires") === "0" && r.headers.get("vary")?.includes("Cookie")) || [r.status, b])
+    }
+    if (fault === "auth") {
+      const anon = await get("/api/employee/dashboard", null)
+      await t("API_J2C_auth_fault_anon_still_401", () => anon.status === 401 || anon.status)
+    }
+    mock.faults.auth = false
+    mock.faults.tables.clear()
+  }
+  await t("API_J2C_no_rpc_on_gate_failure", () => rpcTotal() === rpcBeforeC || [rpcBeforeC, rpcTotal()])
   for (const [q, label] of [["limit=0", "limit_0"], ["limit=51", "limit_51"], ["sort=referred_phone", "sort"], ["stage=x", "stage"], ["status=x", "status"], ["commission=x", "commission"], ["from=2026-02-30", "date"], ["from=2026-03-01&to=2026-02-01", "range"], ["employee_id=66666666-0000-4000-8000-000000000002", "employee_id"], ["employeeId=x", "employeeId"], ["foo=1", "unknown"], ["offset=99999", "offset"]]) {
     const r = await get(`/api/employee/sales?${q}`, "A")
     await t(`API_query_validation_400 ${label}`, () => r.status === 400 || r.status)

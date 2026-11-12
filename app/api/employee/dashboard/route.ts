@@ -7,6 +7,6 @@ export const dynamic = "force-dynamic"
 
 /** GET somente leitura. Ordem: sessão → papel/vínculo → query → RPC. Sem POST/PATCH/PUT/DELETE. */
 export async function GET(request: Request) {
-  const searchParams = new URL(request.url).searchParams
-  return employeeOutcome(await runEmployeeGet(await createEmployeeSessionClient(), EMPLOYEE_API.dashboard, { searchParams }))
+  // 3.1F-J2C: request/context repassados BRUTOS; URL e params só são lidos pelo helper após o gate.
+  return employeeOutcome(await runEmployeeGet(await createEmployeeSessionClient(), EMPLOYEE_API.dashboard, { request }))
 }

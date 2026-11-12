@@ -107,6 +107,29 @@ describe("3.1F-J2 arquitetura: identidade e privilégios (E/F/Q)", () => {
       assert.equal(/parse[A-Z]\w*\(|rejectIdentityParams|employeeBadRequest|\.rpc\(/.test(src), false, f)
     }
   })
+  it("3.1F-J2C: rotas não acessam request.url, URL, searchParams nem context.params antes do helper", () => {
+    for (const f of API_ROUTES.slice(0, 5)) {
+      const src = strip(read(f))
+      assert.equal(/request\.url|new URL\(|searchParams|context\.params|await context|\.params\b|Promise\.all|nextUrl/.test(src), false, f)
+      assert.match(src, /EMPLOYEE_API\.[a-zA-Z]+, \{ request(, context)? \}\)\)/, f)
+    }
+  })
+  it("3.1F-J2C: helper — gate em try/catch, input só depois do gate, sem Promise.all/prefetch", () => {
+    const src = strip(read("lib/employee-portal/api-gate.ts"))
+    assert.equal(/Promise\.all|Promise\.race|Promise\.allSettled/.test(src), false)
+    assert.equal([...src.matchAll(/new URL\(/g)].length, 1)
+    assert.equal([...src.matchAll(/context\.params\b/g)].length, 1)
+    const resolver = src.slice(src.indexOf("async function resolveInputAfterGate"), src.indexOf("export async function runEmployeeGet"))
+    assert.match(resolver, /new URL\(source\.request\.url\)/)
+    assert.match(resolver, /await source\.context\.params/)
+    const run = src.slice(src.indexOf("export async function runEmployeeGet"))
+    const order = ["try {", "gateEmployeeSession(", "} catch {", 'errorOutcome("unavailable")', "if (!gate.ok)", "resolveInputAfterGate(", "spec.parse(", ".rpc("].map((k) => run.indexOf(k))
+    assert.ok(order.every((i) => i >= 0), String(order))
+    assert.deepEqual([...order].sort((x, y) => x - y), order)
+    assert.equal(/source\.(request|context)/.test(run), false)
+    assert.match(src, /errorClass: EMPLOYEE_PORTAL_UNAVAILABLE_CLASS/)
+    assert.match(src, /EMPLOYEE_PORTAL_UNAVAILABLE_CLASS = "employee_portal_unavailable"/)
+  })
   it("rotas novas não importam código de ERP/rewards", () => {
     for (const f of [...API_ROUTES, ...EMPLOYEE_PAGES.slice(1)]) {
       assert.equal(/@\/lib\/(brbyte|collections|finance|services\/supabase-data)/.test(read(f)), false, f)

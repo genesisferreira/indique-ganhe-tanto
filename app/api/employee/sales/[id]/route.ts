@@ -7,7 +7,6 @@ export const dynamic = "force-dynamic"
 
 /** GET somente leitura. Venda alheia ou inexistente => 404 idêntico. ID inválido (autorizado) => 400. */
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  const searchParams = new URL(request.url).searchParams
-  const { id } = await context.params
-  return employeeOutcome(await runEmployeeGet(await createEmployeeSessionClient(), EMPLOYEE_API.saleDetail, { searchParams, path: id }))
+  // 3.1F-J2C: request/context repassados BRUTOS; URL e params só são lidos pelo helper após o gate.
+  return employeeOutcome(await runEmployeeGet(await createEmployeeSessionClient(), EMPLOYEE_API.saleDetail, { request, context }))
 }

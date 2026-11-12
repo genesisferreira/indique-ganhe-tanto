@@ -37,6 +37,8 @@ function decodeSub(token) {
 
 export async function startMockSupabase({ port, client, anonKey, serviceKey, allowOrigin, users }) {
   const stats = { requests: 0, writeAttempts: [], unsupported: [], rpc: {}, errors: 0 }
+  // 3.1F-J2C (lab): injeção de falha de infraestrutura no Auth/tabelas, com detalhe "secreto" que NÃO pode vazar.
+  const faults = { auth: false, tables: new Set() }
   let chain = Promise.resolve()
   const serial = (fn) => { const p = chain.then(fn, fn); chain = p.catch(() => {}); return p }
 
@@ -114,6 +116,7 @@ export async function startMockSupabase({ port, client, anonKey, serviceKey, all
     const auth = authOf(req)
     try {
       if (url.pathname === "/auth/v1/user") {
+        if (faults.auth) return send(res, 503, { code: 503, msg: "SECRET lab auth detail" })
         if (auth.role !== "authenticated") return send(res, 401, { code: 401, msg: "invalid JWT" })
         const u = users[auth.sub]
         if (!u) return send(res, 401, { code: 401, msg: "user not found" })
@@ -143,6 +146,7 @@ export async function startMockSupabase({ port, client, anonKey, serviceKey, all
           return send(res, 405, { code: "LAB_READ_ONLY", message: "lab mock is read-only" })
         }
         if (!IDENT.test(table)) return send(res, 404, { code: "PGRST205", message: "not found" })
+        if (faults.tables.has(table)) return send(res, 500, { code: "XX000", message: "SECRET lab db detail", details: "stack", hint: null })
         const sel = url.searchParams.get("select") || "*"
         if (/[()!:]/.test(sel)) { stats.unsupported.push(`select ${table}`); return send(res, 200, req.headers.accept?.includes("pgrst.object") ? null : [], { "Content-Range": "0-0/0" }) }
         const cols = sel === "*" ? "*" : sel.split(",").map((s) => s.trim()).filter(Boolean).map((s) => (IDENT.test(s) ? `"${s}"` : null))
@@ -188,5 +192,5 @@ export async function startMockSupabase({ port, client, anonKey, serviceKey, all
     }
   })
   await new Promise((r) => server.listen(port, "127.0.0.1", r))
-  return { stats, close: () => new Promise((r) => server.close(r)) }
+  return { stats, faults, close: () => new Promise((r) => server.close(r)) }
 }
