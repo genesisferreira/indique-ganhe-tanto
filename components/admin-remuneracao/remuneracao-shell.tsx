@@ -11,10 +11,12 @@ export async function requireAdminRemuneracaoPage(): Promise<void> {
 }
 
 /**
- * Shell somente leitura (3.1F-J2): sem formulário, sem botão de salvar/ativar/
- * calcular/fechar/pagar, sem consulta financeira, nenhum registro criado no load.
+ * Shell somente leitura (3.1F-J2): sem formulário, sem botão de ação, sem consulta
+ * financeira, nenhum registro criado no load.
+ * 3.1F-J4: seções com configuração em rascunho passam o conteúdo como `children`
+ * (componentes isolados em components/compensation-config); o shell continua sem ação.
  */
-export async function RemuneracaoShell({ sectionKey }: { sectionKey: string | null }) {
+export async function RemuneracaoShell({ sectionKey, children }: { sectionKey: string | null; children?: React.ReactNode }) {
   await requireAdminRemuneracaoPage()
   const current = ADMIN_REMUNERACAO_SECTIONS.find((s) => s.key === sectionKey) ?? null
   return (
@@ -42,6 +44,7 @@ export async function RemuneracaoShell({ sectionKey }: { sectionKey: string | nu
           </Link>
         ))}
       </nav>
+      {children ?? (
       <div role="status" className="rounded-xl border border-dashed border-border/60 bg-card/30 p-6 text-center">
         <p className="font-medium text-foreground">Nenhuma configuração criada</p>
         <p className="mx-auto mt-1 max-w-prose text-sm text-muted-foreground">
@@ -49,6 +52,7 @@ export async function RemuneracaoShell({ sectionKey }: { sectionKey: string | nu
           Abrir esta página não cria nenhum registro.
         </p>
       </div>
+      )}
       {!current ? (
         <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {ADMIN_REMUNERACAO_SECTIONS.map((s) => (

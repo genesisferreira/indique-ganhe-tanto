@@ -29,10 +29,10 @@ export type AdminRemuneracaoSection = {
   description: string
 }
 
-/** Estrutura navegável (shells read-only nesta sprint). */
+/** Estrutura navegável. 3.1F-J4: regras e perfis aceitam configuração em RASCUNHO; demais seções seguem somente leitura. */
 export const ADMIN_REMUNERACAO_SECTIONS: readonly AdminRemuneracaoSection[] = [
-  { key: "regras", href: "/admin/remuneracao/regras", title: "Regras de comissão", description: "Regras versionadas por função e setor." },
-  { key: "funcionarios", href: "/admin/remuneracao/funcionarios", title: "Perfis de remuneração", description: "Salário, vale, transporte e combustível por funcionário." },
+  { key: "regras", href: "/admin/remuneracao/regras", title: "Regras de comissão", description: "Regras versionadas por papel. Somente rascunho nesta etapa." },
+  { key: "funcionarios", href: "/admin/remuneracao/funcionarios", title: "Perfis de remuneração", description: "Salário, vale-refeição, passagem e combustível por funcionário (rascunho)." },
   { key: "dias-trabalhados", href: "/admin/remuneracao/dias-trabalhados", title: "Dias trabalhados", description: "Registro mensal de presença e benefícios diários." },
   { key: "competencias", href: "/admin/remuneracao/competencias", title: "Competências", description: "Apuração mensal por funcionário." },
   { key: "auditoria", href: "/admin/remuneracao/auditoria", title: "Auditoria financeira", description: "Eventos financeiros append-only." },

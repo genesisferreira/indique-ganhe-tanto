@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { competenceToParam, parseCompensationListQuery } from "@/lib/employee-portal/contracts"
 import { loadEmployeeCompensation } from "@/lib/employee-portal/service"
+import { loadEmployeeCompensationPreview } from "@/lib/compensation-config/service"
 import { formatCompetence, formatMoney } from "@/lib/employee-portal/format"
 import {
   BENEFIT_METHOD_LABEL,
@@ -20,39 +21,59 @@ export const dynamic = "force-dynamic"
 export default async function MinhaRemuneracaoPage() {
   const parsed = parseCompensationListQuery(new URLSearchParams())
   const r = parsed.ok ? await loadEmployeeCompensation(parsed.value) : ({ ok: false, kind: "invalid" } as const)
+  // 3.1F-J4: prévia do PRÓPRIO rascunho vigente (somente componentes configurados e visíveis).
+  const preview = r.ok ? await loadEmployeeCompensationPreview() : null
   return (
     <div className="space-y-6">
       <PageHeader title="Minha remuneração" description="Somente seus dados. Componentes não configurados ou não visíveis não aparecem." />
-      {!r.ok ? (
-        <PortalError kind={r.kind} />
+      {!r.ok || !preview ? (
+        <PortalError kind={r.ok ? "unavailable" : r.kind} />
       ) : (
         <>
           {r.data.readOnly ? (
             <Notice>Seu status atual é {labelFor(EMPLOYEE_STATUS_LABEL, r.data.employeeStatus)}. Consulta somente leitura.</Notice>
           ) : null}
           <section aria-labelledby="profile-title" className="space-y-3">
-            <h2 id="profile-title" className="text-lg font-semibold">Configuração vigente</h2>
-            {!r.data.profile ? (
+            <h2 id="profile-title" className="text-lg font-semibold">
+              Competência atual{preview.ok ? `: ${formatCompetence(preview.data.competenceMonth)}` : ""}
+            </h2>
+            {!preview.ok ? (
+              <PortalError kind={preview.kind === "not_found" ? "unavailable" : preview.kind} />
+            ) : !preview.data.configured && !preview.data.commission ? (
               <EmptyState
                 title="Nenhuma remuneração configurada para você ainda."
-                description="A comissão aparece por venda quando houver regra ativa e evidência. Salário e benefícios só aparecem quando configurados e liberados para visualização."
+                description="Quando o Financeiro configurar e liberar algum componente para visualização, ele aparecerá aqui."
               />
             ) : (
-              <dl className="grid gap-3 rounded-xl border border-border/50 bg-card/50 p-4 text-sm sm:grid-cols-2">
-                <div><dt className="text-muted-foreground">Comissão</dt><dd className="font-medium">Por venda, conforme regra vigente</dd></div>
-                {r.data.profile.salary ? (
-                  <div><dt className="text-muted-foreground">Salário</dt><dd className="font-medium tabular-nums">{formatMoney(r.data.profile.salary.amount)}</dd></div>
+              <>
+                <Notice>Valores estimados a partir da configuração em rascunho. Não constituem folha fechada nem pagamento.</Notice>
+                <dl className="grid gap-3 rounded-xl border border-border/50 bg-card/50 p-4 text-sm sm:grid-cols-2">
+                  {preview.data.commission ? (
+                    <div><dt className="text-muted-foreground">Comissão</dt><dd className="font-medium">Não calculada</dd></div>
+                  ) : null}
+                  {preview.data.components.salary ? (
+                    <div><dt className="text-muted-foreground">Salário</dt><dd className="font-medium tabular-nums">{formatMoney(preview.data.components.salary.amount)}</dd></div>
+                  ) : null}
+                  {preview.data.components.meal ? (
+                    <div><dt className="text-muted-foreground">Vale-refeição</dt><dd className="font-medium tabular-nums">{formatMoney(preview.data.components.meal.dailyAmount)} por dia trabalhado</dd></div>
+                  ) : null}
+                  {preview.data.components.transport ? (
+                    <div><dt className="text-muted-foreground">Passagem</dt><dd className="font-medium tabular-nums">{formatMoney(preview.data.components.transport.amount)} {labelFor(BENEFIT_METHOD_LABEL, preview.data.components.transport.method)}</dd></div>
+                  ) : null}
+                  {preview.data.components.fuel ? (
+                    <div><dt className="text-muted-foreground">Gasolina</dt><dd className="font-medium tabular-nums">{formatMoney(preview.data.components.fuel.amount)} {labelFor(BENEFIT_METHOD_LABEL, preview.data.components.fuel.method)}</dd></div>
+                  ) : null}
+                  {preview.data.estimatedTotal ? (
+                    <div className="sm:col-span-2 border-t border-border/40 pt-3">
+                      <dt className="text-muted-foreground">Total estimado (componentes mensais visíveis)</dt>
+                      <dd className="text-lg font-semibold tabular-nums">{formatMoney(preview.data.estimatedTotal)}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {preview.data.perDayComponentsExcluded ? (
+                  <p className="text-xs text-muted-foreground">Itens por dia trabalhado dependem dos dias registrados na competência e não entram no total estimado.</p>
                 ) : null}
-                {r.data.profile.meal ? (
-                  <div><dt className="text-muted-foreground">Vale-refeição</dt><dd className="font-medium tabular-nums">{formatMoney(r.data.profile.meal.dailyAmount)} por dia trabalhado</dd></div>
-                ) : null}
-                {r.data.profile.transport ? (
-                  <div><dt className="text-muted-foreground">Transporte</dt><dd className="font-medium tabular-nums">{formatMoney(r.data.profile.transport.amount)} {labelFor(BENEFIT_METHOD_LABEL, r.data.profile.transport.method)}</dd></div>
-                ) : null}
-                {r.data.profile.fuel ? (
-                  <div><dt className="text-muted-foreground">Combustível</dt><dd className="font-medium tabular-nums">{formatMoney(r.data.profile.fuel.amount)} {labelFor(BENEFIT_METHOD_LABEL, r.data.profile.fuel.method)}</dd></div>
-                ) : null}
-              </dl>
+              </>
             )}
           </section>
           <section aria-labelledby="comp-title" className="space-y-3">
