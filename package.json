@@ -28,7 +28,7 @@
     "test:j2-semantic-selftest": "node scripts/j2-employee-read-rpcs-lab.mjs --semantic-selftest",
     "test:j2-employee-read-pg": "node scripts/j2-employee-read-rpcs-lab.mjs",
     "test:j2-e2e": "node scripts/j2-local-e2e/run.mjs",
-    "test:k1-legacy-loaders": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --experimental-test-module-mocks --test lib/client/guarded-loader.test.ts lib/admin-legacy/employees-outcome.test.ts lib/admin-legacy/k1-loaders.test.ts lib/admin-legacy/k1-architecture.test.ts components/ui/stat-card-trend.test.ts lib/admin-legacy/k1b-abort.test.ts",
+    "test:k1-legacy-loaders": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --experimental-test-module-mocks --test lib/client/guarded-loader.test.ts lib/admin-legacy/employees-outcome.test.ts lib/admin-legacy/k1-loaders.test.ts lib/admin-legacy/k1-architecture.test.ts components/ui/stat-card-trend.test.ts lib/admin-legacy/k1b-abort.test.ts lib/admin-legacy/k1s-api-loaders.test.ts",
     "test:k1-bundle-scan": "node scripts/k1-placeholder-bundle-scan.mjs .next",
     "test:k1-visual": "node scripts/k1-local-visual/run.mjs",
     "test:k1b-abort": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --experimental-test-module-mocks --test lib/admin-legacy/k1b-abort.test.ts",

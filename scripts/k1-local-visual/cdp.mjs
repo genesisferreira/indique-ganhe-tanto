@@ -45,7 +45,7 @@ export async function launchK1Browser(executable, port = 9343) {
     if (m.method === "Network.requestWillBeSent") {
       const u = new URL(m.params.request.url)
       if (/^https?:$/.test(u.protocol)) hosts.add(u.host)
-      requests.push({ method: m.params.request.method, host: u.host, path: u.pathname })
+      requests.push({ method: m.params.request.method, host: u.host, path: u.pathname, search: u.search })
       byId.set(m.params.requestId, { method: m.params.request.method, host: u.host, path: u.pathname, search: u.search })
     } else if (m.method === "Network.loadingFailed") {
       const r = byId.get(m.params.requestId)
@@ -82,6 +82,7 @@ export async function launchK1Browser(executable, port = 9343) {
   return {
     version: ver.Browser,
     send,
+    on,
     requests,
     failures,
     hosts,

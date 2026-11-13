@@ -2740,7 +2740,7 @@ async function loadPlansMapForReferralRows(
  * Todas as indicações (admin). Sem filtro de status/pipeline na query principal.
  */
 export async function loadAdminReferralsFromSupabase(
-  opts: { identity?: AdminLoadIdentity; signal?: AbortSignal } = {}
+  opts: { identity?: AdminLoadIdentity; signal?: AbortSignal; client?: AdminReadClient } = {}
 ): Promise<ReferralsLoadResult<Indicacao>> {
   let meta = buildReferralsLoadMeta({
     queryLabel: "referrals.admin.all",
@@ -2757,7 +2757,7 @@ export async function loadAdminReferralsFromSupabase(
   })
 
   try {
-    const supabase = getSupabaseClient()
+    const supabase = opts.client ?? getSupabaseClient()
     const db = supabase as unknown as ReferralsDb
     if (opts.identity) {
       // 3.1F-K1: identidade já validada por auth.getUser() neste carregamento lógico.
@@ -3857,6 +3857,14 @@ const REFERRAL_ACTIVE_FOR_COMMERCIAL_STATS = new Set([
 /** 3.1F-K1: identidade já resolvida (uma vez) no carregamento lógico da página. */
 export type AdminLoadIdentity = { userId: string; role: string }
 
+/**
+ * 3.1F-K1S: cliente Supabase opcional para as leituras das telas legadas. Padrão: cliente do navegador.
+ * As rotas /api/admin/comerciais e /api/admin/indicacoes passam o cliente de SERVIDOR com a sessão do
+ * próprio usuário (cookies) — mesmo papel/RLS, sem service_role — para não depender do lock de auth do
+ * navegador (auth-js navigator lock) disputado pelo app shell (K2).
+ */
+export type AdminReadClient = ReturnType<typeof getSupabaseClient>
+
 export type AdminListErrorClass =
   | "unauthenticated"
   | "forbidden"
@@ -3910,10 +3918,10 @@ async function resolveAdminLoadIdentity(
  * RLS permanece a única fronteira de autorização; o papel aqui é apenas pré-checagem de UX.
  */
 export async function loadAdminComerciaisResultFromSupabase(
-  opts: { identity?: AdminLoadIdentity; signal?: AbortSignal } = {}
+  opts: { identity?: AdminLoadIdentity; signal?: AbortSignal; client?: AdminReadClient } = {}
 ): Promise<AdminListResult<Comercial>> {
   try {
-    const supabase = getSupabaseClient()
+    const supabase = opts.client ?? getSupabaseClient()
     const db = supabase as unknown as {
       from: (t: string) => ReturnType<typeof supabase.from>
     }
@@ -5606,10 +5614,10 @@ async function assertCanMarkFirstInvoicePaid(
  * Perfil do usuário autenticado (`auth.users` + `public.profiles`).
  */
 export async function getAuthProfileBasicsFromSupabase(
-  opts: { signal?: AbortSignal } = {}
+  opts: { signal?: AbortSignal; client?: AdminReadClient } = {}
 ): Promise<AuthProfileBasics | null> {
   try {
-    const supabase = getSupabaseClient()
+    const supabase = opts.client ?? getSupabaseClient()
     const db = supabase as unknown as {
       from: (t: string) => ReturnType<typeof supabase.from>
     }

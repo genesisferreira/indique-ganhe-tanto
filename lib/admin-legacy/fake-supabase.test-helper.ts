@@ -18,9 +18,13 @@ export type FakeScenario = {
   delayMs?: number
   /** consulta pendurada para sempre (simula rede travada) */
   hang?: boolean
+  /** 3.1F-K1S: auth.getUser() lança o erro do auth-js quando outro pedido rouba o lock (navigator.locks). */
+  lockStolen?: boolean
+  /** 3.1F-K1S: lista de indicações válida e vazia. */
+  referralsEmpty?: boolean
 }
 
-export const counters = { getUser: 0, from: 0, writes: 0, signals: 0, tables: [] as string[] }
+export const counters = { getUser: 0, from: 0, writes: 0, signals: 0, tables: [] as string[], queries: [] as string[] }
 export const scenario: FakeScenario = {}
 
 export function resetFake(next: FakeScenario = {}): void {
@@ -28,6 +32,7 @@ export function resetFake(next: FakeScenario = {}): void {
   counters.from = 0
   counters.writes = 0
   counters.tables = []
+  counters.queries = []
   for (const k of Object.keys(scenario)) delete (scenario as Record<string, unknown>)[k]
   Object.assign(scenario, { role: "admin_master", comerciais: 1 }, next)
   counters.signals = 0
@@ -65,6 +70,7 @@ function rowsFor(table: string, ops: string[]): { data: unknown; error: unknown 
   }
   if (table === "referrals") {
     if (scenario.referralsError) return { data: null, error: { message: "boom", code: "XX000" } }
+    if (scenario.referralsEmpty && !has("select:\"commercial_profile_id, status\"")) return { data: [], error: null }
     if (has("select:\"commercial_profile_id, status\"")) return { data: [{ commercial_profile_id: COMERCIAL_ID, status: "pendente" }], error: null }
     return {
       data: [
@@ -130,13 +136,14 @@ function builder(table: string) {
   const proxy: unknown = new Proxy(target, {
     get(_t, prop: string) {
       if (prop === "then") {
+        counters.queries.push(`${table}|${ops.join("|")}`)
         return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
           settle(rowsFor(table, ops)).then((r) => {
             if (throwOnError && r.error) throw r.error
             return r
           }).then(res, rej)
       }
-      if (prop === "maybeSingle" || prop === "single") return () => settle(single(table))
+      if (prop === "maybeSingle" || prop === "single") return () => { counters.queries.push(`${table}|${ops.join("|")}|single`); return settle(single(table)) }
       if (prop === "throwOnError") return () => { throwOnError = true; return proxy }
       if (WRITE.has(prop)) {
         counters.writes++
@@ -157,6 +164,13 @@ export function fakeSupabaseClient() {
     auth: {
       getUser: async () => {
         counters.getUser++
+        if (scenario.lockStolen) {
+          // Mesmo erro do auth-js 2.105.1 (lib/locks.js navigatorLock): o detentor perde o lock para um "steal".
+          throw Object.assign(new Error('Lock "lock:sb-lab-auth-token" was released because another request stole it'), {
+            name: "NavigatorLockAcquireTimeoutError",
+            isAcquireTimeout: true,
+          })
+        }
         if (scenario.hang) return new Promise(() => {})
         if (scenario.delayMs) await new Promise((r) => setTimeout(r, scenario.delayMs))
         if (scenario.authError) return { data: { user: null }, error: { name: "AuthSessionMissingError", status: 400, message: "Auth session missing!" } }

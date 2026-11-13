@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { comerciais } from "@/lib/services/mock-data.service"
-import { loadComerciaisPageOutcome } from "@/lib/admin-legacy/page-loaders"
+import { fetchComerciaisPageOutcome } from "@/lib/admin-legacy/api-page-loaders"
 import { LoaderStatus } from "@/components/ui/loader-status"
 import { useGuardedLoader } from "@/hooks/use-guarded-loader"
 import { listOutcome } from "@/lib/client/guarded-loader"
@@ -29,8 +29,9 @@ export default function AdminComerciaisPage() {
   // 3.1F-K1: estado explícito (loading/success/empty/error/timeout). Falha nunca vira lista vazia.
   const loadComerciais = useCallback(async ({ signal }: { signal: AbortSignal }) => {
     if (isDataProviderMock()) return listOutcome<Comercial>(comerciais)
-    // 3.1F-K1B: o signal do carregamento vai até as consultas (supabase-js .abortSignal).
-    return loadComerciaisPageOutcome(signal)
+    // 3.1F-K1S: leitura via /api/admin/comerciais (sessão do usuário no servidor; sem lock de auth do
+    // navegador). O signal do carregamento cancela o fetch real (timeout/desmontagem/retry).
+    return fetchComerciaisPageOutcome(signal)
   }, [])
   const { state, retry } = useGuardedLoader<Comercial[]>(loadComerciais, "admin-comerciais")
   const carregando = state.status === "idle" || state.status === "loading"

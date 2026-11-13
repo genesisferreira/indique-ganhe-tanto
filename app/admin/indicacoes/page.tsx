@@ -24,10 +24,8 @@ import {
   LOADER_TIMEOUT_MESSAGE,
   loaderErrorMessage,
 } from "@/lib/client/guarded-loader"
-import {
-  loadAdminIndicacoesBundle,
-  type AdminIndicacoesBundle,
-} from "@/lib/admin-legacy/indicacoes-loader"
+import type { AdminIndicacoesBundle } from "@/lib/admin-legacy/indicacoes-loader"
+import { fetchIndicacoesPageOutcome } from "@/lib/admin-legacy/api-page-loaders"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
@@ -89,7 +87,9 @@ export default function AdminIndicacoesPage() {
       }
       return dataOutcome(bundle, bundle.lista.length === 0)
     }
-    return loadAdminIndicacoesBundle(signal)
+    // 3.1F-K1S: leitura via /api/admin/indicacoes (sessão do usuário no servidor; sem lock de auth do
+    // navegador). O signal do carregamento cancela o fetch real (timeout/desmontagem/retry).
+    return fetchIndicacoesPageOutcome(signal)
   }, [])
   const { state, reload, retry } = useGuardedLoader<AdminIndicacoesBundle>(loadBundle, "admin-indicacoes")
   const carregando = state.status === "idle" || state.status === "loading"

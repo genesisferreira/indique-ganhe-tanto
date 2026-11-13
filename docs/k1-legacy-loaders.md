@@ -183,3 +183,28 @@ Origem provável: layout administrativo, sidebar (badges/contadores), sino de no
 cada um resolvendo a identidade por conta própria (~22–24 leituras de `profiles` acompanham).
 Impacto possível: latência no primeiro carregamento, carga no Auth/PostgREST, risco de rate limit em picos.
 K2 será uma sprint separada; K1B não altera layout global, sidebar, notificações nem a arquitetura de sessão do app shell.
+
+## 3.1F-K1S — comerciais/indicações via rota de API (lock de auth do navegador)
+
+**Sintoma (produção, b905589 e 71bb71e):** `/admin/comerciais` terminava em "Não foi possível carregar os dados." (ou
+"Carregando…") sem nunca disparar `GET /rest/v1/profiles?role=eq.comercial`; `/admin/indicacoes` ficava travada/sem
+lista. `/admin/funcionarios` funcionava.
+
+**Causa raiz (provada):** no navegador, `auth.getUser()` e o `getSession()` interno de cada consulta REST do supabase-js
+passam pelo lock de auth (`navigator.locks`, `lock:<storageKey>`, `lockAcquireTimeout` 5 s, auth-js 2.105.1). O app shell
+dispara ~33 `getUser` concorrentes por carregamento; cada um segura o lock por um RTT do Auth. O pedido que espera > 5 s
+rouba o lock (`steal`) e o detentor recebe `NavigatorLockAcquireTimeoutError` lançado de dentro de `getUser()`. Se a vítima
+é o loader da página: comerciais => catch genérico, lista nunca consultada; indicações => `getBasics` nulo, referrals nunca
+consultadas. Funcionários carrega por `/api/admin/employees` (servidor; sem lock do navegador).
+
+Evidência: `scripts/k1-local-visual/k1s-latency-repro.mjs` (lab J2 local + mock Auth com latência; 600 ms/getUser =>
+comerciais 3/3 erro sem consulta principal, indicações 3/3 erro, funcionários 3/3 OK, exceção não tratada
+"…was released because another request stole it") e `lib/admin-legacy/k1s-api-loaders.test.ts`.
+
+**Correção:** `GET /api/admin/comerciais` e `GET /api/admin/indicacoes` executam os MESMOS loaders/services no servidor
+com o cliente da sessão do próprio usuário (`lib/supabase/server`, cookies, `getUser` validado, papel em
+`ADMIN_PORTAL_READ_ROLES`, RLS inalterada, sem service_role, `request.signal`, `no-store`). As páginas usam
+`lib/admin-legacy/api-page-loaders.ts` (fetch com o signal do guarded loader; validação de shape; datas restauradas).
+Indicações: a lista de comerciais (opcional) nunca bloqueia a principal — falha => `comerciaisDisponiveis=false`;
+pendente 3 s após as indicações => entregue sem ela (mesmo signal; timeout/desmontagem continuam cancelando tudo).
+Sem mudança em RLS, migrations, auth, app shell (K2), funcionários ou J2.

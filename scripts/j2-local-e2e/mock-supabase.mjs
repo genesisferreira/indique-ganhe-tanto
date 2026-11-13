@@ -36,9 +36,13 @@ function decodeSub(token) {
 }
 
 export async function startMockSupabase({ port, client, anonKey, serviceKey, allowOrigin, users }) {
-  const stats = { requests: 0, writeAttempts: [], unsupported: [], rpc: {}, errors: 0 }
+  const stats = { requests: 0, writeAttempts: [], unsupported: [], rpc: {}, errors: 0, restLog: [] }
   // 3.1F-J2C (lab): injeção de falha de infraestrutura no Auth/tabelas, com detalhe "secreto" que NÃO pode vazar.
   const faults = { auth: false, tables: new Set() }
+  // 3.1F-K1S (lab): latência artificial (ms) por rota — padrão 0 (comportamento inalterado). Mutável em tempo de execução
+  // para reproduzir contenção do lock de auth (auth-js navigator lock, acquire timeout 5 s) com RTT realista.
+  const latency = { authUserMs: 0, restMs: 0 }
+  const pause = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : null)
   let chain = Promise.resolve()
   const serial = (fn) => { const p = chain.then(fn, fn); chain = p.catch(() => {}); return p }
 
@@ -116,6 +120,7 @@ export async function startMockSupabase({ port, client, anonKey, serviceKey, all
     const auth = authOf(req)
     try {
       if (url.pathname === "/auth/v1/user") {
+        await pause(latency.authUserMs)
         if (faults.auth) return send(res, 503, { code: 503, msg: "SECRET lab auth detail" })
         if (auth.role !== "authenticated") return send(res, 401, { code: 401, msg: "invalid JWT" })
         const u = users[auth.sub]
@@ -140,6 +145,9 @@ export async function startMockSupabase({ port, client, anonKey, serviceKey, all
         } catch (e) { return pgErr(res, e) }
       }
       if (url.pathname.startsWith("/rest/v1/")) {
+        // 3.1F-K1S: registro (método/caminho/query, sem corpo) para provar consultas feitas pelo servidor Next.
+        if (stats.restLog.length < 20000) stats.restLog.push({ method: req.method, path: url.pathname, search: url.search })
+        await pause(latency.restMs)
         const table = url.pathname.slice("/rest/v1/".length)
         if (req.method !== "GET" && req.method !== "HEAD") {
           stats.writeAttempts.push(`${req.method} ${table}`)
@@ -192,5 +200,5 @@ export async function startMockSupabase({ port, client, anonKey, serviceKey, all
     }
   })
   await new Promise((r) => server.listen(port, "127.0.0.1", r))
-  return { stats, faults, close: () => new Promise((r) => server.close(r)) }
+  return { stats, faults, latency, close: () => new Promise((r) => server.close(r)) }
 }
