@@ -183,6 +183,15 @@ export function PipelineKanbanBoard({
                             {card.planoNome}
                           </p>
                         ) : null}
+                        {card.originLabel ? (
+                          <p
+                            className="mt-1 inline-flex max-w-full items-center gap-1 rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[11px] text-sky-300"
+                            title={card.originatorNome ? `Origem: ${card.originLabel} — ${card.originatorNome}` : `Origem: ${card.originLabel}`}
+                          >
+                            <span className="shrink-0 font-medium">{card.originLabel}</span>
+                            {card.originatorNome ? <span className="truncate">· {card.originatorNome}</span> : null}
+                          </p>
+                        ) : null}
                         {showCommercialName && card.commercialNome ? (
                           <p className="mt-1 text-[11px] text-zinc-400 truncate">
                             {card.commercialNome}

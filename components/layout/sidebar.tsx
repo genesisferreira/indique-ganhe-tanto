@@ -124,6 +124,7 @@ const funcionarioNav: NavGroup[] = [
   {
     title: "Meus resultados",
     items: [
+      { label: "Nova oportunidade", href: "/funcionario/nova-oportunidade", icon: UserPlus },
       { label: "Minhas vendas", href: "/funcionario/vendas", icon: BarChart3 },
       { label: "Minha remuneração", href: "/funcionario/remuneracao", icon: Receipt },
     ],

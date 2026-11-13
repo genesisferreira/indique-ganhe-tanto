@@ -15,6 +15,10 @@ export const OPPORTUNITY_STATUSES = [
 export const COMMISSION_FILTERS = [
   "none", "pending_evidence", "accrued", "approved", "included_in_payroll", "paid", "reversed", "rejected",
 ] as const
+/** 3.1F-J3: papéis originadores filtráveis em "Minhas vendas". */
+export const SALES_ROLE_FILTERS = ["technician_originator", "external_sales_originator", "internal_sales_responsible"] as const
+export const SALES_SEARCH_MIN = 2
+export const SALES_SEARCH_MAX = 40
 export const SALES_PAGE_SIZE_DEFAULT = 20
 export const SALES_PAGE_SIZE_MAX = 50
 export const SALES_OFFSET_MAX = 10000
@@ -30,13 +34,17 @@ export type SalesQuery = {
   stage: (typeof PIPELINE_STAGES)[number] | null
   status: (typeof OPPORTUNITY_STATUSES)[number] | null
   commission: (typeof COMMISSION_FILTERS)[number] | null
+  /** 3.1F-J3 */
+  role: (typeof SALES_ROLE_FILTERS)[number] | null
+  /** 3.1F-J3: busca somente nos dados visíveis ao funcionário (referência, nome mascarado, plano). */
+  search: string | null
 }
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
 type ParamSource = { get(name: string): string | null; keys(): IterableIterator<string> }
 
-const SALES_KEYS = new Set(["limit", "offset", "page", "sort", "from", "to", "stage", "status", "commission"])
+const SALES_KEYS = new Set(["limit", "offset", "page", "sort", "from", "to", "stage", "status", "commission", "role", "q"])
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/
@@ -86,12 +94,19 @@ export function parseSalesQuery(params: ParamSource, opts: { strict?: boolean } 
   if (status === undefined) return { ok: false, error: "Status inválido." }
   const commission = pick(params.get("commission"), COMMISSION_FILTERS)
   if (commission === undefined) return { ok: false, error: "Situação da comissão inválida." }
+  const role = pick(params.get("role"), SALES_ROLE_FILTERS)
+  if (role === undefined) return { ok: false, error: "Papel inválido." }
+  const rawSearch = (params.get("q") ?? "").replace(/\s+/g, " ").trim()
+  if (rawSearch && (rawSearch.length < SALES_SEARCH_MIN || rawSearch.length > SALES_SEARCH_MAX)) {
+    return { ok: false, error: "Busca deve ter entre 2 e 40 caracteres." }
+  }
+  const search = rawSearch || null
   const from = params.get("from") || null
   const to = params.get("to") || null
   if (from && !isValidDate(from)) return { ok: false, error: "Data inicial inválida." }
   if (to && !isValidDate(to)) return { ok: false, error: "Data final inválida." }
   if (from && to && to < from) return { ok: false, error: "Período inválido." }
-  return { ok: true, value: { limit, offset, sort: sort ?? "created_desc", from, to, stage, status, commission } }
+  return { ok: true, value: { limit, offset, sort: sort ?? "created_desc", from, to, stage, status, commission, role, search } }
 }
 
 export function parseOpportunityId(raw: string | null | undefined): string | null {

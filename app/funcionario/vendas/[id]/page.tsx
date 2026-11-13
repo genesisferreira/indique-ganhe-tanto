@@ -41,7 +41,7 @@ export default async function DetalheVendaPage({ params }: { params: Promise<{ i
           <section aria-labelledby="fin-title" className="space-y-3">
             <h2 id="fin-title" className="text-lg font-semibold">Situação da comissão</h2>
             {r.data.commissions.length === 0 ? (
-              <EmptyState title="Sem comissão registrada para esta venda." description="A comissão só é registrada quando houver regra ativa e evidência comprovada." />
+              <EmptyState title="Comissão: aguardando regra financeira." description="A comissão só é registrada quando houver regra ativa e evidência comprovada." />
             ) : (
               <ul className="space-y-2">
                 {r.data.commissions.map((c, i) => (

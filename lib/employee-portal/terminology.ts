@@ -11,7 +11,8 @@
 export type BadgeTone = "neutral" | "info" | "warning" | "success" | "danger" | "primary"
 
 export const ENTITLEMENT_STATUS_LABEL: Record<string, string> = {
-  none: "Sem comissão registrada",
+  // 3.1F-J3: enquanto não houver regra de comissão ativa (Entrega B), nenhuma comissão é calculada.
+  none: "Aguardando regra financeira",
   pending_evidence: "Aguardando evidência",
   // Contrato J2: accrued = valor apurado na competência, ainda não revisado.
   accrued: "Em apuração",

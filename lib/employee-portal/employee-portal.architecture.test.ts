@@ -66,12 +66,12 @@ describe("3.1F-J2 arquitetura: identidade e privilégios (E/F/Q)", () => {
       assert.equal(/createServiceRoleClient|getOpsDb|getPrivileged|SUPABASE_SERVICE_ROLE_KEY|service-role/.test(src), false, f)
     }
   })
-  it("serviço usa somente a sessão (createClient) e somente as 5 RPCs de leitura", () => {
+  it("serviço usa somente a sessão (createClient) e somente as 5 RPCs de leitura (3.1F-J3: lista = list_employee_sales_filtered)", () => {
     const src = strip(read("lib/employee-portal/service.ts"))
     assert.match(src, /from "@\/lib\/supabase\/server"/)
     assert.equal(/\.from\(/.test(src), false)
     const rpcs = [...src.matchAll(/sessionRpc\("([a-z_]+)"/g)].map((m) => m[1]).sort()
-    assert.deepEqual(rpcs, ["employee_compensation_summary", "employee_sales_dashboard_summary", "get_employee_sale_detail", "list_employee_competence_lines", "list_employee_sales"])
+    assert.deepEqual(rpcs, ["employee_compensation_summary", "employee_sales_dashboard_summary", "get_employee_sale_detail", "list_employee_competence_lines", "list_employee_sales_filtered"])
   })
   it("nenhum employee_id/profile_id enviado às RPCs", () => {
     const src = strip(read("lib/employee-portal/service.ts"))
@@ -96,7 +96,7 @@ describe("3.1F-J2 arquitetura: identidade e privilégios (E/F/Q)", () => {
     assert.deepEqual([...src.matchAll(/\.from\("([a-z_]+)"\)/g)].map((m) => m[1]), ["profiles", "employees"])
     assert.equal(/\.(insert|update|upsert|delete)\(|createServiceRoleClient|getOpsDb|service_role/.test(src), false)
     const rpcs = [...src.matchAll(/rpc: "([a-z_]+)"/g)].map((m) => m[1]).sort()
-    assert.deepEqual(rpcs, ["employee_compensation_summary", "employee_sales_dashboard_summary", "get_employee_sale_detail", "list_employee_competence_lines", "list_employee_sales"])
+    assert.deepEqual(rpcs, ["employee_compensation_summary", "employee_sales_dashboard_summary", "get_employee_sale_detail", "list_employee_competence_lines", "list_employee_sales_filtered"])
     const run = src.slice(src.indexOf("export async function runEmployeeGet"))
     assert.ok(run.indexOf("gateEmployeeSession(") < run.indexOf("spec.parse(") && run.indexOf("spec.parse(") < run.indexOf(".rpc("))
   })
@@ -198,9 +198,12 @@ describe("3.1F-J2 terminologia isolada (D/J)", () => {
       assert.equal(/R\$\s?(30|50|22)\b|\b2\s?%|DADOS SINT|WIREFRAME|mock-data|MOCK_/.test(src), false, f)
     }
   })
-  it("nova oportunidade não funcional: rota inexistente ou sem formulário", () => {
+  it("3.1F-J3: nova oportunidade é a ÚNICA escrita, isolada em components/employee-opportunities + POST dedicado", () => {
     const p = "app/funcionario/nova-oportunidade/page.tsx"
-    assert.ok(!existsSync(join(root, p)) || !/<form|method=|onSubmit/.test(read(p)))
+    assert.ok(existsSync(join(root, p)))
+    assert.equal(/<form|method=|onSubmit/.test(read(p)), false)
+    assert.match(read(p), /EmployeeOpportunityForm/)
+    assert.match(read("components/employee-opportunities/opportunity-form.tsx"), /fetch\("\/api\/employee\/opportunities"/)
   })
   it("único formulário do funcionário é de CONSULTA (GET) sem POST", () => {
     const src = read("components/employee-portal/sales-filters.tsx")

@@ -22,7 +22,7 @@ describe("3.1F-J2 query validation (F)", () => {
   it("defaults", () => {
     const r = parseSalesQuery(qs(""))
     assert.equal(r.ok, true)
-    if (r.ok) assert.deepEqual(r.value, { limit: 20, offset: 0, sort: "created_desc", from: null, to: null, stage: null, status: null, commission: null })
+    if (r.ok) assert.deepEqual(r.value, { limit: 20, offset: 0, sort: "created_desc", from: null, to: null, stage: null, status: null, commission: null, role: null, search: null })
   })
   it("page -> offset; filtros allowlist", () => {
     const r = parseSalesQuery(qs("limit=10&page=3&sort=updated_desc&stage=negociacao&status=em_andamento&commission=pending_evidence&from=2026-01-01&to=2026-01-31"))
@@ -42,6 +42,15 @@ describe("3.1F-J2 query validation (F)", () => {
       assert.equal(parseCompensationListQuery(qs(`${k}=x`)).ok, false)
     })
   }
+  it("3.1F-J3: filtros de papel e busca (allowlist, 2–40 caracteres)", () => {
+    const r = parseSalesQuery(qs("role=external_sales_originator&q=%20maria%20%20s%20"), { strict: true })
+    assert.equal(r.ok, true)
+    if (r.ok) {
+      assert.equal(r.value.role, "external_sales_originator")
+      assert.equal(r.value.search, "maria s")
+    }
+    for (const bad of ["role=admin", "role=indicador", "q=a", `q=${"x".repeat(41)}`]) assert.equal(parseSalesQuery(qs(bad), { strict: true }).ok, false, bad)
+  })
   it("strict rejeita parâmetro desconhecido", () => {
     assert.equal(parseSalesQuery(qs("foo=1"), { strict: true }).ok, false)
     assert.equal(parseSalesQuery(qs("foo=1")).ok, true)

@@ -265,8 +265,12 @@ export function shouldShowSidebarHref(input: {
 
   if (input.variant === "funcionario") {
     if (input.href === "/funcionario" || input.href === "/notificacoes") return true
-    // 3.1F-J2: leitura dos próprios dados (sem "Nova oportunidade" até J3).
+    // 3.1F-J2: leitura dos próprios dados.
     if (input.href === "/funcionario/vendas" || input.href === "/funcionario/remuneracao") return true
+    // 3.1F-J3: atalho visível só com vínculo real de Técnico/Vendas Externas (o servidor revalida tudo).
+    if (input.href === "/funcionario/nova-oportunidade") {
+      return input.membershipCodes.includes("technician") || input.membershipCodes.includes("external_sales")
+    }
     if (input.href === "/cobranca") {
       return input.membershipCodes.includes("collections")
     }
@@ -389,6 +393,7 @@ export function funcionarioNavGroupSpecs(): AdminNavGroupSpec[] {
     {
       title: "Meus resultados",
       items: [
+        { label: "Nova oportunidade", href: "/funcionario/nova-oportunidade" },
         { label: "Minhas vendas", href: "/funcionario/vendas" },
         { label: "Minha remuneração", href: "/funcionario/remuneracao" },
       ],

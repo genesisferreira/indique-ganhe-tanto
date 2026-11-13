@@ -4,6 +4,7 @@ import {
   devLogPipeline,
   devLogPipelineMove,
   devLogPipelineSla,
+  employeeOriginLabel,
   normalizePipelineStage,
   type PipelineCard,
   type PipelineMetrics,
@@ -30,6 +31,8 @@ type ReferralPipelineRow = {
   last_redistributed_at?: string | null
   won_at?: string | null
   lost_at?: string | null
+  /** 3.1F-J3 (somente no select estendido) */
+  origin_kind?: string | null
 }
 
 export type PipelineLoadMeta = {
@@ -85,6 +88,11 @@ const PIPELINE_SELECT_CORE = `
   lost_at
 `
 
+/** 3.1F-J3: núcleo + origem (bancos sem patches SLA/redistribuição, mas com origin_kind). */
+const PIPELINE_SELECT_CORE_ORIGIN = `${PIPELINE_SELECT_CORE.trimEnd()},
+  origin_kind
+`
+
 /** Inclui campos opcionais de SLA/redistribuição (exige patches aplicados). */
 const PIPELINE_SELECT_EXTENDED = `
   id,
@@ -103,7 +111,8 @@ const PIPELINE_SELECT_EXTENDED = `
   sla_redistributed,
   last_redistributed_at,
   won_at,
-  lost_at
+  lost_at,
+  origin_kind
 `
 
 function isMissingColumnPipelineError(
@@ -153,6 +162,7 @@ async function fetchPipelineReferralRows(
 }> {
   const selects: Array<{ variant: "extended" | "core"; sql: string }> = [
     { variant: "extended", sql: PIPELINE_SELECT_EXTENDED },
+    { variant: "core", sql: PIPELINE_SELECT_CORE_ORIGIN },
     { variant: "core", sql: PIPELINE_SELECT_CORE },
   ]
   let lastError: { message?: string; code?: string } | null = null
@@ -205,10 +215,36 @@ async function fetchPipelineReferralRows(
   }
 }
 
+type EmployeeOrigin = { role: string; originatorName: string | null }
+
+/**
+ * 3.1F-J3: originador das oportunidades de funcionário via RPC autorizada
+ * (admin: todas; comercial: só leads próprios). Somente papel + nome; sem PII do cliente nos logs.
+ */
+async function loadEmployeeOriginsForPipeline(
+  rpcClient: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { code?: string } | null }> },
+  rows: ReferralPipelineRow[]
+): Promise<Map<string, EmployeeOrigin>> {
+  const out = new Map<string, EmployeeOrigin>()
+  const ids = rows.filter((r) => r.origin_kind === "employee").map((r) => r.id)
+  for (let i = 0; i < ids.length; i += 500) {
+    const { data, error } = await rpcClient.rpc("list_employee_opportunity_origins", { p_opportunity_ids: ids.slice(i, i + 500) })
+    if (error) {
+      console.warn("[pipeline:error]", { step: "employee_origins", code: error.code ?? null })
+      break
+    }
+    for (const o of (Array.isArray(data) ? data : []) as Array<{ opportunity_id?: string; attribution_role?: string; originator_name?: string | null }>) {
+      if (o.opportunity_id && o.attribution_role) out.set(o.opportunity_id, { role: o.attribution_role, originatorName: o.originator_name ?? null })
+    }
+  }
+  return out
+}
+
 function rowToPipelineCard(
   row: ReferralPipelineRow,
   profileNames: Map<string, string>,
-  planNameById: Map<string, string>
+  planNameById: Map<string, string>,
+  origins: Map<string, EmployeeOrigin> = new Map()
 ): PipelineCard {
   const stage = normalizePipelineStage(row.pipeline_stage)
 
@@ -245,6 +281,9 @@ function rowToPipelineCard(
       : null,
     wonAt: row.won_at ? new Date(row.won_at) : null,
     lostAt: row.lost_at ? new Date(row.lost_at) : null,
+    originKind: row.origin_kind ?? null,
+    originLabel: employeeOriginLabel(row.origin_kind, origins.get(row.id)?.role),
+    originatorNome: origins.get(row.id)?.originatorName ?? null,
   }
 }
 
@@ -497,6 +536,12 @@ export async function loadPipelineCardsFromSupabase(
     }
 
     const planNameById = await loadPlanNamesForPipeline(db, rows)
+    let employeeOrigins = new Map<string, EmployeeOrigin>()
+    try {
+      employeeOrigins = await loadEmployeeOriginsForPipeline(supabase as unknown as Parameters<typeof loadEmployeeOriginsForPipeline>[0], rows)
+    } catch {
+      console.warn("[pipeline:error]", { step: "employee_origins" })
+    }
 
     let rowsDropped = 0
     const cards: PipelineCard[] = []
@@ -516,7 +561,7 @@ export async function loadPipelineCardsFromSupabase(
           normalized,
         })
       }
-      cards.push(rowToPipelineCard(r, profileNames, planNameById))
+      cards.push(rowToPipelineCard(r, profileNames, planNameById, employeeOrigins))
     }
 
     meta = {

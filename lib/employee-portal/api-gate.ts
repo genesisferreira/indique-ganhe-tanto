@@ -111,7 +111,7 @@ type Parsed<P> = { ok: true; value: P } | { ok: false; outcome: ApiOutcome }
 export type EmployeeApiSpec<P> = {
   rpc:
     | "employee_sales_dashboard_summary"
-    | "list_employee_sales"
+    | "list_employee_sales_filtered"
     | "get_employee_sale_detail"
     | "employee_compensation_summary"
     | "list_employee_competence_lines"
@@ -142,7 +142,7 @@ export const EMPLOYEE_API: {
     map: toDashboardResponse,
   },
   sales: {
-    rpc: "list_employee_sales",
+    rpc: "list_employee_sales_filtered",
     parse: ({ searchParams }) => {
       const r = parseSalesQuery(searchParams, { strict: true })
       return r.ok ? r : { ok: false, outcome: badRequestOutcome(r.error) }
@@ -156,6 +156,8 @@ export const EMPLOYEE_API: {
       p_stage: q.stage,
       p_status: q.status,
       p_commission: q.commission,
+      p_role: q.role,
+      p_search: q.search,
     }),
     map: toSalesListResponse,
   },

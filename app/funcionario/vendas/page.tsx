@@ -33,7 +33,7 @@ export default async function MinhasVendasPage({ searchParams }: { searchParams:
   }
   return (
     <div className="space-y-6">
-      <PageHeader title="Minhas vendas" description="Oportunidades atribuídas a você. Somente leitura." />
+      <PageHeader title="Minhas vendas" description="Oportunidades atribuídas a você." />
       <SalesFilters query={query} />
       {!parsed.ok ? (
         <PortalError kind="invalid" />

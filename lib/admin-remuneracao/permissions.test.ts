@@ -65,4 +65,10 @@ describe("3.1F-J2 menu e terminologia (I)", () => {
     assert.deepEqual(items.map((i) => i.label).filter((l) => l !== "Notificações"), ["Início", "Minhas vendas", "Minha remuneração"])
     assert.equal(items.some((i) => i.href.includes("nova-oportunidade")), false)
   })
+  it("3.1F-J3: Nova oportunidade só com vínculo real de Técnico ou Vendas Externas", () => {
+    for (const [codes, visible] of [[["technician"], true], [["external_sales"], true], [["technician", "external_sales"], true], [["commercial"], false], [["collections", "retention"], false], [[], false]] as const) {
+      const items = filterNavGroups(funcionarioNavGroupSpecs(), { variant: "funcionario", role: "funcionario", membershipCodes: [...codes] }).flatMap((g) => g.items)
+      assert.equal(items.some((i) => i.href === "/funcionario/nova-oportunidade"), visible, codes.join(","))
+    }
+  })
 })

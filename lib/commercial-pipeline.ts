@@ -99,6 +99,23 @@ export type PipelineCard = {
   previousCommercialNome?: string | null
   wonAt?: Date | null
   lostAt?: Date | null
+  /** 3.1F-J3: origem da oportunidade (indicator | employee | …). */
+  originKind?: string | null
+  /** 3.1F-J3: "Técnico" / "Vendedor externo" quando origin_kind = employee. */
+  originLabel?: string | null
+  /** 3.1F-J3: funcionário originador (somente nome; via RPC autorizada). */
+  originatorNome?: string | null
+}
+
+/** 3.1F-J3: rótulo da origem de funcionário no pipeline (papel imutável da atribuição). */
+export const EMPLOYEE_ORIGIN_LABEL: Record<string, string> = {
+  technician_originator: "Técnico",
+  external_sales_originator: "Vendedor externo",
+}
+
+export function employeeOriginLabel(originKind: string | null | undefined, role: string | null | undefined): string | null {
+  if (originKind !== "employee") return null
+  return (role && EMPLOYEE_ORIGIN_LABEL[role]) || "Funcionário"
 }
 
 export type PipelineMetrics = {

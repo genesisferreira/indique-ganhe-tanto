@@ -34,7 +34,8 @@ type RpcClient = {
 
 export const EMPLOYEE_READ_RPCS = [
   "employee_sales_dashboard_summary",
-  "list_employee_sales",
+  // 3.1F-J3: superset de list_employee_sales (mesma saída) com filtros de papel e busca.
+  "list_employee_sales_filtered",
   "get_employee_sale_detail",
   "employee_compensation_summary",
   "list_employee_competence_lines",
@@ -84,7 +85,7 @@ export async function loadEmployeeDashboard(): Promise<PortalResult<DashboardRes
 
 export async function loadEmployeeSales(q: SalesQuery): Promise<PortalResult<SalesListResponse>> {
   return map(
-    await sessionRpc("list_employee_sales", {
+    await sessionRpc("list_employee_sales_filtered", {
       p_limit: q.limit,
       p_offset: q.offset,
       p_sort: q.sort,
@@ -93,6 +94,8 @@ export async function loadEmployeeSales(q: SalesQuery): Promise<PortalResult<Sal
       p_stage: q.stage,
       p_status: q.status,
       p_commission: q.commission,
+      p_role: q.role,
+      p_search: q.search,
     }),
     toSalesListResponse
   )

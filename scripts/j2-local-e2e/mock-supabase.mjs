@@ -136,12 +136,17 @@ export async function startMockSupabase({ port, client, anonKey, serviceKey, all
         for await (const chunk of req) body += chunk
         const args = body ? JSON.parse(body) : {}
         const names = Object.keys(args).filter((k) => IDENT.test(k))
-        const params = names.map((k) => (args[k] === null || args[k] === undefined ? null : String(args[k])))
+        // 3.1F-J3: arrays -> literal de array do PG; objetos -> JSON (como o PostgREST real faria).
+        const lit = (v) => (v === null || v === undefined ? null : Array.isArray(v) ? `{${v.map((x) => `"${String(x).replace(/["\\]/g, "\\$&")}"`).join(",")}}` : typeof v === "object" ? JSON.stringify(v) : String(v))
+        const params = names.map((k) => lit(args[k]))
         stats.rpc[fn] = (stats.rpc[fn] || 0) + 1
-        const sql = `select public.${fn}(${names.map((k, i) => `${k} => $${i + 1}`).join(", ")}) as r`
+        // 3.1F-J3: funções SETOF/TABLE retornam array de linhas (como o PostgREST real).
+        const setOf = (await serial(() => client.query(`select bool_or(proretset) s from pg_proc where pronamespace = 'public'::regnamespace and proname = $1`, [fn])).catch(() => ({ rows: [{}] }))).rows[0]?.s === true
+        const call = `public.${fn}(${names.map((k, i) => `${k} => $${i + 1}`).join(", ")})`
+        const sql = setOf ? `select * from ${call}` : `select ${call} as r`
         try {
           const rows = await runAs(auth, sql, params)
-          return send(res, 200, rows[0]?.r ?? null)
+          return send(res, 200, setOf ? rows : rows[0]?.r ?? null)
         } catch (e) { return pgErr(res, e) }
       }
       if (url.pathname.startsWith("/rest/v1/")) {
