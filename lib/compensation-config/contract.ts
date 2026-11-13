@@ -70,9 +70,11 @@ export const DRAFT_BANNERS = [
 ] as const
 export const ACTIVATE_DISABLED_REASON = "Aguardando validação da integração financeira"
 export const FIRST_INVOICE_NOT_ACTIVATABLE =
-  "Não ativável: a evidência de pagamento da primeira fatura ainda não foi comprovada para comissão de funcionário."
+  "Bloqueada: pagamento integral e ordem não comprovados."
 export const PERCENTAGE_BASE_UNPROVEN =
-  "Rascunho incompleto: nenhuma base de cálculo percentual foi comprovada no sistema. A regra não pode ser ativada até a base ser validada."
+  "Bloqueada: base percentual não comprovada."
+export const FIXED_AMOUNT_ACTIVATABLE_COPY =
+  "Comissão fixa liberada por evidência de fatura gerada."
 
 /** Sugestões somente de interface (nunca default de banco, nunca enviadas sem clique + motivo). */
 export const UI_SUGGESTION = {

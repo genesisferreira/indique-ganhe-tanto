@@ -35,7 +35,9 @@
     "test:k1b-mutation": "node scripts/k1b-mutation-check.mjs",
     "test:k1b-regression": "node scripts/regression/k1b-manifest-run.mjs --root .",
     "test:j5-payroll": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --test lib/payroll-competence/j5-architecture.test.ts lib/payroll-competence/handlers.test.ts lib/compensation-config/j4-architecture.test.ts",
-    "test:j5-payroll-pg": "node scripts/j5-payroll-competence-lab.mjs"
+    "test:j5-payroll-pg": "node scripts/j5-payroll-competence-lab.mjs",
+    "test:j7-fixed": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --test lib/commission-activation/j6-architecture.test.ts lib/commission-activation/j7-architecture.test.ts lib/compensation-config/j4-architecture.test.ts lib/payroll-competence/j5-architecture.test.ts lib/admin-legacy/k1-architecture.test.ts",
+    "test:j7-fixed-pg": "node scripts/j7-fixed-commission-lab.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

@@ -69,8 +69,7 @@ describe("3.1F-J6 migração", () => {
 })
 
 describe("3.1F-J6 evidência e cálculo", () => {
-  it("nenhuma modalidade ativável; parcial distinto; scheduler off", () => {
-    assert.equal(isMethodActivatable("fixed_amount"), false)
+  it("parcial distinto; scheduler off; ordem e pagamento ainda não comprovados", () => {
     assert.equal(isMethodActivatable("percentage"), false)
     assert.equal(isMethodActivatable("first_invoice_value"), false)
     assert.equal(FINANCIAL_EVIDENCE_PAID, false)

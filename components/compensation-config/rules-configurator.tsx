@@ -12,6 +12,7 @@ import {
   DISABLED_ROLES,
   COMMISSION_METHODS,
   FIRST_INVOICE_NOT_ACTIVATABLE,
+  FIXED_AMOUNT_ACTIVATABLE_COPY,
   METHOD_LABEL,
   METHOD_TRIGGER,
   PERCENTAGE_BASE_UNPROVEN,
@@ -202,7 +203,7 @@ export function RulesConfigurator({ families, today }: { families: RuleFamily[];
               <p className="text-sm text-muted-foreground" aria-live="polite">{method ? TRIGGER_LABEL[METHOD_TRIGGER[method]] : "Definido pelo tipo"}</p>
             </div>
             {method === "fixed_amount" ? (
-              <div className="space-y-2">
+              <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="cr-fixed">Valor fixo (R$) *</Label>
                 <Input id="cr-fixed" inputMode="decimal" autoComplete="off" placeholder="0,00" value={values.fixedAmount} onChange={(e) => set("fixedAmount", e.target.value)} />
                 {suggestion ? (
@@ -211,6 +212,7 @@ export function RulesConfigurator({ families, today }: { families: RuleFamily[];
                     <button type="button" className="text-primary underline-offset-4 hover:underline" onClick={() => set("fixedAmount", suggestion.amount.replace(".", ","))}>Usar sugestão</button>
                   </p>
                 ) : null}
+                <p className="text-xs text-muted-foreground">{FIXED_AMOUNT_ACTIVATABLE_COPY}</p>
               </div>
             ) : null}
             {method === "percentage" ? (
@@ -326,6 +328,7 @@ function RuleCard({ family, onVersion, onArchived }: { family: RuleFamily; onVer
         <div className="sm:col-span-2"><dt className="text-muted-foreground">Vigência</dt><dd>{period(cur.effectiveFrom, cur.effectiveUntil)}</dd></div>
       </dl>
       {cur.description ? <p className="break-words text-sm text-muted-foreground">{cur.description}</p> : null}
+      {cur.method === "fixed_amount" ? <p className="text-xs text-muted-foreground">{FIXED_AMOUNT_ACTIVATABLE_COPY}</p> : null}
       {cur.method === "percentage" && cur.incomplete ? <Warning>{PERCENTAGE_BASE_UNPROVEN}</Warning> : null}
       {cur.method === "first_invoice_value" ? <Warning>{FIRST_INVOICE_NOT_ACTIVATABLE}</Warning> : null}
       {cur.status === "archived" ? (

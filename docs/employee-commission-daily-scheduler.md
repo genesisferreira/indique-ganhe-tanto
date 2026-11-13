@@ -1,6 +1,6 @@
 # Reconciliação diária de comissão — DESLIGADA
 
-Sprint 3.1F-J6. O reconciliador existe e é retomável, mas **não há agendamento**.
+Sprint 3.1F-J7. Comissão fixa pode ser ativada com evidência persistida de fatura gerada. O reconciliador existe e é retomável, mas **não há agendamento**.
 
 - Nenhuma Vercel Cron nova.
 - Nenhum `pg_cron`, worker pago ou serviço adicional.

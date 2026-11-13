@@ -1,8 +1,12 @@
 /**
- * 3.1F-J6 — GATE 1 da prova financeira de comissão de funcionário.
+ * 3.1F-J7 — GATE 1 da prova financeira de comissão de funcionário.
  *
- * Somente caminhos já persistidos / já documentados. Sem probe ERP, sem retry,
- * sem liberar invoice/list. Nenhuma modalidade é ativável nesta entrega.
+ * fixed_amount: ativável com evidência persistida de fatura válida gerada
+ * (invoice_pk + contrato, origem employee). Ordem, valor e pagamento NÃO
+ * são exigidos para comissão fixa.
+ *
+ * percentage e first_invoice_value permanecem bloqueadas.
+ * Sem probe ERP, sem invoice/list, sem scheduler pago.
  */
 
 import {
@@ -20,23 +24,21 @@ export const CONTRACT_FILTER_PROVEN = EMPLOYEE_EVIDENCE_CONTRACT_FILTER_PROVEN
 export const OFFICIAL_ISSUE_DATE_FIELD = EMPLOYEE_EVIDENCE_OFFICIAL_ISSUE_DATE_FIELD
 export const DAILY_SCHEDULER_ENABLED = false
 
+export const FIXED_AMOUNT_ACTIVATABLE_COPY =
+  "Comissão fixa liberada por evidência de fatura gerada."
+
 export const METHOD_BLOCK_REASON: Record<CommissionMethod, string> = {
-  fixed_amount:
-    "Não ativável: a ordem estável da primeira fatura válida não está comprovada (campo oficial de emissão ausente; invoice/list com filtro de contrato não comprovado).",
-  percentage:
-    "Não ativável: a base percentual obrigatória no snapshot não foi comprovada, e a ordem da primeira fatura gerada permanece inconclusiva.",
-  first_invoice_value:
-    "Não ativável: pagamento integral da primeira fatura não está comprovado para comissão de funcionário (I&G usa invoice_msg+crédito, que não distingue parcial de total). Ordem da primeira fatura também inconclusiva.",
+  fixed_amount: FIXED_AMOUNT_ACTIVATABLE_COPY,
+  percentage: "Bloqueada: base percentual não comprovada.",
+  first_invoice_value: "Bloqueada: pagamento integral e ordem não comprovados.",
 }
 
 export function isMethodActivatable(method: CommissionMethod): boolean {
-  void method
   void CONTRACT_FILTER_PROVEN
   void FIRST_INVOICE_ORDER_PROVEN
   void PERCENTAGE_BASE_PROVEN
   void FINANCIAL_EVIDENCE_PAID
-  void FINANCIAL_EVIDENCE_GENERATED
-  return false
+  return method === "fixed_amount" && FINANCIAL_EVIDENCE_GENERATED
 }
 
 export function methodBlockReason(method: CommissionMethod): string {
@@ -71,6 +73,7 @@ export type EvidenceGate = {
   firstInvoiceOrder: false
   contractFilter: false
   percentageBase: false
+  fixedAmountActivatableWithGeneratedInvoice: true
 }
 
 export const EVIDENCE_GATE: EvidenceGate = {
@@ -86,4 +89,5 @@ export const EVIDENCE_GATE: EvidenceGate = {
   firstInvoiceOrder: false,
   contractFilter: false,
   percentageBase: false,
+  fixedAmountActivatableWithGeneratedInvoice: true,
 }
