@@ -48,9 +48,7 @@ export default async function MinhaRemuneracaoPage() {
               <>
                 <Notice>Valores estimados a partir da configuração em rascunho. Não constituem folha fechada nem pagamento.</Notice>
                 <dl className="grid gap-3 rounded-xl border border-border/50 bg-card/50 p-4 text-sm sm:grid-cols-2">
-                  {preview.data.commission ? (
-                    <div><dt className="text-muted-foreground">Comissão</dt><dd className="font-medium">Não calculada</dd></div>
-                  ) : null}
+                  <div><dt className="text-muted-foreground">Comissão</dt><dd className="font-medium">Não calculada</dd></div>
                   {preview.data.components.salary ? (
                     <div><dt className="text-muted-foreground">Salário</dt><dd className="font-medium tabular-nums">{formatMoney(preview.data.components.salary.amount)}</dd></div>
                   ) : null}

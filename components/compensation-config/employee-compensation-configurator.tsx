@@ -21,6 +21,8 @@ import {
   type ProfileVersion,
 } from "@/lib/compensation-config/contract"
 import { WRITE_ENDPOINT, postDraft } from "@/lib/compensation-config/client"
+import { PAYROLL_ENDPOINT, postPayroll } from "@/lib/payroll-competence/client"
+import { newIdempotencyKey as newPayrollKey } from "@/lib/payroll-competence/contract"
 import { formatDate, formatMoney } from "@/lib/employee-portal/format"
 import { ActivateDisabled, VersionPill, checkboxClass, selectClass } from "@/components/compensation-config/ui"
 
@@ -88,6 +90,8 @@ export function EmployeeCompensationConfigurator({ employees, detail, today }: {
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [archiveReason, setArchiveReason] = useState("")
   const [archiveKey, setArchiveKey] = useState("")
+  const [approveOpen, setApproveOpen] = useState(false)
+  const [overrideReason, setOverrideReason] = useState("")
 
   const set = <K extends keyof FormValues>(k: K, v: FormValues[K]) => {
     setValues((s) => {
@@ -99,6 +103,8 @@ export function EmployeeCompensationConfigurator({ employees, detail, today }: {
     setIdemKey("")
   }
   const current = detail?.current ?? null
+  const draft = detail?.versions.find((v) => v.status === "draft") ?? null
+  const approved = detail?.versions.find((v) => v.status === "approved") ?? null
   const dismissed = detail?.employee.status === "dismissed"
 
   function startEdit() {
@@ -163,6 +169,21 @@ export function EmployeeCompensationConfigurator({ employees, detail, today }: {
     router.refresh()
   }
 
+  async function approve() {
+    if (!draft) return
+    setError(null)
+    setSubmitting(true)
+    const payload: Record<string, unknown> = { idempotencyKey: newPayrollKey(), profileId: draft.profileId }
+    if (overrideReason.trim()) payload.overrideReason = overrideReason.trim()
+    const r = await postPayroll(PAYROLL_ENDPOINT.approve, payload)
+    setSubmitting(false)
+    if (!r.ok) return setError(r.message)
+    setApproveOpen(false)
+    setOverrideReason("")
+    setNotice("Versão aprovada. Nenhuma regra de comissão foi ativada.")
+    router.refresh()
+  }
+
   const a = compare && detail ? detail.versions.find((v) => v.profileId === compare[0]) : undefined
   const b = compare && detail ? detail.versions.find((v) => v.profileId === compare[1]) : undefined
 
@@ -202,7 +223,7 @@ export function EmployeeCompensationConfigurator({ employees, detail, today }: {
           <section aria-labelledby="cc-emp-title" className="min-w-0 space-y-3 rounded-xl border border-border/50 bg-card/50 p-4">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <h2 id="cc-emp-title" className="break-words text-lg font-semibold">{detail.employee.name}</h2>
-              {current ? <VersionPill status="draft" version={current.version} /> : <span className="text-xs text-muted-foreground">Sem configuração vigente</span>}
+              {current ? <VersionPill status={current.status} version={current.version} /> : <span className="text-xs text-muted-foreground">Sem configuração vigente</span>}
             </div>
             <dl className="grid gap-2 text-sm sm:grid-cols-3">
               <div><dt className="text-muted-foreground">Setor</dt><dd>{detail.employee.sectors.map((s) => s.name).join(", ") || "—"}</dd></div>
@@ -240,10 +261,23 @@ export function EmployeeCompensationConfigurator({ employees, detail, today }: {
                   <GitCompare className="h-4 w-4" aria-hidden /> Comparar versões
                 </Button>
               ) : null}
+              {draft ? <Button type="button" size="sm" onClick={() => setApproveOpen((s) => !s)}>Aprovar versão</Button> : null}
               {current ? <Button type="button" size="sm" variant="ghost" onClick={() => setArchiveOpen((s) => !s)}>Desativar configuração</Button> : null}
               <ActivateDisabled id="profile" />
             </div>
             {dismissed ? <p className="text-xs text-muted-foreground">Funcionário desligado: somente consulta do histórico.</p> : null}
+            {approveOpen && draft ? (
+              <div className="space-y-2 rounded-lg border border-border/60 p-3">
+                <p className="text-sm">Aprovar v{draft.version} para uso nas competências. Quem criou não aprova se houver outro administrador; o Master pode informar um override (mín. 20 caracteres).</p>
+                {approved ? <p className="text-xs text-muted-foreground">A versão aprovada atual (v{approved.version}) passará a arquivada.</p> : null}
+                <Label htmlFor="cc-override">Motivo do override (se você criou este rascunho)</Label>
+                <Textarea id="cc-override" rows={2} maxLength={500} value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} />
+                <div className="flex gap-2">
+                  <Button type="button" size="sm" disabled={submitting} onClick={approve}>Confirmar aprovação</Button>
+                  <Button type="button" size="sm" variant="outline" disabled={submitting} onClick={() => setApproveOpen(false)}>Cancelar</Button>
+                </div>
+              </div>
+            ) : null}
             {archiveOpen ? (
               <div className="space-y-2 rounded-lg border border-border/60 p-3">
                 <Label htmlFor="cc-arch">Motivo da desativação *</Label>

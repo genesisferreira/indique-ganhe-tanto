@@ -12,7 +12,7 @@ export type ConfigurableRole = Exclude<CommissionRole, "internal_sales_responsib
 export type CommissionMethod = "fixed_amount" | "percentage" | "first_invoice_value"
 export type CommissionTrigger = "first_valid_invoice_generated" | "first_valid_invoice_fully_paid"
 export type BenefitMethod = "per_worked_day" | "monthly_fixed"
-export type VersionStatus = "draft" | "superseded" | "archived"
+export type VersionStatus = "draft" | "approved" | "superseded" | "archived"
 
 export const CONFIGURABLE_ROLES: readonly ConfigurableRole[] = ["technician_originator", "external_sales_originator"]
 export const DISABLED_ROLES: readonly CommissionRole[] = ["internal_sales_responsible"]
@@ -41,6 +41,7 @@ export const METHOD_TRIGGER: Record<CommissionMethod, CommissionTrigger> = {
 }
 export const VERSION_STATUS_LABEL: Record<VersionStatus, string> = {
   draft: "Rascunho",
+  approved: "Aprovada",
   superseded: "Substituída",
   archived: "Arquivada",
 }
@@ -431,7 +432,7 @@ function toRule(raw: unknown): RuleView | null {
   const role = raw.attributionRole as CommissionRole
   const method = raw.method as CommissionMethod
   if (!(role in ROLE_LABEL) || !COMMISSION_METHODS.includes(method)) return null
-  const status = (["draft", "superseded", "archived"] as const).includes(raw.status as VersionStatus) ? (raw.status as VersionStatus) : "archived"
+  const status: VersionStatus = raw.status === "draft" || raw.status === "superseded" || raw.status === "archived" ? raw.status : "archived"
   return {
     id: raw.id,
     familyId: raw.familyId,
@@ -543,7 +544,7 @@ export function toEmployeeDetail(raw: unknown): EmployeeDetail | null {
   const versions: ProfileVersion[] = (Array.isArray(raw.versions) ? raw.versions : []).filter(isObj).filter((v) => isUuid(v.profileId)).map((v) => ({
     profileId: v.profileId as string,
     version: num(v.version),
-    status: (["draft", "superseded", "archived"] as const).includes(v.status as VersionStatus) ? (v.status as VersionStatus) : "archived",
+    status: ((): VersionStatus => (v.status === "draft" || v.status === "approved" || v.status === "superseded" || v.status === "archived" ? v.status : "archived"))(),
     validFrom: str(v.validFrom) ?? "",
     validUntil: str(v.validUntil),
     salaryAmount: str(v.salaryAmount),
@@ -567,7 +568,7 @@ export function toEmployeeDetail(raw: unknown): EmployeeDetail | null {
   return {
     employee: { employeeId: raw.employee.employeeId as string, name: str(raw.employee.name) ?? "Funcionário", status: str(raw.employee.status) ?? "active", sectors: sec, roles: rolesOf(sec) },
     versions,
-    current: versions.find((v) => v.status === "draft") ?? null,
+    current: versions.find((v) => v.status === "draft") ?? versions.find((v) => v.status === "approved") ?? null,
   }
 }
 

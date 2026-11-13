@@ -37,7 +37,11 @@ export default async function CompetenciaPage({ params }: { params: Promise<{ co
             <StatusPill label={labelFor(COMPETENCE_STATUS_LABEL, r.data.status)} tone={COMPETENCE_STATUS_TONE[r.data.status] ?? "neutral"} />
           </PageHeader>
           <dl className="divide-y divide-border/40 rounded-xl border border-border/50 bg-card/50 text-sm">
-            {COMPONENT_KEYS.filter((k) => r.data.components[k] !== undefined).map((k) => (
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <dt className="text-muted-foreground">{COMPONENT_LABEL.commission}</dt>
+              <dd className="font-medium">Não calculada</dd>
+            </div>
+            {COMPONENT_KEYS.filter((k) => k !== "commission" && r.data.components[k] !== undefined).map((k) => (
               <div key={k} className="flex items-center justify-between gap-3 px-4 py-3">
                 <dt className="text-muted-foreground">{COMPONENT_LABEL[k]}</dt>
                 <dd className="font-medium tabular-nums">{formatMoney(r.data.components[k])}</dd>

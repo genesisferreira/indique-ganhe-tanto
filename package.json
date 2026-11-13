@@ -33,7 +33,9 @@
     "test:k1-visual": "node scripts/k1-local-visual/run.mjs",
     "test:k1b-abort": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --experimental-test-module-mocks --test lib/admin-legacy/k1b-abort.test.ts",
     "test:k1b-mutation": "node scripts/k1b-mutation-check.mjs",
-    "test:k1b-regression": "node scripts/regression/k1b-manifest-run.mjs --root ."
+    "test:k1b-regression": "node scripts/regression/k1b-manifest-run.mjs --root .",
+    "test:j5-payroll": "node --import ./scripts/local-pg-collections-lab/alias-register.mjs --experimental-strip-types --test lib/payroll-competence/j5-architecture.test.ts lib/payroll-competence/handlers.test.ts lib/compensation-config/j4-architecture.test.ts",
+    "test:j5-payroll-pg": "node scripts/j5-payroll-competence-lab.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
