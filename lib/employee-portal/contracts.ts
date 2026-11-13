@@ -195,7 +195,8 @@ export type CompensationSummaryResponse = {
   employeeStatus: string
   readOnly: boolean
   profile: CompensationProfileView | null
-  competences: Array<{ competenceMonth: string; status: string; visibleTotal: Money; totalKind: "expected" | "closed" }>
+  competences: Array<{ competenceMonth: string; status: string; visibleTotal: Money; totalKind: "expected" | "closed"; paidOn?: string | null }>
+  commissions: Array<{ opportunityId: string; status: string; amount?: Money; competenceMonth: string | null; method: string | null }>
   total: number
   limit: number
   offset: number
@@ -208,6 +209,7 @@ export type CompetenceDetailResponse = {
   competenceMonth: string
   status: string
   version: number
+  paidOn?: string | null
   /** Componentes ocultos/desabilitados são OMITIDOS (nunca zero). */
   components: Partial<Record<ComponentKey, Money>>
   total: { kind: "expected" | "closed"; amount: Money }
@@ -317,7 +319,18 @@ export function toCompensationSummaryResponse(raw: unknown): CompensationSummary
       status: str(x.status),
       visibleTotal: money(x.visibleTotal),
       totalKind: x.totalKind === "closed" ? "closed" : "expected",
+      paidOn: strOrNull(x.paidOn),
     })),
+    commissions: arr(r.commissions).filter(isObj).slice(0, 50).map((x) => {
+      const item: CompensationSummaryResponse["commissions"][number] = {
+        opportunityId: str(x.opportunityId),
+        status: oneOf(x.status, COMMISSION_FILTERS, "none"),
+        competenceMonth: strOrNull(x.competenceMonth),
+        method: strOrNull(x.method),
+      }
+      if (x.amount != null) item.amount = money(x.amount)
+      return item
+    }),
     total: int(r.total),
     limit: int(r.limit),
     offset: int(r.offset),
@@ -334,6 +347,7 @@ export function toCompetenceDetailResponse(raw: unknown): CompetenceDetailRespon
     competenceMonth: str(r.competenceMonth),
     status: str(r.status),
     version: int(r.version),
+    paidOn: strOrNull(r.paidOn),
     components,
     total: { kind: total.kind === "closed" ? "closed" : "expected", amount: money(total.amount) },
     lines: arr(r.lines).filter(isObj).slice(0, 500).map((x) => ({

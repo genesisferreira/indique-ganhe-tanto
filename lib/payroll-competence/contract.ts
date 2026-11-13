@@ -320,6 +320,10 @@ export type CompetenceDetail = {
   status: string
   version: number
   profileId: string | null
+  paidOn: string | null
+  paymentMethod: string | null
+  paymentReference: string | null
+  paymentReversed: boolean
   totals: Record<string, string>
   lines: { lineId: string; type: string; description: string; quantity: string; unitAmount: string | null; amount: string; origin: string | null; visibleToEmployee: boolean; reason: string | null; createdAt: string }[]
 }
@@ -338,6 +342,10 @@ export function toCompetenceDetail(raw: unknown): CompetenceDetail | null {
     status: str(c.status) ?? "draft",
     version: num(c.version),
     profileId: isUuid(c.profileId) ? (c.profileId as string) : null,
+    paidOn: str(c.paidOn),
+    paymentMethod: str(c.paymentMethod),
+    paymentReference: str(c.paymentReference),
+    paymentReversed: c.paymentReversed === true,
     totals,
     lines: Array.isArray(raw.lines)
       ? raw.lines.filter(isObj).map((l) => ({

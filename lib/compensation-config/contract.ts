@@ -12,7 +12,7 @@ export type ConfigurableRole = Exclude<CommissionRole, "internal_sales_responsib
 export type CommissionMethod = "fixed_amount" | "percentage" | "first_invoice_value"
 export type CommissionTrigger = "first_valid_invoice_generated" | "first_valid_invoice_fully_paid"
 export type BenefitMethod = "per_worked_day" | "monthly_fixed"
-export type VersionStatus = "draft" | "approved" | "superseded" | "archived"
+export type VersionStatus = "draft" | "approved" | "active" | "superseded" | "archived"
 
 export const CONFIGURABLE_ROLES: readonly ConfigurableRole[] = ["technician_originator", "external_sales_originator"]
 export const DISABLED_ROLES: readonly CommissionRole[] = ["internal_sales_responsible"]
@@ -42,6 +42,7 @@ export const METHOD_TRIGGER: Record<CommissionMethod, CommissionTrigger> = {
 export const VERSION_STATUS_LABEL: Record<VersionStatus, string> = {
   draft: "Rascunho",
   approved: "Aprovada",
+  active: "Ativa",
   superseded: "Substituída",
   archived: "Arquivada",
 }
@@ -432,7 +433,10 @@ function toRule(raw: unknown): RuleView | null {
   const role = raw.attributionRole as CommissionRole
   const method = raw.method as CommissionMethod
   if (!(role in ROLE_LABEL) || !COMMISSION_METHODS.includes(method)) return null
-  const status: VersionStatus = raw.status === "draft" || raw.status === "superseded" || raw.status === "archived" ? raw.status : "archived"
+  const status: VersionStatus =
+    raw.status === "draft" || raw.status === "approved" || raw.status === "active" || raw.status === "superseded" || raw.status === "archived"
+      ? raw.status
+      : "archived"
   return {
     id: raw.id,
     familyId: raw.familyId,

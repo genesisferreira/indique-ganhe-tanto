@@ -8,6 +8,7 @@ import {
   COMPETENCE_STATUS_LABEL,
   COMPETENCE_STATUS_TONE,
   EMPLOYEE_STATUS_LABEL,
+  ENTITLEMENT_STATUS_LABEL,
   TOTAL_KIND_LABEL,
   labelFor,
 } from "@/lib/employee-portal/terminology"
@@ -48,7 +49,7 @@ export default async function MinhaRemuneracaoPage() {
               <>
                 <Notice>Valores estimados a partir da configuração em rascunho. Não constituem folha fechada nem pagamento.</Notice>
                 <dl className="grid gap-3 rounded-xl border border-border/50 bg-card/50 p-4 text-sm sm:grid-cols-2">
-                  <div><dt className="text-muted-foreground">Comissão</dt><dd className="font-medium">Não calculada</dd></div>
+                  <div><dt className="text-muted-foreground">Comissão</dt><dd className="font-medium">{preview.data.commission ? "Aguardando evidência comprovada" : "Não calculada"}</dd></div>
                   {preview.data.components.salary ? (
                     <div><dt className="text-muted-foreground">Salário</dt><dd className="font-medium tabular-nums">{formatMoney(preview.data.components.salary.amount)}</dd></div>
                   ) : null}
@@ -72,6 +73,21 @@ export default async function MinhaRemuneracaoPage() {
                   <p className="text-xs text-muted-foreground">Itens por dia trabalhado dependem dos dias registrados na competência e não entram no total estimado.</p>
                 ) : null}
               </>
+            )}
+          </section>
+          <section aria-labelledby="comm-title" className="space-y-3">
+            <h2 id="comm-title" className="text-lg font-semibold">Comissão por venda</h2>
+            {r.data.commissions.length === 0 ? (
+              <EmptyState title="Nenhuma comissão apurada." description="Quando houver evidência financeira comprovada, a comissão aparece aqui." />
+            ) : (
+              <ul className="divide-y divide-border/40 rounded-xl border border-border/50">
+                {r.data.commissions.map((c) => (
+                  <li key={`${c.opportunityId}-${c.status}`} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">
+                    <span>{labelFor(ENTITLEMENT_STATUS_LABEL, c.status)}{c.method ? ` · ${c.method}` : ""}{c.competenceMonth ? ` · ${formatCompetence(c.competenceMonth)}` : ""}</span>
+                    <span className="tabular-nums">{c.amount ? formatMoney(c.amount) : "—"}</span>
+                  </li>
+                ))}
+              </ul>
             )}
           </section>
           <section aria-labelledby="comp-title" className="space-y-3">

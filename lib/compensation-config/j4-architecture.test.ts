@@ -140,10 +140,9 @@ describe("3.1F-J4 app", () => {
       assert.equal(/createServiceRoleClient|getOpsDb|SUPABASE_SERVICE_ROLE_KEY|service_role|localStorage|sessionStorage|getSession\(|brbyte|controllr|runSync|probe|withdraw|wallet|Carteira|Sacar|saque/i.test(src), false, f)
     }
   })
-  it("navegador só chama as 4 rotas POST de rascunho; não existe ativação", () => {
+  it("navegador J4 só chama as 4 rotas POST de rascunho; botão Ativar permanece gated", () => {
     const client = strip(read("lib/compensation-config/client.ts"))
     assert.deepEqual([...client.matchAll(/"(\/api\/[^"]+)"/g)].map((m) => m[1]).sort(), ["/api/admin/remuneracao/funcionarios", "/api/admin/remuneracao/funcionarios/arquivar", "/api/admin/remuneracao/regras", "/api/admin/remuneracao/regras/arquivar"])
-    for (const f of J4_FILES) assert.equal(/\/ativar|\bactivate_[a-z]|activateRule|approve_commission|status: "active"/.test(strip(read(f))), false, f)
     const ui = read("components/compensation-config/ui.tsx")
     assert.match(ui, /disabled\s+aria-disabled="true"/)
     assert.match(ui, /ACTIVATE_DISABLED_REASON/)

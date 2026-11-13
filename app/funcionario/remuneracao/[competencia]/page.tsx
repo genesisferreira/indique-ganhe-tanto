@@ -36,11 +36,21 @@ export default async function CompetenciaPage({ params }: { params: Promise<{ co
           <PageHeader title={`Competência ${formatCompetence(r.data.competenceMonth)}`} description="Somente componentes configurados e visíveis para você.">
             <StatusPill label={labelFor(COMPETENCE_STATUS_LABEL, r.data.status)} tone={COMPETENCE_STATUS_TONE[r.data.status] ?? "neutral"} />
           </PageHeader>
+          {r.data.paidOn ? (
+            <p className="text-sm text-muted-foreground">Pagamento registrado em {formatDate(r.data.paidOn)}.</p>
+          ) : null}
           <dl className="divide-y divide-border/40 rounded-xl border border-border/50 bg-card/50 text-sm">
-            <div className="flex items-center justify-between gap-3 px-4 py-3">
-              <dt className="text-muted-foreground">{COMPONENT_LABEL.commission}</dt>
-              <dd className="font-medium">Não calculada</dd>
-            </div>
+            {r.data.components.commission ? (
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="text-muted-foreground">{COMPONENT_LABEL.commission}</dt>
+                <dd className="font-medium tabular-nums">{formatMoney(r.data.components.commission)}</dd>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="text-muted-foreground">{COMPONENT_LABEL.commission}</dt>
+                <dd className="font-medium">Sem comissão visível neste mês</dd>
+              </div>
+            )}
             {COMPONENT_KEYS.filter((k) => k !== "commission" && r.data.components[k] !== undefined).map((k) => (
               <div key={k} className="flex items-center justify-between gap-3 px-4 py-3">
                 <dt className="text-muted-foreground">{COMPONENT_LABEL[k]}</dt>

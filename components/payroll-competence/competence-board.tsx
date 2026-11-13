@@ -19,6 +19,8 @@ import {
   type ManualLineType,
 } from "@/lib/payroll-competence/contract"
 import { PAYROLL_ENDPOINT, postPayroll } from "@/lib/payroll-competence/client"
+import { J6_ENDPOINT, postCommission } from "@/lib/commission-activation/client"
+import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL, type PaymentMethod } from "@/lib/commission-activation/contract"
 import { formatCompetence, formatMoney } from "@/lib/employee-portal/format"
 
 function parseMoneyInputLike(raw: string): string | null {
@@ -109,7 +111,7 @@ export function CompetenceBoard({
           <li key={c.competenceId}>
             <button type="button" className={`w-full rounded-xl border px-4 py-3 text-left text-sm ${detail?.competenceId === c.competenceId ? "border-primary/50 bg-primary/10" : "border-border/50 bg-card/40"}`} onClick={() => go(c.employeeId, c.competenceMonth, c.competenceId)}>
               <span className="font-medium">{c.employeeName}</span> · {formatCompetence(c.competenceMonth)} · {COMPETENCE_STATUS_LABEL[c.status] ?? c.status}
-              <span className="mt-1 block tabular-nums text-muted-foreground">Líquido {formatMoney(c.netTotal)} · Comissão {formatMoney(c.commissionTotal)} (sempre zero nesta etapa)</span>
+              <span className="mt-1 block tabular-nums text-muted-foreground">Líquido {formatMoney(c.netTotal)} · Comissão {formatMoney(c.commissionTotal)}</span>
             </button>
           </li>
         ))}
@@ -122,7 +124,8 @@ export function CompetenceBoard({
             <div><dt className="text-muted-foreground">Bruto</dt><dd className="tabular-nums">{formatMoney(detail.totals.gross)}</dd></div>
             <div><dt className="text-muted-foreground">Descontos</dt><dd className="tabular-nums">{formatMoney(detail.totals.discounts)}</dd></div>
             <div><dt className="text-muted-foreground">Líquido</dt><dd className="font-semibold tabular-nums">{formatMoney(detail.totals.net)}</dd></div>
-            <div><dt className="text-muted-foreground">Comissão</dt><dd>Não calculada ({formatMoney(detail.totals.commission)})</dd></div>
+            <div><dt className="text-muted-foreground">Comissão</dt><dd className="tabular-nums">{formatMoney(detail.totals.commission)}</dd></div>
+            {detail.paidOn ? <div><dt className="text-muted-foreground">Pagamento registrado</dt><dd>{detail.paidOn}{detail.paymentReversed ? " · estornado" : ""}</dd></div> : null}
           </dl>
           <ul className="divide-y divide-border/40 rounded-lg border text-sm">
             {detail.lines.length === 0 ? <li className="px-3 py-2 text-muted-foreground">Nenhuma linha. Calcule para gerar salário/benefícios.</li> : null}
@@ -150,11 +153,10 @@ export function CompetenceBoard({
               </div>
             ) : null}
             {st === "closed" ? (
-              <div className="w-full space-y-2">
-                <Label htmlFor="pc-reopen">Motivo da reabertura (mín. 20)</Label>
-                <Textarea id="pc-reopen" rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
-                <Button type="button" size="sm" variant="outline" disabled={submitting} onClick={() => run(PAYROLL_ENDPOINT.reopen, { competenceId: detail.competenceId, reason }, "Nova versão em rascunho. A fechada permanece no histórico.")}>Reabrir (nova versão)</Button>
-              </div>
+              <PaymentAndReopen detailId={detail.competenceId} reason={reason} setReason={setReason} submitting={submitting} setError={setError} setNotice={setNotice} onRefresh={() => router.refresh()} onReopen={() => run(PAYROLL_ENDPOINT.reopen, { competenceId: detail.competenceId, reason }, "Nova versão em rascunho. A fechada permanece no histórico.")} />
+            ) : null}
+            {st === "paid" ? (
+              <ReversePayment detailId={detail.competenceId} reversed={detail.paymentReversed} submitting={submitting} setError={setError} setNotice={setNotice} onRefresh={() => router.refresh()} />
             ) : null}
           </div>
           {st && st !== "closed" && st !== "paid" ? (
@@ -193,6 +195,101 @@ export function CompetenceBoard({
           ) : null}
         </section>
       ) : null}
+    </div>
+  )
+}
+
+function PaymentAndReopen({
+  detailId, reason, setReason, submitting, setError, setNotice, onRefresh, onReopen,
+}: {
+  detailId: string
+  reason: string
+  setReason: (v: string) => void
+  submitting: boolean
+  setError: (v: string | null) => void
+  setNotice: (v: string | null) => void
+  onRefresh: () => void
+  onReopen: () => void
+}) {
+  const [paidOn, setPaidOn] = useState("")
+  const [method, setMethod] = useState<PaymentMethod>("bank_transfer")
+  const [reference, setReference] = useState("")
+  const [note, setNote] = useState("")
+  const [payReason, setPayReason] = useState("")
+  const [confirmed, setConfirmed] = useState(false)
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="w-full space-y-4">
+      <fieldset className="space-y-2 rounded-lg border border-border/40 p-3">
+        <legend className="text-sm font-medium">Registrar pagamento</legend>
+        <p className="text-xs text-muted-foreground">Não transfere dinheiro, não chama Pix e não usa carteira. Apenas registra a competência como paga.</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor="pc-paid-on">Data do pagamento</Label>
+            <Input id="pc-paid-on" type="date" value={paidOn} onChange={(e) => setPaidOn(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="pc-pay-method">Método</Label>
+            <select id="pc-pay-method" className={selectClass} value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)}>
+              {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{PAYMENT_METHOD_LABEL[m]}</option>)}
+            </select>
+          </div>
+        </div>
+        <Input placeholder="Referência (opcional)" value={reference} onChange={(e) => setReference(e.target.value)} />
+        <Textarea rows={2} maxLength={500} placeholder="Observação (opcional)" value={note} onChange={(e) => setNote(e.target.value)} />
+        <Textarea rows={2} maxLength={500} placeholder="Motivo obrigatório (mín. 20)" value={payReason} onChange={(e) => setPayReason(e.target.value)} />
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+          Confirmo o registro manual deste pagamento
+        </label>
+        <Button type="button" size="sm" disabled={busy || submitting} onClick={async () => {
+          setError(null); setBusy(true)
+          const r = await postCommission(J6_ENDPOINT.pay, {
+            idempotencyKey: newIdempotencyKey(), competenceId: detailId, paidOn, method,
+            ...(reference.trim() ? { reference: reference.trim() } : {}),
+            ...(note.trim() ? { note: note.trim() } : {}),
+            reason: payReason.trim(), confirmed,
+          })
+          setBusy(false)
+          if (!r.ok) return setError(r.message)
+          setNotice("Pagamento registrado. Nenhum dinheiro foi transferido.")
+          onRefresh()
+        }}>Registrar pagamento</Button>
+      </fieldset>
+      <div className="space-y-2">
+        <Label htmlFor="pc-reopen">Motivo da reabertura (mín. 20)</Label>
+        <Textarea id="pc-reopen" rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
+        <Button type="button" size="sm" variant="outline" disabled={submitting} onClick={onReopen}>Reabrir (nova versão)</Button>
+      </div>
+    </div>
+  )
+}
+
+function ReversePayment({
+  detailId, reversed, submitting, setError, setNotice, onRefresh,
+}: {
+  detailId: string
+  reversed: boolean
+  submitting: boolean
+  setError: (v: string | null) => void
+  setNotice: (v: string | null) => void
+  onRefresh: () => void
+}) {
+  const [revReason, setRevReason] = useState("")
+  const [busy, setBusy] = useState(false)
+  if (reversed) return <p className="text-sm text-muted-foreground">Pagamento estornado. Correção exige nova versão; o registro pago permanece no histórico.</p>
+  return (
+    <div className="w-full space-y-2">
+      <Label htmlFor="pc-rev">Estorno auditado (mín. 20)</Label>
+      <Textarea id="pc-rev" rows={2} maxLength={500} value={revReason} onChange={(e) => setRevReason(e.target.value)} />
+      <Button type="button" size="sm" variant="destructive" disabled={busy || submitting} onClick={async () => {
+        setError(null); setBusy(true)
+        const r = await postCommission(J6_ENDPOINT.reverse, { idempotencyKey: newIdempotencyKey(), competenceId: detailId, reason: revReason.trim() })
+        setBusy(false)
+        if (!r.ok) return setError(r.message)
+        setNotice("Estorno registrado. Nenhum DELETE foi feito.")
+        onRefresh()
+      }}>Estornar pagamento</Button>
     </div>
   )
 }

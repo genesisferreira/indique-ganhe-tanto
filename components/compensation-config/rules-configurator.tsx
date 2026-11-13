@@ -29,6 +29,8 @@ import {
   type RuleView,
 } from "@/lib/compensation-config/contract"
 import { WRITE_ENDPOINT, postDraft } from "@/lib/compensation-config/client"
+import { J6_ENDPOINT, postCommission } from "@/lib/commission-activation/client"
+import { isMethodActivatable, methodBlockReason } from "@/lib/commission-activation/evidence"
 import { formatDate, formatMoney } from "@/lib/employee-portal/format"
 import { ActivateDisabled, VersionPill, Warning, selectClass } from "@/components/compensation-config/ui"
 
@@ -288,9 +290,12 @@ function RuleCard({ family, onVersion, onArchived }: { family: RuleFamily; onVer
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [archiveReason, setArchiveReason] = useState("")
   const [archiveKey, setArchiveKey] = useState("")
+  const [overrideReason, setOverrideReason] = useState("")
+  const [activateReason, setActivateReason] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const isDraft = cur.status === "draft"
+  const canActivate = isMethodActivatable(cur.method)
 
   async function archive() {
     setError(null)
@@ -337,8 +342,37 @@ function RuleCard({ family, onVersion, onArchived }: { family: RuleFamily; onVer
           </Button>
         ) : null}
         {isDraft ? <Button type="button" size="sm" variant="ghost" onClick={() => { setArchiveOpen((s) => !s); setError(null) }}>Arquivar rascunho</Button> : null}
-        <ActivateDisabled id={`rule-${cur.id}`} />
+        {isDraft ? (
+          <Button type="button" size="sm" disabled={busy} onClick={async () => {
+            setError(null); setBusy(true)
+            const r = await postCommission(J6_ENDPOINT.rule_approve, { idempotencyKey: newIdempotencyKey(), ruleId: cur.id, ...(overrideReason.trim() ? { overrideReason: overrideReason.trim() } : {}) })
+            setBusy(false)
+            if (!r.ok) return setError(r.message)
+            onArchived(`Regra “${cur.name}” aprovada. Ativação só com prova financeira.`)
+          }}>Aprovar</Button>
+        ) : null}
+        {cur.status === "approved" && canActivate ? (
+          <div className="flex w-full flex-wrap items-end gap-2">
+            <Textarea rows={2} maxLength={500} placeholder="Motivo da ativação (mín. 20)" value={activateReason} onChange={(e) => setActivateReason(e.target.value)} />
+            <Button type="button" size="sm" disabled={busy} onClick={async () => {
+              setError(null); setBusy(true)
+              const r = await postCommission(J6_ENDPOINT.rule_activate, { idempotencyKey: newIdempotencyKey(), ruleId: cur.id, reason: activateReason.trim() })
+              setBusy(false)
+              if (!r.ok) return setError(r.message)
+              onArchived(`Regra “${cur.name}” ativada.`)
+            }}>Ativar</Button>
+          </div>
+        ) : (
+          <ActivateDisabled id={`rule-${cur.id}`} />
+        )}
       </div>
+      {isDraft ? (
+        <div className="space-y-1">
+          <Label htmlFor={`ov-${cur.id}`}>Override do Master (se você criou o rascunho)</Label>
+          <Textarea id={`ov-${cur.id}`} rows={2} maxLength={500} value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} />
+        </div>
+      ) : null}
+      {!canActivate ? <p className="text-xs text-muted-foreground">{methodBlockReason(cur.method)}</p> : null}
       {archiveOpen ? (
         <div className="space-y-2 rounded-lg border border-border/60 p-3">
           <Label htmlFor={`arch-${cur.id}`}>Motivo do arquivamento *</Label>

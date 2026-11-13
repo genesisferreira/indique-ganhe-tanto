@@ -37,7 +37,8 @@ export function ActivateDisabled({ id }: { id: string }) {
 
 const TONE: Record<VersionStatus, string> = {
   draft: "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  approved: "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  approved: "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+  active: "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
   superseded: "border-border bg-muted/40 text-muted-foreground",
   archived: "border-border bg-muted/40 text-muted-foreground",
 }
