@@ -15,12 +15,18 @@ import {
  * - Início adiado para microtask: no StrictMode (montar → desmontar → montar) o primeiro
  *   controlador é descartado antes de chamar `load` (uma resolução de identidade por carregamento).
  * - Desmontagem aborta a requisição e bloqueia setState.
+ * - 3.1F-K1B: o `ctx` (com o `signal` do carregamento) é repassado sem alteração ao `load`;
+ *   `retry` aborta o request em andamento antes de iniciar o próximo (botões "Tentar novamente"/"Atualizar").
  */
 export function useGuardedLoader<T>(
   load: (ctx: { signal: AbortSignal; attempt: number }) => Promise<LoadOutcome<T>>,
   key: string,
   options?: { timeoutMs?: number }
-): { state: LoaderState<T>; reload: (opts?: LoaderRunOptions) => Promise<void> } {
+): {
+  state: LoaderState<T>
+  reload: (opts?: LoaderRunOptions) => Promise<void>
+  retry: () => Promise<void>
+} {
   const [state, setState] = useState<LoaderState<T>>({ status: "idle" })
   const loadRef = useRef(load)
   loadRef.current = load
@@ -45,5 +51,9 @@ export function useGuardedLoader<T>(
     await controllerRef.current?.run(opts)
   }, [])
 
-  return { state, reload }
+  const retry = useCallback(async () => {
+    await controllerRef.current?.retry()
+  }, [])
+
+  return { state, reload, retry }
 }

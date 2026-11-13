@@ -13,26 +13,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { comerciais } from "@/lib/services/mock-data.service"
-import { loadAdminComerciaisResultFromSupabase } from "@/lib/services/supabase-data.service"
+import { loadComerciaisPageOutcome } from "@/lib/admin-legacy/page-loaders"
 import { LoaderStatus } from "@/components/ui/loader-status"
 import { useGuardedLoader } from "@/hooks/use-guarded-loader"
-import { errorOutcome, listOutcome, type LoaderErrorClass } from "@/lib/client/guarded-loader"
+import { listOutcome } from "@/lib/client/guarded-loader"
 import { Plus, Search, Eye, Edit, MoreHorizontal, RefreshCw } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import Link from "next/link"
 import type { Comercial } from "@/types"
-
-const ADMIN_LIST_ERROR_TO_LOADER: Record<string, LoaderErrorClass> = {
-  unauthenticated: "unauthenticated",
-  forbidden: "forbidden",
-  query_failed: "server_error",
-  invalid_response: "invalid_response",
-  unexpected: "unexpected",
-}
-
-function isComercialRow(item: unknown): boolean {
-  return Boolean(item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string")
-}
 
 export default function AdminComerciaisPage() {
   const [search, setSearch] = useState("")
@@ -41,11 +29,10 @@ export default function AdminComerciaisPage() {
   // 3.1F-K1: estado explícito (loading/success/empty/error/timeout). Falha nunca vira lista vazia.
   const loadComerciais = useCallback(async ({ signal }: { signal: AbortSignal }) => {
     if (isDataProviderMock()) return listOutcome<Comercial>(comerciais)
-    const result = await loadAdminComerciaisResultFromSupabase({ signal })
-    if (!result.ok) return errorOutcome<Comercial[]>(ADMIN_LIST_ERROR_TO_LOADER[result.errorClass])
-    return listOutcome<Comercial>(result.data, isComercialRow)
+    // 3.1F-K1B: o signal do carregamento vai até as consultas (supabase-js .abortSignal).
+    return loadComerciaisPageOutcome(signal)
   }, [])
-  const { state, reload } = useGuardedLoader<Comercial[]>(loadComerciais, "admin-comerciais")
+  const { state, retry } = useGuardedLoader<Comercial[]>(loadComerciais, "admin-comerciais")
   const carregando = state.status === "idle" || state.status === "loading"
   const lista: Comercial[] = state.status === "success" ? state.data : []
 
@@ -218,7 +205,7 @@ export default function AdminComerciaisPage() {
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void reload()}
+                onClick={() => void retry()}
                 disabled={carregando}
                 aria-label="Atualizar lista de comerciais"
               >
@@ -230,7 +217,7 @@ export default function AdminComerciaisPage() {
         <CardContent>
           <LoaderStatus
             state={state}
-            onRetry={() => void reload()}
+            onRetry={() => void retry()}
             retryDisabled={carregando}
             loadingLabel="Carregando comerciais…"
             emptyMessage="Nenhum comercial cadastrado."

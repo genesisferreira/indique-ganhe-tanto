@@ -80,10 +80,11 @@ describe("K1 loaders legados (Supabase simulado)", { skip: !hasModuleMocks && "r
         assert.deepEqual(r, { ok: false, errorClass: cls })
       })
     }
-    it("signal repassado às consultas principais (cancelamento por timeout/desmontagem)", async () => {
+    it("signal anexado a TODAS as 4 consultas REST (perfil, comerciais, disponibilidade, estatísticas) — K1B", async () => {
       resetFake({ comerciais: 1 })
       await svc.loadAdminComerciaisResultFromSupabase({ signal: new AbortController().signal })
-      assert.equal(counters.signals, 2)
+      assert.equal(counters.signals, 4)
+      assert.equal(counters.from, 4)
     })
     it("timeout: consulta pendurada => estado timeout (não vazio)", async () => {
       resetFake({ hang: true })

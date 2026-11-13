@@ -11,12 +11,16 @@ import { startJ2Lab, zeroWriteSnapshot } from "../j2-lab-chain.mjs"
 import { startMockSupabase, labSessionCookie } from "../j2-local-e2e/mock-supabase.mjs"
 import { AUDIT_JS } from "../j2-local-e2e/cdp.mjs"
 import { launchK1Browser } from "./cdp.mjs"
+import { FINANCIAL_TABLES, LAB_USERS, RICH_REFERRAL_NAMES, richSnapshot, seedFixture } from "./rich-fixture.mjs"
 
 const APP_DIR = resolve(process.env.K1_APP_DIR || process.cwd())
 const OUT = resolve(process.env.K1_OUT_DIR || join(process.cwd(), "k1-visual-out"))
 const BROWSER = process.env.K1_BROWSER || ""
 const LABEL = process.env.K1_LABEL || "k1"
 const ONLY_COUNTS = process.env.K1_ONLY_COUNTS === "1"
+// 3.1F-K1B: K1_FIXTURE=rich (padrão; massa sintética representativa) | empty (vazio real, fixture separada).
+const FIXTURE = process.env.K1_FIXTURE || "rich"
+if (!["rich", "empty"].includes(FIXTURE)) throw new Error("K1_FIXTURE inválido")
 const MOCK_PORT = 54329, APP_PORT = Number(process.env.K1_APP_PORT || 3220)
 const APP = `http://127.0.0.1:${APP_PORT}`
 const MOCK = `127.0.0.1:${MOCK_PORT}`
@@ -26,12 +30,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const log = (m) => process.stdout.write(`[k1] ${m}\n`)
 mkdirSync(join(OUT, "png"), { recursive: true })
 
-const U = {
-  AM: ["77777777-0000-4000-8000-000000000010", "admin_master", null, "Lab Admin Master"],
-  CM: ["77777777-0000-4000-8000-000000000013", "comercial", "active", "Lab Comercial Ativo"],
-  FA: ["77777777-0000-4000-8000-00000000000a", "funcionario", "active", "Lab Funcionário"],
-  IN: ["77777777-0000-4000-8000-000000000014", "indicador", null, "Lab Indicador"],
-}
+const U = LAB_USERS
 const users = Object.fromEntries(Object.entries(U).map(([k, u]) => [u[0], { email: `${k.toLowerCase()}@lab.invalid` }]))
 const amCookie = () => labSessionCookie(U.AM[0], "am@lab.invalid")
 
@@ -47,14 +46,19 @@ const check = (name, pass, detail) => { results.push([name, pass ? "PASS" : "FAI
 const lab = await startJ2Lab({ applyJ2: true })
 const { c } = lab
 let app, mock, browser
-const summary = { label: LABEL, screenshots: [], audits: [], counts: {} }
+const summary = { label: LABEL, fixture: FIXTURE, screenshots: [], audits: [], counts: {}, abortObserved: [] }
 try {
-  for (const [k, [id, role, status, name]] of Object.entries(U)) {
-    await c.query(`insert into public.profiles(id,email,role,is_active,full_name,must_change_password) values ($1,$2,$3,true,$4,false)`, [id, `${k.toLowerCase()}@lab.invalid`, role, name])
-    if (status) await c.query(`insert into public.employees(profile_id,status) values ($1,$2::public.employee_status)`, [id, status])
-  }
+  await seedFixture(c, FIXTURE)
   await c.query("grant select on all tables in schema public to service_role")
   const snap0 = { ...(await zeroWriteSnapshot(c)), ...(await extraHashes(c)) }
+  const rich0 = await richSnapshot(c)
+  summary.fixtureCounts = Object.fromEntries(Object.entries(rich0.tables).map(([t, v]) => [t, v.n]))
+  if (FIXTURE === "rich") {
+    const n = (t) => rich0.tables[t].n
+    const comerciais = Number((await c.query(`select count(*)::int n from public.profiles where role='comercial'`)).rows[0].n)
+    check("fixture rica: comerciais/indicações/funcionários/rewards/wallet/memberships não vazios", comerciais >= 3 && n("referrals") >= 6 && n("employees") >= 4 && n("rewards") >= 2 && n("wallet_transactions") >= 2 && n("employee_sector_memberships") >= 4 && n("collection_cases") >= 1, summary.fixtureCounts)
+    check("fixture rica: tabelas financeiras vazias", FINANCIAL_TABLES.every((t) => n(t) === 0), Object.fromEntries(FINANCIAL_TABLES.map((t) => [t, n(t)])))
+  }
 
   mock = await startMockSupabase({ port: MOCK_PORT, client: c, anonKey: ANON, serviceKey: SERVICE, allowOrigin: APP, users })
   app = spawn(process.execPath, [join(APP_DIR, "node_modules/next/dist/bin/next"), "start", "-p", String(APP_PORT), "-H", "127.0.0.1"], {
@@ -101,8 +105,10 @@ try {
     for (const [w, h] of vps) {
       await browser.intercept(rules)
       await browser.setCookie(COOKIE, amCookie(), APP)
+      const mark = browser.failures.length
       await browser.open(APP + path, w, h, settle)
       const state = want ? await waitState(want, waitMs) : await stateOf()
+      const fails = browser.failures.slice(mark)
       const audit = await dom(AUDIT_JS)
       const text = await mainText()
       const file = `${name}-${w}x${h}.png`
@@ -113,20 +119,33 @@ try {
       check(`${name} ${w}x${h} sem overflow horizontal`, !audit.overflowX, audit.scrollWidth)
       check(`${name} ${w}x${h} controles rotulados`, audit.unlabeled.length === 0, audit.unlabeled)
       check(`${name} ${w}x${h} sem placeholder percentual`, !/[+]\s?(12|5[.,]2|12[.,]5|15|8[.,]2)\s?%|vs m[eê]s anterior/.test(text))
-      if (a) await a({ w, h, text, state, audit })
+      if (a) await a({ w, h, text, state, audit, fails })
     }
     await browser.intercept([])
   }
   const restRule = (pathRe, action, status = 500, body = '{"message":"lab-induced"}') => ({ match: (req) => new URL(req.url).host === MOCK && pathRe.test(new URL(req.url).pathname + new URL(req.url).search), action, status, body, origin: APP })
   const appRule = (pathRe, action, status = 500, body = '{"ok":false}') => ({ match: (req) => new URL(req.url).host === `127.0.0.1:${APP_PORT}` && pathRe.test(new URL(req.url).pathname + new URL(req.url).search), action, status, body })
   const comerciaisList = /\/rest\/v1\/profiles\?.*role=eq\.comercial/
+  // 3.1F-K1B: no timeout, o request pendurado deve ser CANCELADO pela página (Network.loadingFailed canceled=true)
+  // antes de qualquer liberação pelo harness.
+  const abortedByPage = (name, re) => async ({ w, h, fails }) => {
+    const hit = fails.filter((x) => re.test(x.path + x.search) && x.canceled)
+    summary.abortObserved.push({ name, viewport: `${w}x${h}`, canceled: hit.length, errorText: hit[0]?.errorText ?? null })
+    check(`${name} ${w}x${h}: request pendurado cancelado pela página no timeout (AbortController)`, hit.length >= 1, fails.slice(-5))
+  }
 
+  if (FIXTURE === "empty") {
+    // Vazio REAL: respostas válidas vazias do lab (sem interceptação).
+    await shot("k1b-empty-comerciais", "/admin/comerciais", { want: ["empty"], assert: async ({ text }) => check("vazio real: comerciais", /Nenhum comercial/.test(text) && !/Tentar novamente/.test(text)) })
+    await shot("k1b-empty-indicacoes", "/admin/indicacoes", { want: ["empty"], assert: async ({ text }) => check("vazio real: indicações", /Nenhuma indicação cadastrada/.test(text) && !/Tentar novamente/.test(text)) })
+    await shot("k1b-empty-funcionarios", "/admin/funcionarios", { want: ["empty"], assert: async ({ text }) => check("vazio real: funcionários", /Nenhum funcionário cadastrado/.test(text) && !/Tentar novamente/.test(text)) })
+  } else {
   // Comerciais
-  await shot("k1-comerciais-success", "/admin/comerciais", { want: ["success"], assert: async ({ text }) => check("comerciais: comercial ativo visível ao Admin Master", /Lab Comercial Ativo/.test(text)) })
+  await shot("k1-comerciais-success", "/admin/comerciais", { want: ["success"], assert: async ({ text }) => check("comerciais: lista não vazia (fixture rica) visível ao Admin Master", /Lab Comercial Ativo/.test(text) && /Comercial Sintético Dois/.test(text) && /Comercial Sintético Inativo/.test(text)) })
   await shot("k1-comerciais-loading", "/admin/comerciais", { rules: [restRule(comerciaisList, "hang")], want: ["loading"], settle: 1200, waitMs: 3000 })
   await shot("k1-comerciais-error", "/admin/comerciais", { rules: [restRule(comerciaisList, "fulfill", 500)], want: ["error"], assert: async ({ text }) => check("comerciais: erro não exibe 'Nenhum comercial'", !/Nenhum comercial/.test(text) && /Tentar novamente/.test(text)) })
   await shot("k1-comerciais-empty", "/admin/comerciais", { vps: [[360, 800], [1366, 768]], rules: [restRule(comerciaisList, "fulfill", 200, "[]")], want: ["empty"] })
-  await shot("k1-comerciais-timeout", "/admin/comerciais", { rules: [restRule(comerciaisList, "hang")], want: ["timeout"], settle: 1000, waitMs: 20000 })
+  await shot("k1-comerciais-timeout", "/admin/comerciais", { rules: [restRule(comerciaisList, "hang")], want: ["timeout"], settle: 1000, waitMs: 20000, assert: abortedByPage("comerciais", comerciaisList) })
 
   // Retry manual: erro -> remove a falha -> clicar "Tentar novamente" (1 clique = 1 nova tentativa)
   await browser.intercept([restRule(comerciaisList, "fulfill", 500)])
@@ -142,13 +161,13 @@ try {
   check("comerciais: retry = 1 resolução de identidade", retryReqs.filter((r) => r.path === "/auth/v1/user").length === 1, retryReqs.map((r) => r.path))
 
   // Funcionários
-  await shot("k1-funcionarios-success", "/admin/funcionarios", { want: ["success"], assert: async ({ text }) => check("funcionários: lista com dados de lab", /Lab Funcion/.test(text)) })
+  await shot("k1-funcionarios-success", "/admin/funcionarios", { want: ["success"], assert: async ({ text }) => check("funcionários: lista não vazia (fixture rica)", /Lab Funcion/.test(text) && /Funcionário Sintético Pausado/.test(text) && /Comercial Sintético Dois/.test(text)) })
   await shot("k1-funcionarios-loading", "/admin/funcionarios", { vps: [[390, 844]], rules: [appRule(/^\/api\/admin\/employees/, "hang")], want: ["loading"], settle: 1200, waitMs: 3000 })
   await shot("k1-funcionarios-error", "/admin/funcionarios", { vps: [[390, 844], [1366, 768]], rules: [appRule(/^\/api\/admin\/employees/, "fulfill", 500)], want: ["error"] })
   await shot("k1-funcionarios-forbidden", "/admin/funcionarios", { vps: [[1366, 768]], rules: [appRule(/^\/api\/admin\/employees/, "fulfill", 403, '{"ok":false,"message":"x"}')], want: ["error"], assert: async ({ text }) => check("funcionários: 403 => mensagem de acesso", /não tem acesso/.test(text)) })
   await shot("k1-funcionarios-malformed", "/admin/funcionarios", { vps: [[1366, 768]], rules: [appRule(/^\/api\/admin\/employees/, "fulfill", 200, "null")], want: ["error"] })
   await shot("k1-funcionarios-empty", "/admin/funcionarios", { vps: [[360, 800], [1366, 768]], rules: [appRule(/^\/api\/admin\/employees/, "fulfill", 200, '{"ok":true,"items":[],"canWrite":false}')], want: ["empty"] })
-  await shot("k1-funcionarios-timeout", "/admin/funcionarios", { vps: [[360, 800]], rules: [appRule(/^\/api\/admin\/employees/, "hang")], want: ["timeout"], settle: 1000, waitMs: 20000 })
+  await shot("k1-funcionarios-timeout", "/admin/funcionarios", { vps: [[360, 800]], rules: [appRule(/^\/api\/admin\/employees/, "hang")], want: ["timeout"], settle: 1000, waitMs: 20000, assert: abortedByPage("funcionários", /^\/api\/admin\/employees/) })
 
   // Busca acessível + teclado: label associado e foco via Tab
   await browser.intercept([])
@@ -165,20 +184,30 @@ try {
   summary.screenshots.push("k1-funcionarios-busca-foco-1366x768.png")
 
   // Indicações
-  await shot("k1-indicacoes-loaded", "/admin/indicacoes", { want: ["success", "empty"] })
+  await shot("k1-indicacoes-loaded", "/admin/indicacoes", { want: ["success"], assert: async ({ text }) => check("indicações: lista não vazia (fixture rica)", RICH_REFERRAL_NAMES.slice(0, 3).every((n) => text.includes(n))) })
   await shot("k1-indicacoes-error", "/admin/indicacoes", { vps: [[390, 844], [1366, 768]], rules: [restRule(/\/rest\/v1\/referrals\?/, "fulfill", 500)], want: ["error"], assert: async ({ text }) => check("indicações: erro não vira 'Nenhuma indicação'", !/Nenhuma indicação/.test(text)) })
-  await shot("k1-indicacoes-timeout", "/admin/indicacoes", { vps: [[1366, 768]], rules: [restRule(/\/rest\/v1\/referrals\?/, "hang")], want: ["timeout"], settle: 1000, waitMs: 20000 })
+  await shot("k1-indicacoes-timeout", "/admin/indicacoes", { vps: [[1366, 768]], rules: [restRule(/\/rest\/v1\/referrals\?/, "hang")], want: ["timeout"], settle: 1000, waitMs: 20000, assert: abortedByPage("indicações", /\/rest\/v1\/referrals\?/) })
 
   // Cards sem percentuais falsos
   for (const [name, path] of [["k1-admin-cards", "/admin"], ["k1-admin-financeiro-cards", "/admin/financeiro"]]) {
     await shot(name, path, { settle: 4500, assert: async ({ text, w }) => check(`${path} ${w}: nenhum trend falso`, !/[+]\s?\d+([.,]\d+)?%/.test(text) && !/isPositive/.test(text)) })
+  }
   }
 
   const snap1 = { ...(await zeroWriteSnapshot(c)), ...(await extraHashes(c)) }
   summary.zeroWrite = { before: snap0, after: snap1 }
   check("zero-write: lab inalterado (financeiro, referrals, rewards, wallet, collections, profiles, employees, memberships)", JSON.stringify(snap0) === JSON.stringify(snap1), { snap0, snap1 })
   check("zero-write: simulador sem tentativas de escrita", mock.stats.writeAttempts.length === 0, mock.stats.writeAttempts)
-  summary.mock = { requests: mock.stats.requests, writeAttempts: mock.stats.writeAttempts.length, unsupported: mock.stats.unsupported.slice(0, 10) }
+  const rich1 = await richSnapshot(c)
+  summary.richSnapshot = { before: rich0, after: rich1 }
+  check("zero-write: contagens + digests + updated_at idênticos (fixture)", JSON.stringify(rich0.tables) === JSON.stringify(rich1.tables), Object.keys(rich0.tables).filter((t) => JSON.stringify(rich0.tables[t]) !== JSON.stringify(rich1.tables[t])))
+  check("zero-write: pg_stat_user_tables sem INSERT/UPDATE/DELETE durante os GETs", JSON.stringify(rich0.pgWrites) === JSON.stringify(rich1.pgWrites), { before: rich0.pgWrites, after: rich1.pgWrites })
+  const rpcNames = Object.keys(mock.stats.rpc)
+  check("zero-write: nenhuma RPC executada pelas telas K1 (somente leitura)", rpcNames.every((n) => !/^(create|update|delete|insert|set|assign|approve|reject|pay|sync|release|finalize|register|mark)/i.test(n)), mock.stats.rpc)
+  const external = [...browser.hosts].filter((hst) => hst !== MOCK && hst !== `127.0.0.1:${APP_PORT}`)
+  check("ERP/Sync: zero requisições a hosts externos (somente 127.0.0.1)", external.length === 0, external)
+  summary.mock = { requests: mock.stats.requests, writeAttempts: mock.stats.writeAttempts.length, rpc: mock.stats.rpc, unsupported: [...new Set(mock.stats.unsupported)].slice(0, 10) }
+  summary.hosts = [...browser.hosts]
 } catch (e) {
   if (!e.onlyCounts) { results.push(["RUN", "FAIL " + e.message]); ok = false }
 } finally {

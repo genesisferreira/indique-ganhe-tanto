@@ -8,7 +8,16 @@
  * - todo carregamento termina (finally limpa timer/estado);
  * - resposta antiga nunca sobrescreve a mais recente (sequência + AbortController);
  * - após dispose (desmontagem) nenhum estado é emitido;
- * - sem retry automático: nova tentativa somente por ação explícita (`run`).
+ * - sem retry automático: nova tentativa somente por ação explícita (`retry`/`run`).
+ *
+ * 3.1F-K1B — cancelamento real:
+ * - um AbortController por carregamento; o MESMO `signal` é entregue ao `load`, que deve repassá-lo
+ *   até a chamada de rede (supabase-js `.abortSignal(signal)` / `fetch(url, { signal })`);
+ * - timeout chama `controller.abort(reason timeout)`; desmontagem `abort(reason disposed)`;
+ *   retry manual `abort(reason superseded)` ANTES de iniciar o próximo carregamento;
+ * - o motivo é tipado (`LoaderAbortReason.kind`), então timeout e desmontagem são distinguíveis:
+ *   timeout => estado `timeout`; desmontagem/substituição => nenhum estado (sem alerta);
+ * - timer e listener de abort são removidos no `finally` (nada se acumula entre tentativas).
  */
 
 /** Timeout padrão (ms) dos loaders legados. 15 s: acima do p99 observado no lab (~1 s), sem esconder lentidão. */
@@ -69,6 +78,25 @@ export function listOutcome<T>(value: unknown, isItem?: (item: unknown) => boole
   return dataOutcome(value as T[], value.length === 0)
 }
 
+/** Motivo tipado do abort (3.1F-K1B). `name === "AbortError"` para bibliotecas tratarem como cancelamento. */
+export type LoaderAbortKind = "timeout" | "superseded" | "disposed"
+
+export class LoaderAbortReason extends Error {
+  readonly kind: LoaderAbortKind
+  constructor(kind: LoaderAbortKind) {
+    super(`k1-loader-${kind}`)
+    this.name = "AbortError"
+    this.kind = kind
+  }
+}
+
+/** Tipo do abort de um signal criado pelo loader (null se não abortado ou motivo externo). */
+export function loaderAbortKind(signal: AbortSignal | undefined | null): LoaderAbortKind | null {
+  if (!signal?.aborted) return null
+  const reason: unknown = signal.reason
+  return reason instanceof LoaderAbortReason ? reason.kind : null
+}
+
 export type LoaderRunOptions = {
   /** Não emite `loading` (mantém conteúdo atual na tela até o resultado). */
   silent?: boolean
@@ -86,11 +114,15 @@ export type GuardedLoaderOptions<T> = {
     set: (fn: () => void, ms: number) => TimerHandle
     clear: (handle: TimerHandle) => void
   }
+  /** Somente testes: instrumentação do controlador (contagem de listeners). Padrão: um controlador nativo novo. */
+  createController?: () => AbortController
 }
 
 export type GuardedLoader = {
   /** Inicia um carregamento. Chamadas durante um carregamento em andamento são coalescidas (no máximo 1 pendente). */
   run: (opts?: LoaderRunOptions) => Promise<void>
+  /** Retry/refresh manual: aborta o carregamento em andamento (motivo `superseded`) e inicia outro. */
+  retry: () => Promise<void>
   /** Inicia no próximo microtask; se `dispose` vier antes (StrictMode), nada é carregado. */
   start: () => void
   dispose: () => void
@@ -98,9 +130,6 @@ export type GuardedLoader = {
   readonly inFlight: boolean
 }
 
-const TIMEOUT_REASON = "k1-loader-timeout"
-const SUPERSEDED_REASON = "k1-loader-superseded"
-const DISPOSED_REASON = "k1-loader-disposed"
 
 export function createGuardedLoader<T>(options: GuardedLoaderOptions<T>): GuardedLoader {
   const timeoutMs = options.timeoutMs ?? LEGACY_LOADER_TIMEOUT_MS
@@ -108,6 +137,7 @@ export function createGuardedLoader<T>(options: GuardedLoaderOptions<T>): Guarde
     set: (fn: () => void, ms: number) => setTimeout(fn, ms),
     clear: (h: TimerHandle) => clearTimeout(h as ReturnType<typeof setTimeout>),
   }
+  const createController = options.createController ?? (() => new AbortController())
   let seq = 0
   let disposed = false
   let current: AbortController | null = null
@@ -126,26 +156,31 @@ export function createGuardedLoader<T>(options: GuardedLoaderOptions<T>): Guarde
       return
     }
     if (current && opts.supersede) {
-      current.abort(SUPERSEDED_REASON)
+      // Retry manual: o request anterior é abortado ANTES de o próximo começar.
+      current.abort(new LoaderAbortReason("superseded"))
+      current = null
       pending = null
     }
     const mySeq = ++seq
-    const controller = new AbortController()
+    const controller = createController()
     current = controller
     let timedOut = false
     const timer = timers.set(() => {
       timedOut = true
-      controller.abort(TIMEOUT_REASON)
+      controller.abort(new LoaderAbortReason("timeout"))
     }, timeoutMs)
 
     if (!opts.silent) emit({ status: "loading" }, mySeq)
 
     let final: LoaderState<T> | null = null
+    let rejectAborted: ((reason: LoaderError) => void) | null = null
+    const onAbort = () => rejectAborted?.(new LoaderError("unexpected"))
     try {
       const aborted = new Promise<never>((_, reject) => {
-        if (controller.signal.aborted) reject(new LoaderError("unexpected"))
-        controller.signal.addEventListener("abort", () => reject(new LoaderError("unexpected")), { once: true })
+        rejectAborted = reject
       })
+      if (controller.signal.aborted) onAbort()
+      else controller.signal.addEventListener("abort", onAbort, { once: true })
       const outcome = await Promise.race([options.load({ signal: controller.signal, attempt: mySeq }), aborted])
       if (!outcome || typeof outcome !== "object" || !("kind" in outcome)) {
         final = { status: "error", errorClass: "invalid_response" }
@@ -156,11 +191,12 @@ export function createGuardedLoader<T>(options: GuardedLoaderOptions<T>): Guarde
       }
       if (timedOut) final = { status: "timeout" }
     } catch (thrown) {
-      if (timedOut) final = { status: "timeout" }
-      else if (controller.signal.aborted) final = null // substituído ou desmontado: descartado
+      if (timedOut || loaderAbortKind(controller.signal) === "timeout") final = { status: "timeout" }
+      else if (controller.signal.aborted) final = null // substituído ou desmontado: descartado, sem alerta
       else final = { status: "error", errorClass: thrown instanceof LoaderError ? thrown.errorClass : "unexpected" }
     } finally {
       timers.clear(timer)
+      controller.signal.removeEventListener("abort", onAbort)
       if (current === controller) current = null
     }
 
@@ -176,6 +212,7 @@ export function createGuardedLoader<T>(options: GuardedLoaderOptions<T>): Guarde
   let startQueued = false
   return {
     run,
+    retry: () => run({ supersede: true }),
     start() {
       if (startQueued || disposed) return
       startQueued = true
@@ -187,7 +224,7 @@ export function createGuardedLoader<T>(options: GuardedLoaderOptions<T>): Guarde
       if (disposed) return
       disposed = true
       pending = null
-      current?.abort(DISPOSED_REASON)
+      current?.abort(new LoaderAbortReason("disposed"))
       current = null
     },
     get disposed() {
@@ -222,11 +259,12 @@ export const LOADER_TIMEOUT_MESSAGE = "A consulta demorou mais do que o esperado
 export async function fetchJsonForLoader(
   url: string,
   signal: AbortSignal,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl?: typeof fetch
 ): Promise<{ status: number; ok: boolean; json: unknown }> {
+  const doFetch = fetchImpl ?? fetch
   let res: Response
   try {
-    res = await fetchImpl(url, { cache: "no-store", signal, credentials: "same-origin" })
+    res = await doFetch(url, { cache: "no-store", signal, credentials: "same-origin" })
   } catch (thrown) {
     if (signal.aborted) throw thrown
     throw new LoaderError("network")

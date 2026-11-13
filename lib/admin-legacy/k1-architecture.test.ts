@@ -25,6 +25,7 @@ const K1_CLIENT_FILES = [
   "components/ui/stat-card-trend.ts",
   "lib/admin-legacy/indicacoes-loader.ts",
   "lib/admin-legacy/employees-outcome.ts",
+  "lib/admin-legacy/page-loaders.ts",
 ]
 const PLACEHOLDER_RE = /[+]\s?(12|5[.,]2|12[.,]5|15|8[.,]2)\s?%|vs mes anterior/
 
@@ -57,7 +58,8 @@ describe("K1 — loaders sem vazio falso", () => {
     const src = read("app/admin/comerciais/page.tsx")
     assert.doesNotMatch(src, /remote \?\? \[\]/)
     assert.doesNotMatch(src, /loadAdminComerciaisFromSupabase\(/)
-    assert.match(src, /loadAdminComerciaisResultFromSupabase\(\{ signal \}\)/)
+    assert.match(src, /loadComerciaisPageOutcome\(signal\)/)
+    assert.match(read("lib/admin-legacy/page-loaders.ts"), /await load\(\{ signal \}\)/)
     assert.match(src, /<LoaderStatus/)
   })
   it("indicações: erro não zera a lista; sem toast com erro bruto; identidade 1× via orquestrador", () => {
@@ -70,7 +72,9 @@ describe("K1 — loaders sem vazio falso", () => {
   it("funcionários: valida resposta (employeesOutcome) e não depende de `json.items ?? []`", () => {
     const src = read("app/admin/funcionarios/page.tsx")
     assert.doesNotMatch(src, /json\.items \?\? \[\]/)
-    assert.match(src, /employeesOutcome\(res\.status, res\.ok, res\.json\)/)
+    assert.match(src, /loadEmployeesPageOutcome\(query, signal\)/)
+    assert.match(src, /loadSectorsPageOutcome\(signal\)/)
+    assert.match(read("lib/admin-legacy/page-loaders.ts"), /employeesOutcome\(res\.status, res\.ok, res\.json\)/)
   })
   for (const p of LOADER_PAGES) {
     it(`${p}: usa useGuardedLoader; sem setInterval; sem useEffect de carga manual`, () => {
@@ -141,5 +145,65 @@ describe("K1 — acessibilidade", () => {
         assert.match(b, /aria-label=/, `${p}: botão só-ícone sem aria-label`)
       }
     }
+  })
+})
+
+describe("K1B — AbortSignal: sem controller decorativo, signal em toda consulta REST dos loaders", () => {
+  const svcSrc = read("lib/services/supabase-data.service.ts").replace(/\r\n/g, "\n")
+  const body = (start: string, end: string) => {
+    const i = svcSrc.indexOf(start)
+    assert.ok(i >= 0, `função ausente: ${start}`)
+    const j = svcSrc.indexOf(end, i + start.length)
+    return svcSrc.slice(i, j > i ? j : undefined)
+  }
+  const fns: Array<[string, string, string]> = [
+    ["resolveAdminLoadIdentity", "async function resolveAdminLoadIdentity(", "export async function loadAdminComerciaisResultFromSupabase("],
+    ["loadAdminComerciaisResultFromSupabase", "export async function loadAdminComerciaisResultFromSupabase(", "export async function loadAdminComerciaisFromSupabase("],
+    ["loadAdminReferralsFromSupabase", "export async function loadAdminReferralsFromSupabase(", "const ADMIN_REFERRAL_MUTATION_ROLES"],
+    ["fetchReferralsListRows", "async function fetchReferralsListRows(", "async function loadPlansMapForReferralRows("],
+    ["loadPlansMapForReferralRows", "async function loadPlansMapForReferralRows(", "\n}\n"],
+    ["getAuthProfileBasicsFromSupabase", "export async function getAuthProfileBasicsFromSupabase(", "\n}\n"],
+  ]
+  for (const [name, start, end] of fns) {
+    it(`${name}: cada .from( está envolvido por withAbortSignal(…, signal)`, () => {
+      const src = body(start, end)
+      const froms = (src.match(/\.from\(/g) ?? []).length
+      const wrapped = (src.match(/withAbortSignal\(/g) ?? []).length
+      assert.ok(froms > 0)
+      assert.equal(wrapped, froms, `${name}: ${froms} consultas, ${wrapped} com signal`)
+      assert.doesNotMatch(src, /new AbortController\(/)
+    })
+  }
+  it("withAbortSignal usa o mecanismo oficial (.abortSignal) e não troca o signal", () => {
+    const helper = body("function withAbortSignal<", "\n}\n")
+    assert.match(helper, /return signal \? query\.abortSignal\(signal\) : query/)
+  })
+  it("páginas e loaders não criam AbortController próprio (um único por carregamento, no guarded loader)", () => {
+    for (const p of [...LOADER_PAGES, "lib/admin-legacy/page-loaders.ts", "lib/admin-legacy/indicacoes-loader.ts", "hooks/use-guarded-loader.ts"]) {
+      assert.doesNotMatch(read(p), /new AbortController\(/, p)
+    }
+    const core = read("lib/client/guarded-loader.ts")
+    assert.equal((core.match(/new AbortController\(\)/g) ?? []).length, 1)
+    assert.match(core, /options\.load\(\{ signal: controller\.signal, attempt: mySeq \}\)/)
+    assert.match(core, /controller\.signal\.removeEventListener\("abort", onAbort\)/)
+  })
+  it("hook repassa o ctx (com signal) sem alteração; botões de retry usam retry (aborta o anterior)", () => {
+    const hook = read("hooks/use-guarded-loader.ts")
+    assert.match(hook, /load: \(ctx\) => loadRef\.current\(ctx\)/)
+    assert.match(hook, /controllerRef\.current\?\.retry\(\)/)
+    for (const p of LOADER_PAGES) {
+      const src = read(p)
+      assert.match(src, /onRetry=\{\(\) => void retry\(\)\}/, p)
+      assert.doesNotMatch(src, /onClick=\{\(\) => void reload\(\)\}/, p)
+    }
+  })
+  it("indicações: signal chega a getBasics, referrals e comerciais", () => {
+    const src = read("lib/admin-legacy/indicacoes-loader.ts")
+    assert.match(src, /deps\.getBasics\(\{ signal \}\)/)
+    assert.match(src, /deps\.loadReferrals\(\{ identity, signal \}\)/)
+    assert.match(src, /deps\.loadComerciais\(\{ identity, signal \}\)/)
+  })
+  it("fetch dos funcionários com { signal } e no-store", () => {
+    assert.match(read("lib/client/guarded-loader.ts"), /doFetch\(url, \{ cache: "no-store", signal, credentials: "same-origin" \}\)/)
   })
 })

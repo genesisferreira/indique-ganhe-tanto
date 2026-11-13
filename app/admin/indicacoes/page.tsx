@@ -91,7 +91,7 @@ export default function AdminIndicacoesPage() {
     }
     return loadAdminIndicacoesBundle(signal)
   }, [])
-  const { state, reload } = useGuardedLoader<AdminIndicacoesBundle>(loadBundle, "admin-indicacoes")
+  const { state, reload, retry } = useGuardedLoader<AdminIndicacoesBundle>(loadBundle, "admin-indicacoes")
   const carregando = state.status === "idle" || state.status === "loading"
 
   useEffect(() => {
@@ -412,7 +412,7 @@ export default function AdminIndicacoesPage() {
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void reload()}
+                onClick={() => void retry()}
                 disabled={carregando}
                 aria-label="Atualizar lista de indicações"
               >
@@ -433,7 +433,7 @@ export default function AdminIndicacoesPage() {
                     {state.status === "timeout" ? LOADER_TIMEOUT_MESSAGE : loaderErrorMessage(state.errorClass)}{" "}
                     A lista abaixo pode estar desatualizada.
                   </span>
-                  <Button type="button" variant="outline" size="sm" onClick={() => void reload()}>
+                  <Button type="button" variant="outline" size="sm" onClick={() => void retry()}>
                     Tentar novamente
                   </Button>
                 </div>
@@ -458,7 +458,7 @@ export default function AdminIndicacoesPage() {
           ) : (
             <LoaderStatus
               state={state}
-              onRetry={() => void reload()}
+              onRetry={() => void retry()}
               retryDisabled={carregando}
               loadingLabel="Carregando indicações…"
               emptyMessage="Nenhuma indicação cadastrada."

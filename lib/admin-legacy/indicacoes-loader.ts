@@ -6,6 +6,10 @@
  * UMA vez (getAuthProfileBasicsFromSupabase → auth.getUser(), validado no servidor Auth) e
  * repassada às consultas do mesmo carregamento. Sem getSession, sem cache global, sem localStorage.
  * RLS continua sendo a fronteira de autorização.
+ *
+ * 3.1F-K1B: o MESMO `signal` do carregamento chega a todas as consultas REST (perfil, indicações,
+ * planos, perfis relacionados, comerciais, disponibilidade, estatísticas). `auth.getUser()` não aceita
+ * signal (auth-js); após um abort nada mais é consultado e o resultado é descartado pelo loader.
  */
 import {
   dataOutcome,
@@ -54,16 +58,18 @@ export async function loadAdminIndicacoesBundle(
   signal?: AbortSignal,
   deps: AdminIndicacoesDeps = defaultDeps
 ): Promise<LoadOutcome<AdminIndicacoesBundle>> {
-  const basics = await deps.getBasics()
+  const basics = await deps.getBasics({ signal })
+  // Cancelado: o controlador decide (timeout => estado timeout; desmontagem/retry => descartado).
+  if (signal?.aborted) return errorOutcome("unexpected")
   if (!basics) return errorOutcome("unauthenticated")
   if (basics.isActive === false || !ADMIN_PORTAL_READ_ROLES.has(basics.role)) return errorOutcome("forbidden")
-  if (signal?.aborted) return errorOutcome("unexpected")
 
   const identity: AdminLoadIdentity = { userId: basics.id, role: basics.role }
   const [referrals, comerciais] = await Promise.all([
-    deps.loadReferrals({ identity }),
+    deps.loadReferrals({ identity, signal }),
     deps.loadComerciais({ identity, signal }),
   ])
+  if (signal?.aborted) return errorOutcome("unexpected")
 
   if (!referrals.ok) return errorOutcome(mapReferralErrorClass(referrals.errorClass))
   if (!Array.isArray(referrals.data)) return errorOutcome("invalid_response")

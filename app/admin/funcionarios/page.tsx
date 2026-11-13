@@ -10,17 +10,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { LoaderStatus } from "@/components/ui/loader-status"
 import { useGuardedLoader } from "@/hooks/use-guarded-loader"
+import { type EmployeeRow, type EmployeesData } from "@/lib/admin-legacy/employees-outcome"
 import {
-  classifyHttpStatus,
-  dataOutcome,
-  errorOutcome,
-  fetchJsonForLoader,
-} from "@/lib/client/guarded-loader"
-import {
-  employeesOutcome,
-  type EmployeeRow,
-  type EmployeesData,
-} from "@/lib/admin-legacy/employees-outcome"
+  loadEmployeesPageOutcome,
+  loadSectorsPageOutcome,
+  type SectorOption,
+} from "@/lib/admin-legacy/page-loaders"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -36,24 +31,13 @@ import {
   presentSectorMembershipLabel,
 } from "@/lib/employees/admin-policy"
 
-type SectorOption = { code: string; name: string }
-
-
 export default function AdminFuncionariosPage() {
   const [search, setSearch] = useState("")
   const [status, setStatus] = useState("all")
   const [sector, setSector] = useState("all")
 
-  const loadSectors = useCallback(async ({ signal }: { signal: AbortSignal }) => {
-    const res = await fetchJsonForLoader("/api/admin/sectors", signal)
-    if (!res.ok) return errorOutcome<SectorOption[]>(classifyHttpStatus(res.status))
-    const body = res.json as { ok?: unknown; items?: unknown } | null
-    if (!body || body.ok !== true || !Array.isArray(body.items)) return errorOutcome<SectorOption[]>("invalid_response")
-    const options = (body.items as Array<{ code?: unknown; name?: unknown }>)
-      .filter((row) => typeof row.code === "string" && typeof row.name === "string")
-      .map((row) => ({ code: row.code as string, name: row.name as string }))
-    return dataOutcome(options, options.length === 0)
-  }, [])
+  // 3.1F-K1B: o signal do carregamento vai até o fetch ({ signal }).
+  const loadSectors = useCallback(async ({ signal }: { signal: AbortSignal }) => loadSectorsPageOutcome(signal), [])
   const sectorsLoader = useGuardedLoader<SectorOption[]>(loadSectors, "admin-sectors")
   const sectors: SectorOption[] =
     sectorsLoader.state.status === "success" ? sectorsLoader.state.data : []
@@ -68,13 +52,10 @@ export default function AdminFuncionariosPage() {
 
   // 3.1F-K1: cada combinação de filtros é um carregamento; a troca descarta o anterior (stale guard + abort).
   const loadEmployees = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
-      const res = await fetchJsonForLoader(`/api/admin/employees?${query}`, signal)
-      return employeesOutcome(res.status, res.ok, res.json)
-    },
+    async ({ signal }: { signal: AbortSignal }) => loadEmployeesPageOutcome(query, signal),
     [query]
   )
-  const { state, reload } = useGuardedLoader<EmployeesData>(loadEmployees, `admin-employees?${query}`)
+  const { state, retry } = useGuardedLoader<EmployeesData>(loadEmployees, `admin-employees?${query}`)
   const loading = state.status === "idle" || state.status === "loading"
   const canWrite = state.status === "success" || state.status === "empty" ? state.data.canWrite : false
   const filtersActive = query.length > 0
@@ -148,7 +129,7 @@ export default function AdminFuncionariosPage() {
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void reload()}
+                onClick={() => void retry()}
                 disabled={loading}
                 aria-label="Atualizar lista de funcionários"
               >
@@ -159,7 +140,7 @@ export default function AdminFuncionariosPage() {
           {sectorsUnavailable ? (
             <p role="status" className="text-xs text-muted-foreground">
               Lista de setores indisponível no momento; o filtro por setor foi desativado.{" "}
-              <button type="button" className="underline underline-offset-2" onClick={() => void sectorsLoader.reload()}>
+              <button type="button" className="underline underline-offset-2" onClick={() => void sectorsLoader.retry()}>
                 Tentar novamente
               </button>
             </p>
@@ -168,7 +149,7 @@ export default function AdminFuncionariosPage() {
         <CardContent>
           <LoaderStatus
             state={state}
-            onRetry={() => void reload()}
+            onRetry={() => void retry()}
             retryDisabled={loading}
             loadingLabel="Carregando funcionários…"
             emptyMessage={

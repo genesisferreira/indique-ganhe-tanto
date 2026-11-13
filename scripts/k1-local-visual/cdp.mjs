@@ -37,10 +37,19 @@ export async function launchK1Browser(executable, port = 9343) {
 
   // Contador de requisições (somente leitura): método + caminho, sem query string nem corpo.
   const requests = []
+  // 3.1F-K1B: requisições canceladas pela página (AbortController) => Network.loadingFailed { canceled: true }.
+  const byId = new Map()
+  const failures = []
+  const hosts = new Set()
   on((m) => {
     if (m.method === "Network.requestWillBeSent") {
       const u = new URL(m.params.request.url)
+      if (/^https?:$/.test(u.protocol)) hosts.add(u.host)
       requests.push({ method: m.params.request.method, host: u.host, path: u.pathname })
+      byId.set(m.params.requestId, { method: m.params.request.method, host: u.host, path: u.pathname, search: u.search })
+    } else if (m.method === "Network.loadingFailed") {
+      const r = byId.get(m.params.requestId)
+      if (r) failures.push({ ...r, canceled: Boolean(m.params.canceled), errorText: m.params.errorText, t: Date.now() })
     }
   })
   await send("Page.enable")
@@ -74,6 +83,8 @@ export async function launchK1Browser(executable, port = 9343) {
     version: ver.Browser,
     send,
     requests,
+    failures,
+    hosts,
     async intercept(nextRules) {
       for (const requestId of held.splice(0)) await send("Fetch.failRequest", { requestId, errorReason: "Aborted" }).catch(() => {})
       rules = nextRules

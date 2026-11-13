@@ -2468,7 +2468,7 @@ export type ReferralsLoadResult<T> =
       data: []
       error: string
       /** 3.1F-K1: classe sanitizada para a UI (nunca exibir `error` bruto). */
-      errorClass?: "unauthenticated" | "forbidden" | "query_failed" | "unexpected"
+      errorClass?: "unauthenticated" | "forbidden" | "query_failed" | "unexpected" | "aborted"
       code?: string
       details?: string
       hint?: string
@@ -2599,12 +2599,25 @@ type ReferralsDb = {
   from: (t: string) => ReturnType<ReturnType<typeof getSupabaseClient>["from"]>
 }
 
+/**
+ * 3.1F-K1B: anexa o AbortSignal do carregamento à consulta pelo mecanismo oficial do
+ * supabase-js/postgrest-js (`.abortSignal()` => `fetch(..., { signal })`). Sem signal: consulta inalterada.
+ * O signal vem exclusivamente do loader client-side (nunca de URL/entrada do usuário) e não é armazenado.
+ */
+function withAbortSignal<Q extends { abortSignal: (signal: AbortSignal) => Q }>(
+  query: Q,
+  signal: AbortSignal | undefined
+): Q {
+  return signal ? query.abortSignal(signal) : query
+}
+
 async function fetchReferralsListRows(
   db: ReferralsDb,
   opts: {
     logTag: "admin-indicacoes" | "commercial-leads"
     queryLabel: string
     applyFilter?: (qb: ReturnType<ReferralsDb["from"]>) => ReturnType<ReferralsDb["from"]>
+    signal?: AbortSignal
   }
 ): Promise<{
   rows: ReferralRow[]
@@ -2628,10 +2641,10 @@ async function fetchReferralsListRows(
     const queryDesc = `${opts.queryLabel} | referrals.select`
 
     try {
-      const { data } = await qb
-        .order("created_at", { ascending: false })
-        .limit(2000)
-        .throwOnError()
+      const { data } = await withAbortSignal(
+        qb.order("created_at", { ascending: false }).limit(2000),
+        opts.signal
+      ).throwOnError()
       const rows = (data ?? []) as ReferralRow[]
       console.log(`[${opts.logTag}:supabase-query]`, {
         query: queryDesc,
@@ -2653,6 +2666,10 @@ async function fetchReferralsListRows(
             })
           : { message: thrown instanceof Error ? thrown.message : String(thrown) }
       lastError = error
+      if (opts.signal?.aborted) {
+        // 3.1F-K1B: cancelado (timeout/desmontagem/retry): sem retry de SELECT, sem log de erro.
+        return { rows: [], selectUsed, error: { message: "aborted", code: "K1B_ABORTED" } }
+      }
       console.error(`[${opts.logTag}:error]`, error)
       console.log(`[${opts.logTag}:supabase-query]`, {
         query: queryDesc,
@@ -2676,20 +2693,23 @@ async function fetchReferralsListRows(
 async function loadPlansMapForReferralRows(
   db: ReferralsDb,
   referrals: ReferralRow[],
-  logTag: "admin-indicacoes" | "commercial-leads"
+  logTag: "admin-indicacoes" | "commercial-leads",
+  signal?: AbortSignal
 ): Promise<Map<string, Plano>> {
   const planoById = new Map<string, Plano>()
   const planIds = [...new Set(referrals.map((r) => r.plan_id))]
   if (planIds.length === 0) return planoById
 
   try {
-    const { data: plansData } = await db
-      .from("plans")
-      .select(
-        "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
-      )
-      .in("id", planIds)
-      .throwOnError()
+    const { data: plansData } = await withAbortSignal(
+      db
+        .from("plans")
+        .select(
+          "id, name, speed_label, price, description, reward_amount, is_active, sort_order"
+        )
+        .in("id", planIds),
+      signal
+    ).throwOnError()
     for (const pr of plansData ?? []) {
       const p = mapPlanRowToPlano(pr as PlanCatalogRow)
       planoById.set(p.id, p)
@@ -2720,11 +2740,20 @@ async function loadPlansMapForReferralRows(
  * Todas as indicações (admin). Sem filtro de status/pipeline na query principal.
  */
 export async function loadAdminReferralsFromSupabase(
-  opts: { identity?: AdminLoadIdentity } = {}
+  opts: { identity?: AdminLoadIdentity; signal?: AbortSignal } = {}
 ): Promise<ReferralsLoadResult<Indicacao>> {
   let meta = buildReferralsLoadMeta({
     queryLabel: "referrals.admin.all",
     filter: null,
+  })
+  const signal = opts.signal
+  // 3.1F-K1B: cancelado => erro "aborted" (nunca lista vazia nem sucesso parcial).
+  const abortedResult = (): ReferralsLoadResult<Indicacao> => ({
+    ok: false,
+    data: [],
+    error: "aborted",
+    errorClass: "aborted",
+    meta,
   })
 
   try {
@@ -2741,6 +2770,8 @@ export async function loadAdminReferralsFromSupabase(
         data: { user },
         error: authErr,
       } = await supabase.auth.getUser()
+      // auth-js não aceita AbortSignal em getUser(); nada mais é consultado após o abort.
+      if (signal?.aborted) return abortedResult()
 
       meta = { ...meta, authUserId: user?.id ?? null }
 
@@ -2750,11 +2781,11 @@ export async function loadAdminReferralsFromSupabase(
         return { ok: false, data: [], error, errorClass: "unauthenticated", meta }
       }
 
-      const { data: profile, error: profileError } = await db
-        .from("profiles")
-        .select("id, role")
-        .eq("id", user.id)
-        .maybeSingle()
+      const { data: profile, error: profileError } = await withAbortSignal(
+        db.from("profiles").select("id, role").eq("id", user.id),
+        signal
+      ).maybeSingle()
+      if (signal?.aborted) return abortedResult()
 
       const profileId = (profile as { id?: string } | null)?.id ?? user.id
       const role = (profile as { role?: string } | null)?.role ?? null
@@ -2789,7 +2820,9 @@ export async function loadAdminReferralsFromSupabase(
       await fetchReferralsListRows(db, {
         logTag: "admin-indicacoes",
         queryLabel: "referrals.admin.all",
+        signal,
       })
+    if (signal?.aborted) return abortedResult()
 
     meta = {
       ...meta,
@@ -2814,8 +2847,10 @@ export async function loadAdminReferralsFromSupabase(
     const planoById = await loadPlansMapForReferralRows(
       db,
       referrals,
-      "admin-indicacoes"
+      "admin-indicacoes",
+      signal
     )
+    if (signal?.aborted) return abortedResult()
 
     const profileIds = new Set<string>()
     for (const r of referrals) {
@@ -2832,11 +2867,13 @@ export async function loadAdminReferralsFromSupabase(
     const profileMap = new Map<string, AdminProfileShortRow>()
     if (profileList.length > 0) {
       try {
-        const { data: profData } = await db
-          .from("profiles")
-          .select("id, full_name, email, phone, cpf, is_active, created_at")
-          .in("id", profileList)
-          .throwOnError()
+        const { data: profData } = await withAbortSignal(
+          db
+            .from("profiles")
+            .select("id, full_name, email, phone, cpf, is_active, created_at")
+            .in("id", profileList),
+          signal
+        ).throwOnError()
         for (const pr of (profData ?? []) as AdminProfileShortRow[]) {
           profileMap.set(pr.id, pr)
         }
@@ -2863,6 +2900,8 @@ export async function loadAdminReferralsFromSupabase(
         })
       }
     }
+
+    if (signal?.aborted) return abortedResult()
 
     const mapped: Indicacao[] = referrals.map((r) => {
       const base = referralRowToIndicacaoMerged(r, r.indicator_profile_id, planoById)
@@ -2914,6 +2953,7 @@ export async function loadAdminReferralsFromSupabase(
 
     return { ok: true, data: mapped, meta }
   } catch (e) {
+    if (signal?.aborted) return abortedResult()
     const error = e instanceof Error ? e.message : String(e)
     console.error("[admin-indicacoes:error]", { step: "unexpected", errorClass: "unexpected" })
     return { ok: false, data: [], error, errorClass: "unexpected", meta }
@@ -3823,6 +3863,8 @@ export type AdminListErrorClass =
   | "query_failed"
   | "invalid_response"
   | "unexpected"
+  /** 3.1F-K1B: consulta cancelada (timeout/desmontagem/retry); nunca vira lista vazia. */
+  | "aborted"
 
 /** 3.1F-K1: resultado discriminado — erro nunca é representado como lista vazia. */
 export type AdminListResult<T> =
@@ -3831,7 +3873,8 @@ export type AdminListResult<T> =
 
 async function resolveAdminLoadIdentity(
   supabase: ReturnType<typeof getSupabaseClient>,
-  identity: AdminLoadIdentity | undefined
+  identity: AdminLoadIdentity | undefined,
+  signal?: AbortSignal
 ): Promise<{ ok: true; identity: AdminLoadIdentity } | { ok: false; errorClass: AdminListErrorClass }> {
   if (identity) {
     return ADMIN_PORTAL_READ_ROLES.has(identity.role)
@@ -3845,12 +3888,14 @@ async function resolveAdminLoadIdentity(
     data: { user },
     error: authErr,
   } = await supabase.auth.getUser()
+  // auth-js não aceita AbortSignal em getUser(); após abort nenhuma consulta adicional é feita.
+  if (signal?.aborted) return { ok: false, errorClass: "aborted" }
   if (authErr || !user) return { ok: false, errorClass: "unauthenticated" }
-  const { data: profile, error: profileError } = await db
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle()
+  const { data: profile, error: profileError } = await withAbortSignal(
+    db.from("profiles").select("role").eq("id", user.id),
+    signal
+  ).maybeSingle()
+  if (signal?.aborted) return { ok: false, errorClass: "aborted" }
   if (profileError) return { ok: false, errorClass: "query_failed" }
   const role = (profile as { role?: string } | null)?.role ?? null
   if (!role || !ADMIN_PORTAL_READ_ROLES.has(role)) return { ok: false, errorClass: "forbidden" }
@@ -3860,7 +3905,8 @@ async function resolveAdminLoadIdentity(
 /**
  * Perfis comercial (admin) com resultado discriminado (3.1F-K1).
  * - `identity` (opcional): reutiliza a identidade já validada por `auth.getUser()` no mesmo carregamento;
- * - `signal` (opcional): cancela as consultas principais (timeout/desmontagem).
+ * - `signal` (opcional): anexado a TODAS as consultas REST deste carregamento (timeout/desmontagem/retry);
+ *   cancelado => `{ ok: false, errorClass: "aborted" }` (nunca lista vazia).
  * RLS permanece a única fronteira de autorização; o papel aqui é apenas pré-checagem de UX.
  */
 export async function loadAdminComerciaisResultFromSupabase(
@@ -3871,17 +3917,20 @@ export async function loadAdminComerciaisResultFromSupabase(
     const db = supabase as unknown as {
       from: (t: string) => ReturnType<typeof supabase.from>
     }
-    const who = await resolveAdminLoadIdentity(supabase, opts.identity)
+    const signal = opts.signal
+    const who = await resolveAdminLoadIdentity(supabase, opts.identity, signal)
     if (!who.ok) return who
 
-    let profilesQuery = db
-      .from("profiles")
-      .select("id, full_name, email, phone, is_active, created_at, updated_at")
-      .eq("role", "comercial")
-      .order("created_at", { ascending: false })
-    if (opts.signal) profilesQuery = profilesQuery.abortSignal(opts.signal)
-    const { data: profilesData, error: profErr } = await profilesQuery
+    const { data: profilesData, error: profErr } = await withAbortSignal(
+      db
+        .from("profiles")
+        .select("id, full_name, email, phone, is_active, created_at, updated_at")
+        .eq("role", "comercial")
+        .order("created_at", { ascending: false }),
+      signal
+    )
 
+    if (signal?.aborted) return { ok: false, errorClass: "aborted" }
     if (profErr) {
       return { ok: false, errorClass: "query_failed" }
     }
@@ -3902,12 +3951,16 @@ export async function loadAdminComerciaisResultFromSupabase(
 
     const availabilityMap = new Map<string, ComercialDisponibilidade>()
     if (ids.length > 0) {
-      const { data: avRows, error: avErr } = await db
-        .from("commercial_availability")
-        .select("commercial_profile_id, availability_status, updated_at")
-        .in("commercial_profile_id", ids)
-        .order("updated_at", { ascending: false })
+      const { data: avRows, error: avErr } = await withAbortSignal(
+        db
+          .from("commercial_availability")
+          .select("commercial_profile_id, availability_status, updated_at")
+          .in("commercial_profile_id", ids)
+          .order("updated_at", { ascending: false }),
+        signal
+      )
 
+      if (signal?.aborted) return { ok: false, errorClass: "aborted" }
       if (!avErr && avRows) {
         for (const row of avRows as {
           commercial_profile_id: string
@@ -3927,13 +3980,15 @@ export async function loadAdminComerciaisResultFromSupabase(
     }
 
     if (ids.length > 0) {
-      let refQuery = db
-        .from("referrals")
-        .select("commercial_profile_id, status")
-        .in("commercial_profile_id", ids)
-      if (opts.signal) refQuery = refQuery.abortSignal(opts.signal)
-      const { data: refRows, error: refErr } = await refQuery
+      const { data: refRows, error: refErr } = await withAbortSignal(
+        db
+          .from("referrals")
+          .select("commercial_profile_id, status")
+          .in("commercial_profile_id", ids),
+        signal
+      )
 
+      if (signal?.aborted) return { ok: false, errorClass: "aborted" }
       if (refErr) {
         return { ok: false, errorClass: "query_failed" }
       }
@@ -3975,6 +4030,7 @@ export async function loadAdminComerciaisResultFromSupabase(
 
     return { ok: true, data: mapped }
   } catch {
+    if (opts.signal?.aborted) return { ok: false, errorClass: "aborted" }
     return { ok: false, errorClass: "unexpected" }
   }
 }
@@ -5549,7 +5605,9 @@ async function assertCanMarkFirstInvoicePaid(
 /**
  * Perfil do usuário autenticado (`auth.users` + `public.profiles`).
  */
-export async function getAuthProfileBasicsFromSupabase(): Promise<AuthProfileBasics | null> {
+export async function getAuthProfileBasicsFromSupabase(
+  opts: { signal?: AbortSignal } = {}
+): Promise<AuthProfileBasics | null> {
   try {
     const supabase = getSupabaseClient()
     const db = supabase as unknown as {
@@ -5560,13 +5618,17 @@ export async function getAuthProfileBasicsFromSupabase(): Promise<AuthProfileBas
       error: authError,
     } = await supabase.auth.getUser()
     if (authError || !user) return null
-    const { data: row, error } = await db
-      .from("profiles")
-      .select(
-        "id, full_name, email, phone, role, avatar_url, created_at, must_change_password, is_active"
-      )
-      .eq("id", user.id)
-      .maybeSingle()
+    // 3.1F-K1B: getUser() (auth-js) não aceita signal; a leitura do perfil aceita (opcional).
+    if (opts.signal?.aborted) return null
+    const { data: row, error } = await withAbortSignal(
+      db
+        .from("profiles")
+        .select(
+          "id, full_name, email, phone, role, avatar_url, created_at, must_change_password, is_active"
+        )
+        .eq("id", user.id),
+      opts.signal
+    ).maybeSingle()
     if (error || !row) return null
     const r = row as {
       id: string
