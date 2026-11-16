@@ -248,7 +248,7 @@ export function BrbyteCreateInterestCard({
     canMutate &&
     !flowFinalized &&
     Boolean(meta?.enabled && meta?.configured) &&
-    (syncStatus === "pending" || (syncStatus === "error" && !retryLimitReached))
+    syncStatus === "error"
 
   const canCheckConversion =
     canMutate &&
@@ -457,7 +457,7 @@ export function BrbyteCreateInterestCard({
             {!(meta?.brbyteIdInteressado ?? indicacao.brbyteIdInteressado)
               ? syncStatus === "error"
                 ? "Falha no envio"
-                : "Pendente de envio ao Controllr"
+                : "Envio automático agendado"
               : getBrbyteSyncStatusLabel(syncStatus)}
           </p>
           {syncError ? (
@@ -583,8 +583,8 @@ export function BrbyteCreateInterestCard({
         {canCreate ? (
           <div className="space-y-3 border-t border-border pt-3">
             <p className="text-muted-foreground">
-              Envia os dados do indicado para o Controllr como Interessado (ação
-              manual, sem automação).
+              Recuperação administrativa para erro permanente. O envio normal é
+              automático.
             </p>
             <Button
               type="button"

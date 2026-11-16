@@ -20,6 +20,8 @@ export const INDICATOR_BRBYTE_STATUS_MESSAGES: Record<BrbyteSyncStatus, string> 
       "Sua indicação foi cadastrada. Nossa equipe dará continuidade ao processamento.",
     retry:
       "Sua indicação foi cadastrada. Nossa equipe dará continuidade ao processamento.",
+    retryable_error:
+      "Sua indicação foi cadastrada. O envio ao comercial será feito automaticamente.",
   }
 
 export function getIndicatorBrbyteStatusMessage(

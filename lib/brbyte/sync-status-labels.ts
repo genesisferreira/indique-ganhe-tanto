@@ -11,6 +11,7 @@ export const BRBYTE_SYNC_STATUS_LABELS: Record<BrbyteSyncStatus, string> = {
   paid_confirmed: "Primeira mensalidade paga",
   completed: "Concluído / crédito liberado",
   retry: "Nova tentativa pendente",
+  retryable_error: "Envio automático agendado",
   error: "Erro",
 }
 

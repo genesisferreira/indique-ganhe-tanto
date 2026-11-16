@@ -5,6 +5,7 @@ import { shareJson, sharePublicRpc } from "@/lib/referral-share/service"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
+export const maxDuration = 60
 
 const ALLOWED = new Set([
   "idempotencyKey", "planCode", "name", "phone", "document", "zipcode", "street", "number",

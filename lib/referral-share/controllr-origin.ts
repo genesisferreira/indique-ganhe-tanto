@@ -64,6 +64,64 @@ export function needsControllrLookupBeforeCreate(input: {
   attempts?: number | null
 }): boolean {
   if (input.interestId?.trim()) return false
-  if ((input.syncStatus ?? "").trim() === "error") return true
+  const status = (input.syncStatus ?? "").trim()
+  if (status === "error" || status === "retryable_error") return true
   return (input.attempts ?? 0) > 0
+}
+
+export function controllrFailureStatus(
+  httpStatus: number | null | undefined
+): "error" | "retryable_error" {
+  if (httpStatus === 400 || httpStatus === 422) return "error"
+  return "retryable_error"
+}
+
+/** Tentativa técnica: imediata, 2 min, 5 min, 10 min. Depois disso, para. */
+export function interestRetryDelayMs(attempts: number): number | null {
+  if (attempts <= 0) return 0
+  if (attempts === 1) return 2 * 60 * 1000
+  if (attempts === 2) return 5 * 60 * 1000
+  if (attempts === 3) return 10 * 60 * 1000
+  return null
+}
+
+export function isAutomaticInterestCandidate(input: {
+  source?: string | null
+  status?: string | null
+  interestId?: string | null
+}): boolean {
+  if (input.interestId?.trim()) return false
+  const status = (input.status ?? "").trim()
+  if (status !== "pending" && status !== "retryable_error") return false
+  if (isReferralShareSource(input.source)) return true
+  return (
+    input.source === "public_pre_registration" ||
+    input.source === "neutral_network_pre_registration"
+  )
+}
+
+export function interestRetryDue(input: {
+  attempts: number
+  lastSyncAt?: string | null
+  endpoint?: string | null
+  nowMs: number
+  leaseTtlMs: number
+}): boolean {
+  const delay = interestRetryDelayMs(input.attempts)
+  if (delay === null) return false
+  if (
+    !controllrClaimIsOpen({
+      interestId: null,
+      endpoint: input.endpoint,
+      lastSyncAt: input.lastSyncAt,
+      nowMs: input.nowMs,
+      ttlMs: input.leaseTtlMs,
+    })
+  ) {
+    return false
+  }
+  if (input.attempts <= 0) return true
+  const at = input.lastSyncAt ? Date.parse(input.lastSyncAt) : Number.NaN
+  if (!Number.isFinite(at)) return true
+  return input.nowMs - at >= delay
 }

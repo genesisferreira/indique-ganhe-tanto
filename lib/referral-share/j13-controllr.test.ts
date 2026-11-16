@@ -80,7 +80,7 @@ describe("envio do formulário público ao Controllr", () => {
     assert.doesNotMatch(service, /token_hash|idempotency_key|BRBYTE_API_PASSWORD/)
     assert.match(service, /brbyte_last_endpoint.neq/)
     assert.match(preService, /createBrbyteInterestFromReferral/)
-    assert.match(card, /Pendente de envio ao Controllr/)
+    assert.match(card, /Envio automático agendado/)
     assert.match(card, /Falha no envio/)
     assert.match(card, /Tentar novamente/)
     assert.match(card, /canMutate &&/)

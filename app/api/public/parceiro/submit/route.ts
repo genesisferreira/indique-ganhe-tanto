@@ -7,6 +7,7 @@ import { sharePublicRpc } from "@/lib/referral-share/service"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
+export const maxDuration = 60
 
 const GENERIC = { ok: false, message: "Não foi possível usar este link." }
 

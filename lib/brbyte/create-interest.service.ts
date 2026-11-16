@@ -18,6 +18,7 @@ import {
 } from "@/lib/brbyte/create-interest-response"
 import {
   controllrClaimIsOpen,
+  controllrFailureStatus,
   controllrOfferLabel,
   decideControllrRetry,
   isReferralShareSource,
@@ -230,6 +231,7 @@ async function loadSharePresentation(
       }
     }
   }
+  try {
   const submission = await supabase
     .from("referral_share_submissions")
     .select("link_id")
@@ -254,6 +256,10 @@ async function loadSharePresentation(
   if (!origin) return null
   const displayName = link?.public_display_name?.trim() || null
   return { origin, displayName }
+  } catch {
+    const origin = referralShareControllrOrigin({ originKind: row.origin_kind })
+    return origin ? { origin, displayName: null } : null
+  }
 }
 
 function indicatorNameFromRow(row: ReferralCreateInterestRow): string | null {
@@ -647,6 +653,9 @@ async function claimCreateInterestLock(
     .update({
       brbyte_last_endpoint: CREATE_IN_PROGRESS_ENDPOINT,
       brbyte_last_sync_at: nowIso,
+      brbyte_sync_status: "pending",
+      brbyte_sync_attempts:
+        (typeof row.brbyte_sync_attempts === "number" ? row.brbyte_sync_attempts : 0) + 1,
     })
     .eq("id", referralId)
     .is("brbyte_id_interessado", null)
@@ -722,9 +731,12 @@ async function persistReferralInterestLink(
     payload: Record<string, unknown>
     createdAtIso: string
     httpStatus: number | null
+    useAttemptsAsRecorded?: boolean
   }
 ): Promise<boolean> {
-  const nextAttempts = currentAttempts + 1
+  const nextAttempts = patch.useAttemptsAsRecorded
+    ? currentAttempts
+    : currentAttempts + 1
 
   const update: Record<string, unknown> = {
     brbyte_id_interessado: patch.brbyteIdInteressado,
@@ -769,7 +781,7 @@ async function persistUnconfirmedReferralInterest(
   const { error } = await getDb()
     .from("referrals")
     .update({
-      brbyte_sync_status: "error",
+      brbyte_sync_status: "retryable_error",
       brbyte_sync_error: BRBYTE_UNCONFIRMED_INTEREST_MESSAGE,
       brbyte_sync_attempts: currentAttempts,
       brbyte_last_endpoint: BRBYTE_API_PATHS.createClientInterest,
@@ -1023,6 +1035,8 @@ export async function createBrbyteInterestFromReferral(input: {
     }
   }
 
+  const recordedAttempts = currentAttempts + 1
+
   const { name: planName, code: planCode } = planFieldsFromRow(row)
   const isPublicRow = isPublicPreRegistrationReferral({
     source: row.source,
@@ -1061,11 +1075,12 @@ export async function createBrbyteInterestFromReferral(input: {
     const message =
       planResolutionMessage ?? "Plano Controllr não configurado."
     const oldStatus = normalizeBrbyteSyncStatus(row.brbyte_sync_status)
-    await persistReferralSyncState(referralId, currentAttempts, {
+    await persistReferralSyncState(referralId, recordedAttempts, {
       brbyteSyncStatus: "error",
       brbyteSyncError: message,
       brbyteLastEndpoint: BRBYTE_API_PATHS.createClientInterest,
       brbyteLastErrorAt: new Date().toISOString(),
+      incrementAttempt: false,
     })
     await logBrbyteReferralHistory({
       referralId,
@@ -1107,18 +1122,19 @@ export async function createBrbyteInterestFromReferral(input: {
   if ("error" in login) {
     const message = `Falha ao autenticar na BRByte: ${login.error}`
     const oldStatus = normalizeBrbyteSyncStatus(row.brbyte_sync_status)
-    await persistReferralSyncState(referralId, currentAttempts, {
-      brbyteSyncStatus: "error",
+    await persistReferralSyncState(referralId, recordedAttempts, {
+      brbyteSyncStatus: "retryable_error",
       brbyteSyncError: login.error,
       brbyteLastEndpoint: LOGIN_ENDPOINT,
       brbyteLastHttpStatus: login.httpStatus,
       brbyteLastErrorAt: new Date().toISOString(),
+      incrementAttempt: false,
     })
     await logBrbyteReferralHistory({
       referralId,
       phase: "login",
       oldStatus,
-      newStatus: "error",
+      newStatus: "retryable_error",
       endpoint: LOGIN_ENDPOINT,
       httpStatus: login.httpStatus,
       message: login.error,
@@ -1174,7 +1190,7 @@ export async function createBrbyteInterestFromReferral(input: {
     })
     if (decision === "link_existing" && lookup.interest?.interestPk) {
       const linkedAt = new Date().toISOString()
-      const linked = await persistReferralInterestLink(referralId, currentAttempts, {
+      const linked = await persistReferralInterestLink(referralId, recordedAttempts, {
         brbyteIdInteressado: lookup.interest.interestPk,
         brbyteInteressadoStatus:
           lookup.interest.interestStatus ?? config.defaultInterestStatus,
@@ -1190,6 +1206,7 @@ export async function createBrbyteInterestFromReferral(input: {
         }),
         createdAtIso: linkedAt,
         httpStatus: null,
+        useAttemptsAsRecorded: true,
       })
       await finishSyncRun(syncRunId, {
         status: linked ? "ok" : "partial",
@@ -1213,8 +1230,8 @@ export async function createBrbyteInterestFromReferral(input: {
     }
     if (decision === "stop_unknown") {
       const message = "Falha no envio ao Controllr. A indicação permanece no CRM."
-      await persistReferralSyncState(referralId, currentAttempts, {
-        brbyteSyncStatus: "error",
+      await persistReferralSyncState(referralId, recordedAttempts, {
+        brbyteSyncStatus: "retryable_error",
         brbyteSyncError: message,
         brbyteLastEndpoint: BRBYTE_API_PATHS.listClientInterest,
         brbyteLastErrorAt: new Date().toISOString(),
@@ -1281,18 +1298,20 @@ export async function createBrbyteInterestFromReferral(input: {
       apiResult.message ||
       "Falha ao criar Interessado na BRByte."
 
-    await persistReferralSyncState(referralId, currentAttempts, {
-      brbyteSyncStatus: "error",
+    const failureStatus = controllrFailureStatus(apiResult.status)
+    await persistReferralSyncState(referralId, recordedAttempts, {
+      brbyteSyncStatus: failureStatus,
       brbyteSyncError: message,
       brbyteLastEndpoint: BRBYTE_API_PATHS.createClientInterest,
       brbyteLastHttpStatus: apiResult.status,
       brbyteLastErrorAt: new Date().toISOString(),
+      incrementAttempt: false,
     })
     await logBrbyteReferralHistory({
       referralId,
       phase: CREATE_INTEREST_PHASE,
       oldStatus: normalizeBrbyteSyncStatus(row.brbyte_sync_status),
-      newStatus: "error",
+      newStatus: failureStatus,
       endpoint: BRBYTE_API_PATHS.createClientInterest,
       httpStatus: apiResult.status,
       message: isIndicatorFlow
@@ -1361,7 +1380,7 @@ export async function createBrbyteInterestFromReferral(input: {
   if (!resolution.interestPk) {
     const message = BRBYTE_UNCONFIRMED_INTEREST_MESSAGE
 
-    await persistUnconfirmedReferralInterest(referralId, currentAttempts, {
+    await persistUnconfirmedReferralInterest(referralId, recordedAttempts, {
       payload,
       httpStatus: apiResult.status,
       request: form,
@@ -1370,7 +1389,7 @@ export async function createBrbyteInterestFromReferral(input: {
       referralId,
       phase: CREATE_INTEREST_PHASE,
       oldStatus: normalizeBrbyteSyncStatus(row.brbyte_sync_status),
-      newStatus: "error",
+      newStatus: "retryable_error",
       endpoint: BRBYTE_API_PATHS.createClientInterest,
       httpStatus: apiResult.status,
       message,
@@ -1420,7 +1439,7 @@ export async function createBrbyteInterestFromReferral(input: {
     resolution.interestStatus ?? config.defaultInterestStatus
   const nowIso = new Date().toISOString()
 
-  const persisted = await persistReferralInterestLink(referralId, currentAttempts, {
+  const persisted = await persistReferralInterestLink(referralId, recordedAttempts, {
     brbyteIdInteressado: brbyteId,
     brbyteInteressadoStatus: brbyteStatus,
     clientPk: resolution.clientPk,
@@ -1435,6 +1454,7 @@ export async function createBrbyteInterestFromReferral(input: {
     }),
     createdAtIso: nowIso,
     httpStatus: apiResult.status,
+    useAttemptsAsRecorded: true,
   })
 
   if (!persisted) {

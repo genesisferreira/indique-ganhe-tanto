@@ -22,6 +22,7 @@ export type BrbyteSyncStatus =
   | 'completed'
   | 'error'
   | 'retry'
+  | 'retryable_error'
 
 const BRBYTE_SYNC_STATUS_VALUES = new Set<string>([
   'pending',
@@ -35,6 +36,7 @@ const BRBYTE_SYNC_STATUS_VALUES = new Set<string>([
   'completed',
   'error',
   'retry',
+  'retryable_error',
 ])
 
 export function isBrbyteSyncStatus(

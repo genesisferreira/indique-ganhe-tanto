@@ -140,6 +140,7 @@ function buildEmptyDashboard(): DashboardPayload {
       completed: 0,
       error: 0,
       retry: 0,
+      retryable_error: 0,
     },
     firstInvoicePipeline: {
       awaitingContract: 0,
