@@ -314,6 +314,17 @@ export function PartnerCompensation({ id }: { id: string }) {
       setData(body)
     })
   }, [id])
+  async function reconcile() {
+    const response = await fetch(`/api/admin/parceiros/${id}/reconciliar`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: newKey() }),
+    })
+    const body = await readJson(response)
+    setMessage(response.ok
+      ? `Reconciliação concluída. Direitos apurados nesta execução: ${body?.accrued ?? 0}. Nenhuma chamada ao ERP.`
+      : (body?.message ?? "Não foi possível reconciliar."))
+  }
   async function save(kind: string) {
     const cents = Math.round(Number(amount.replace(",", ".")) * 100)
     const payload: Record<string, unknown> = { idempotencyKey: newKey(), partnerId: id, kind }
@@ -332,7 +343,7 @@ export function PartnerCompensation({ id }: { id: string }) {
   const rule = data?.rule
   return (
     <div className="space-y-4 px-4 py-6">
-      <PageHeader title="Remuneração do comércio" description="Valor fixo configurável. Primeira fatura e percentual permanecem bloqueados. Nenhuma comissão é criada agora." />
+      <PageHeader title="Remuneração do comércio" description="O valor fixo fica elegível ao ser configurado. A comissão só nasce na reconciliação, quando já existe uma fatura válida. Percentual e primeira fatura permanecem bloqueados." />
       <Card>
         <CardHeader><CardTitle>Regra vigente</CardTitle></CardHeader>
         <CardContent className="text-sm">
@@ -346,6 +357,9 @@ export function PartnerCompensation({ id }: { id: string }) {
           <Label>Valor fixo (R$), definido aqui</Label>
           <Input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="" />
           <Button type="button" onClick={() => void save("fixed_amount")}>Configurar valor fixo</Button>
+          {rule?.kind === "fixed_amount" && rule?.status === "configured" ? (
+            <Button type="button" variant="outline" onClick={() => void reconcile()}>Reconciliar comissão fixa</Button>
+          ) : null}
           <Label>Percentual em basis points (estrutura bloqueada)</Label>
           <Input value={bps} onChange={(event) => setBps(event.target.value)} inputMode="numeric" />
           <Button type="button" variant="outline" onClick={() => void save("percentage")}>Registrar percentual bloqueado</Button>
