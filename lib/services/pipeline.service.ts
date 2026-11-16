@@ -5,6 +5,7 @@ import {
   devLogPipelineMove,
   devLogPipelineSla,
   employeeOriginLabel,
+  partnerOriginLabel,
   normalizePipelineStage,
   type PipelineCard,
   type PipelineMetrics,
@@ -240,11 +241,32 @@ async function loadEmployeeOriginsForPipeline(
   return out
 }
 
+async function loadPartnerOriginsForPipeline(
+  rpcClient: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { code?: string } | null }> },
+  rows: ReferralPipelineRow[]
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const ids = rows.filter((r) => r.origin_kind === "partner_merchant").map((r) => r.id)
+  for (let i = 0; i < ids.length; i += 500) {
+    const { data, error } = await rpcClient.rpc("list_partner_opportunity_origins", { p_opportunity_ids: ids.slice(i, i + 500) })
+    if (error) {
+      console.warn("[pipeline:error]", { step: "partner_origins", code: error.code ?? null })
+      break
+    }
+    const list = Array.isArray(data) ? data : []
+    for (const item of list as Array<{ opportunity_id?: string; public_display_name?: string | null }>) {
+      if (item.opportunity_id && item.public_display_name) out.set(item.opportunity_id, item.public_display_name)
+    }
+  }
+  return out
+}
+
 function rowToPipelineCard(
   row: ReferralPipelineRow,
   profileNames: Map<string, string>,
   planNameById: Map<string, string>,
-  origins: Map<string, EmployeeOrigin> = new Map()
+  origins: Map<string, EmployeeOrigin> = new Map(),
+  partnerNames: Map<string, string> = new Map()
 ): PipelineCard {
   const stage = normalizePipelineStage(row.pipeline_stage)
 
@@ -282,8 +304,12 @@ function rowToPipelineCard(
     wonAt: row.won_at ? new Date(row.won_at) : null,
     lostAt: row.lost_at ? new Date(row.lost_at) : null,
     originKind: row.origin_kind ?? null,
-    originLabel: employeeOriginLabel(row.origin_kind, origins.get(row.id)?.role),
-    originatorNome: origins.get(row.id)?.originatorName ?? null,
+    originLabel: row.origin_kind === "partner_merchant"
+      ? partnerOriginLabel(row.origin_kind)
+      : employeeOriginLabel(row.origin_kind, origins.get(row.id)?.role),
+    originatorNome: row.origin_kind === "partner_merchant"
+      ? (partnerNames.get(row.id) ?? null)
+      : (origins.get(row.id)?.originatorName ?? null),
   }
 }
 
@@ -537,10 +563,16 @@ export async function loadPipelineCardsFromSupabase(
 
     const planNameById = await loadPlanNamesForPipeline(db, rows)
     let employeeOrigins = new Map<string, EmployeeOrigin>()
+    let partnerNames = new Map<string, string>()
     try {
       employeeOrigins = await loadEmployeeOriginsForPipeline(supabase as unknown as Parameters<typeof loadEmployeeOriginsForPipeline>[0], rows)
     } catch {
       console.warn("[pipeline:error]", { step: "employee_origins" })
+    }
+    try {
+      partnerNames = await loadPartnerOriginsForPipeline(supabase as unknown as Parameters<typeof loadPartnerOriginsForPipeline>[0], rows)
+    } catch {
+      console.warn("[pipeline:error]", { step: "partner_origins" })
     }
 
     let rowsDropped = 0
@@ -561,7 +593,7 @@ export async function loadPipelineCardsFromSupabase(
           normalized,
         })
       }
-      cards.push(rowToPipelineCard(r, profileNames, planNameById, employeeOrigins))
+      cards.push(rowToPipelineCard(r, profileNames, planNameById, employeeOrigins, partnerNames))
     }
 
     meta = {

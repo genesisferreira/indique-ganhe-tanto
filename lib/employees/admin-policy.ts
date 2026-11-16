@@ -330,6 +330,7 @@ export function adminNavGroupSpecs(): AdminNavGroupSpec[] {
         { label: "Pipeline", href: "/admin/pipeline" },
         { label: "Indicadores", href: "/admin/indicadores" },
         { label: "Comerciais", href: "/admin/comerciais" },
+        { label: "Comércios parceiros", href: "/admin/parceiros" },
       ],
     },
     {

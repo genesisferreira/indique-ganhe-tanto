@@ -185,7 +185,12 @@ export function PipelineKanbanBoard({
                         ) : null}
                         {card.originLabel ? (
                           <p
-                            className="mt-1 inline-flex max-w-full items-center gap-1 rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[11px] text-sky-300"
+                            className={cn(
+                              "mt-1 inline-flex max-w-full items-center gap-1 rounded border px-1.5 py-0.5 text-[11px]",
+                              card.originKind === "partner_merchant"
+                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                                : "border-sky-500/40 bg-sky-500/10 text-sky-300"
+                            )}
                             title={card.originatorNome ? `Origem: ${card.originLabel} — ${card.originatorNome}` : `Origem: ${card.originLabel}`}
                           >
                             <span className="shrink-0 font-medium">{card.originLabel}</span>

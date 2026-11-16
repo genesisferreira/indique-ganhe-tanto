@@ -34,6 +34,7 @@ import {
   Handshake,
   UserCog,
   Layers,
+  Store,
 } from "lucide-react"
 import { TantoBrand } from "@/components/branding/tanto-brand"
 import { Button } from "@/components/ui/button"
@@ -152,6 +153,7 @@ const comercialNav: NavGroup[] = [
       { label: "Nova indicação", href: "/comercial/nova-indicacao", icon: UserPlus },
       { label: "Meus Leads", href: "/comercial/leads", icon: Users },
       { label: "Pipeline", href: "/comercial/pipeline", icon: LayoutGrid },
+      { label: "Comércios parceiros", href: "/comercial/parceiros", icon: Store },
       { label: "Retornos Agendados", href: "/comercial/retornos", icon: Clock },
       { label: "Atendimentos", href: "/comercial/historico", icon: History },
       { label: "Meu Desempenho", href: "/comercial/desempenho", icon: BarChart3 },
@@ -188,6 +190,7 @@ const adminNav: NavGroup[] = [
       { label: "Pipeline", href: "/admin/pipeline", icon: LayoutGrid },
       { label: "Indicadores", href: "/admin/indicadores", icon: UserPlus },
       { label: "Comerciais", href: "/admin/comerciais", icon: Building2 },
+      { label: "Comércios parceiros", href: "/admin/parceiros", icon: Store },
     ],
   },
   {

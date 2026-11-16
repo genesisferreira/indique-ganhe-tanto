@@ -118,6 +118,11 @@ export function employeeOriginLabel(originKind: string | null | undefined, role:
   return (role && EMPLOYEE_ORIGIN_LABEL[role]) || "Funcionário"
 }
 
+export function partnerOriginLabel(originKind: string | null | undefined): string | null {
+  if (originKind !== "partner_merchant") return null
+  return "Comércio parceiro"
+}
+
 export type PipelineMetrics = {
   totalLeads: number
   conversionRate: number

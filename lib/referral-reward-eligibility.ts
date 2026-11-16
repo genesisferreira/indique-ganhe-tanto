@@ -7,6 +7,9 @@ export const NEUTRAL_NETWORK_ERP_LEAD_SOURCE = "Pré-cadastro Rede Neutra"
 /** 3.1F-H1: oportunidade de funcionário — nunca participa de reward. */
 export const EMPLOYEE_ORIGIN_KIND = "employee" as const
 export const EMPLOYEE_SALES_OPPORTUNITY_SOURCE = "employee_sales_opportunity" as const
+export const PARTNER_MERCHANT_ORIGIN_KIND = "partner_merchant" as const
+export const PARTNER_MERCHANT_REFERRAL_SOURCE = "partner_merchant_referral" as const
+export const PARTNER_MERCHANT_ERP_LEAD_SOURCE = "Comércio Parceiro" as const
 
 /**
  * 3.1F-H1b (decisão congelada): origens que podem gerar reward do Indique e Ganhe.
@@ -19,6 +22,7 @@ export const INDICATOR_REWARD_ORIGIN_KINDS = [
 ] as const
 export const NON_REWARD_ORIGIN_KINDS = [
   EMPLOYEE_ORIGIN_KIND,
+  PARTNER_MERCHANT_ORIGIN_KIND,
   "web_preregistration",
   "neutral_network",
 ] as const
@@ -96,7 +100,8 @@ function isNonRewardErpLeadSource(
 ): boolean {
   return (
     erpLeadSource === PUBLIC_ERP_LEAD_SOURCE ||
-    erpLeadSource === NEUTRAL_NETWORK_ERP_LEAD_SOURCE
+    erpLeadSource === NEUTRAL_NETWORK_ERP_LEAD_SOURCE ||
+    erpLeadSource === PARTNER_MERCHANT_ERP_LEAD_SOURCE
   )
 }
 
@@ -109,6 +114,7 @@ export function isReferralRewardEligible(
     return false
   }
   if (input.source === EMPLOYEE_SALES_OPPORTUNITY_SOURCE) return false
+  if (input.source === PARTNER_MERCHANT_REFERRAL_SOURCE) return false
   if (isNonRewardPublicSource(input.source)) return false
   if (isNonRewardErpLeadSource(input.erp_lead_source)) return false
   if (!input.indicator_profile_id?.trim()) return false
