@@ -93,7 +93,6 @@ export function BrbyteCreateInterestCard({
   const [techOpen, setTechOpen] = useState(false)
 
   const loadMeta = useCallback(async () => {
-    if (!canMutate) return
     setLoadingMeta(true)
     try {
       const res = await fetch(
@@ -230,8 +229,6 @@ export function BrbyteCreateInterestCard({
     [meta, indicacao, syncStatus, syncError, firstInvoicePaid, creditReleased, rewardReserved]
   )
 
-  if (!canMutate) return null
-
   if (
     !loadingMeta &&
     meta &&
@@ -248,17 +245,19 @@ export function BrbyteCreateInterestCard({
   )
 
   const canCreate =
+    canMutate &&
     !flowFinalized &&
     Boolean(meta?.enabled && meta?.configured) &&
-    (syncStatus === "pending" || (syncStatus === "error" && !retryLimitReached)) &&
-    !unconfirmedCreate
+    (syncStatus === "pending" || (syncStatus === "error" && !retryLimitReached))
 
   const canCheckConversion =
+    canMutate &&
     !flowFinalized &&
     Boolean(meta?.enabled && meta?.configured) &&
     syncStatus === "created"
 
   const canCheckFirstInvoice =
+    canMutate &&
     !flowFinalized &&
     Boolean(meta?.enabled && meta?.configured) &&
     (syncStatus === "converted" ||
@@ -455,7 +454,11 @@ export function BrbyteCreateInterestCard({
         <div className="space-y-1">
           <p>
             <span className="text-muted-foreground">Status da integração:</span>{" "}
-            {getBrbyteSyncStatusLabel(syncStatus)}
+            {!(meta?.brbyteIdInteressado ?? indicacao.brbyteIdInteressado)
+              ? syncStatus === "error"
+                ? "Falha no envio"
+                : "Pendente de envio ao Controllr"
+              : getBrbyteSyncStatusLabel(syncStatus)}
           </p>
           {syncError ? (
             <p className="text-destructive whitespace-pre-wrap">{syncError}</p>
@@ -596,7 +599,7 @@ export function BrbyteCreateInterestCard({
                   Criando no Controllr…
                 </>
               ) : syncStatus === "error" ? (
-                "Tentar novamente no Controllr"
+                "Tentar novamente"
               ) : (
                 "Criar interessado no Controllr"
               )}

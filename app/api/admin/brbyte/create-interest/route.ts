@@ -22,7 +22,7 @@ function readReferralId(request: Request): string | null {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await getAuthorizedBrbyteAdmin({ requireMutation: true, request })
+  const auth = await getAuthorizedBrbyteAdmin({ requireMutation: false, request })
   if ("error" in auth) return auth.error
 
   const referralId = readReferralId(request)

@@ -2,7 +2,6 @@ import {
   BRBYTE_FIELD_MAX_LENGTH,
   truncateBrbyteField,
 } from "@/lib/brbyte/truncate-field"
-import { PUBLIC_ERP_LEAD_SOURCE } from "@/lib/referral-reward-eligibility"
 import type {
   PreferredContactPeriod,
   PreferredInstallationPeriod,
@@ -132,7 +131,7 @@ export function buildPublicPreRegistrationObservation(
 
   const origem = segment(
     "ORIGEM",
-    normalizePublicPreRegistrationText(PUBLIC_ERP_LEAD_SOURCE) ?? "NÃO INFORMADO"
+    normalizePublicPreRegistrationText("PRÉ-CADASTRO") ?? "PRÉ-CADASTRO"
   )
   const oferta = segment(
     "OFERTA",

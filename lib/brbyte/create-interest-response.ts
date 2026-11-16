@@ -282,7 +282,7 @@ function resolutionFromListPayload(
   return { ...meta, interestPk: fallbackPk, source: "list_lookup" }
 }
 
-export async function lookupClientInterestByDocument(input: {
+export async function lookupClientInterestByDocumentResult(input: {
   config: BrbyteCreateInterestConfig
   cookie: string
   interestDoc1: string
@@ -290,9 +290,9 @@ export async function lookupClientInterestByDocument(input: {
     leadPk?: string | null
     planPk?: string | null
   }
-}): Promise<BrbyteInterestResolution | null> {
+}): Promise<{ interest: BrbyteInterestResolution | null; reached: boolean }> {
   const doc = input.interestDoc1.replace(/\D/g, "")
-  if (!doc) return null
+  if (!doc) return { interest: null, reached: false }
 
   const lookupForms: Record<string, string>[] = [
     { "where[interest_doc1]": doc },
@@ -300,6 +300,7 @@ export async function lookupClientInterestByDocument(input: {
     { interest_doc1: doc },
   ]
 
+  let reached = false
   for (const fields of lookupForms) {
     const result = await brbyteAdminPostForm(
       input.config,
@@ -309,11 +310,25 @@ export async function lookupClientInterestByDocument(input: {
     )
 
     if (!result.ok) continue
+    reached = true
 
     logCreateInterestResponseBody(result.status, result.json)
     const resolved = resolutionFromListPayload(result.json, input.requestFallback)
-    if (resolved?.interestPk) return resolved
+    if (resolved?.interestPk) return { interest: resolved, reached: true }
   }
 
-  return null
+  return { interest: null, reached }
+}
+
+export async function lookupClientInterestByDocument(input: {
+  config: BrbyteCreateInterestConfig
+  cookie: string
+  interestDoc1: string
+  requestFallback?: {
+    leadPk?: string | null
+    planPk?: string | null
+  }
+}): Promise<BrbyteInterestResolution | null> {
+  const result = await lookupClientInterestByDocumentResult(input)
+  return result.interest
 }

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { partnerClientKey, checkPartnerPublicRateLimit } from "@/lib/partner-merchants/rate-limit"
 import { PUBLIC_PAYLOAD_KEYS, rejectForbiddenPublicKeys } from "@/lib/partner-merchants/domain"
 import { partnerJson } from "@/lib/partner-merchants/service"
+import { dispatchReferralShareControllrInterest } from "@/lib/referral-share/controllr-dispatch"
 import { sharePublicRpc } from "@/lib/referral-share/service"
 
 export const runtime = "nodejs"
@@ -34,5 +35,8 @@ export async function POST(request: NextRequest) {
     if (field in (payload as Record<string, unknown>)) closed[field] = (payload as Record<string, unknown>)[field]
   }
   const out = await sharePublicRpc("submit_referral_share", { p_token: token, p_client_key: key, p_payload: closed })
+  if (out.status === 200 && typeof closed.idempotencyKey === "string") {
+    await dispatchReferralShareControllrInterest(closed.idempotencyKey)
+  }
   return partnerJson(out.body, out.status)
 }
