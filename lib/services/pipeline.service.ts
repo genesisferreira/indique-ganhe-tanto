@@ -19,6 +19,7 @@ type ReferralPipelineRow = {
   referred_name: string
   referred_phone: string
   plan_id: string
+  public_offer_name?: string | null
   commercial_profile_id: string | null
   pipeline_stage: string | null
   pipeline_order: number
@@ -80,6 +81,7 @@ const PIPELINE_SELECT_CORE = `
   referred_name,
   referred_phone,
   plan_id,
+  public_offer_name,
   commercial_profile_id,
   pipeline_stage,
   pipeline_order,
@@ -100,6 +102,7 @@ const PIPELINE_SELECT_EXTENDED = `
   referred_name,
   referred_phone,
   plan_id,
+  public_offer_name,
   commercial_profile_id,
   pipeline_stage,
   pipeline_order,
@@ -287,7 +290,7 @@ function rowToPipelineCard(
     id: row.id,
     nomeIndicado: row.referred_name,
     telefoneIndicado: row.referred_phone,
-    planoNome: planNameById.get(row.plan_id),
+    planoNome: row.public_offer_name?.trim() || planNameById.get(row.plan_id),
     pipelineStage: stage,
     pipelineOrder: row.pipeline_order ?? 0,
     commercialProfileId: row.commercial_profile_id,

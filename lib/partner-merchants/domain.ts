@@ -9,6 +9,7 @@ export { partnerPublicUrl, PARTNER_PUBLIC_ORIGIN }
 export const PUBLIC_PAYLOAD_KEYS = [
   "idempotencyKey",
   "planId",
+  "planCode",
   "name",
   "phone",
   "document",

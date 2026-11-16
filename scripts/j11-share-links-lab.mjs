@@ -77,11 +77,30 @@ const P = { AM: id(1), TEC: id(2), VEX: id(3), IND: id(4), DUAL: id(5) }
 let seq = 0
 const key = () => `j11labkey${String(++seq).padStart(6, "0")}zzzz`
 const clientKey = () => createHash("sha256").update(`j11-${seq}-${Math.random()}`).digest("hex")
-const lead = (over = {}) => ({
-  idempotencyKey: key(), planId: PLAN, name: "Lead Link Teste", phone: "11911112001", document: "",
-  zipcode: "12345678", street: "Rua Teste", number: "10", complement: "", neighborhood: "Bairro",
-  city: "Cidade", observation: "", consent: true, confirmRecentDuplicate: false, ...over,
-})
+const cpfFrom = (seed) => {
+  let n = seed
+  for (;;) {
+    const base = String(n).padStart(9, "0").slice(-9)
+    const calc = (digits, len) => {
+      let s = 0
+      for (let i = 0; i < len; i++) s += Number(digits[i]) * (len + 1 - i)
+      const r = (s * 10) % 11
+      return r === 10 ? 0 : r
+    }
+    const d1 = calc(base, 9)
+    const value = `${base}${d1}${calc(base + d1, 10)}`
+    if (!/^(\d)\1{10}$/.test(value)) return value
+    n += 1
+  }
+}
+const lead = (over = {}) => {
+  const phone = over.phone ?? "11911112001"
+  return {
+    idempotencyKey: key(), planCode: "mega_500", name: "Lead Link Teste", phone, document: over.document ?? cpfFrom(Number(phone.slice(-6))),
+    zipcode: "12345678", street: "Rua Teste", number: "10", complement: "", neighborhood: "Bairro",
+    city: "Cidade", observation: "", consent: true, confirmRecentDuplicate: false, ...over, phone,
+  }
+}
 
 let PLAN = null
 try {
@@ -89,6 +108,10 @@ try {
   for (const file of CHAIN) await applyFile(file)
   await t("APPLY_J11", async () => { await applyFile(J11); return true })
   await t("REAPPLY_J11", async () => { await applyFile(J11); return true })
+  await applyFile("supabase/patch-referral-share-revoke-admin-3-1f-j11s.sql")
+  await applyFile("supabase/patch-public-pre-registration-commercial-offer.sql")
+  await t("APPLY_J12", async () => { await applyFile("supabase/patch-referral-share-form-3-1f-j12.sql"); return true })
+  await t("REAPPLY_J12", async () => { await applyFile("supabase/patch-referral-share-form-3-1f-j12.sql"); return true })
   for (const row of (await c.query(readFileSync(join(REPO_ROOT, VER), "utf8"))).rows) {
     await t(`VERIFY_${row.check_name}`, () => row.ok === true)
   }
@@ -99,7 +122,8 @@ try {
     ($4,'indicador.j11@example.test','indicador',true,'Indicador Teste'),
     ($5,'duplo.j11@example.test','funcionario',true,'Funcionario Dois Papeis')
     on conflict (id) do nothing`, Object.values(P))
-  PLAN = (await one(`insert into public.plans(name,speed_label,price,reward_amount,is_active) values ('Plano Link','300 Mega',99.90,30,true) returning id`)).id
+  await c.query(`insert into public.plans(name,speed_label,price,reward_amount,is_active,sort_order) values ('500 Mega','500 Mbps',99.90,0,true,1),('1000 Mega','1 Gbps',149.90,0,true,2)`)
+  PLAN = (await one(`select id from public.plans where name='500 Mega'`)).id
   const sectors = Object.fromEntries((await q(`select code, id from public.sectors`)).map((row) => [row.code, row.id]))
   const hire = (await one(`select (public.comp_cfg_today() - 10)::text d`)).d
   const techEmployee = (await one(`insert into public.employees(profile_id,status,hired_at) values ($1,'active', (($2::date + time '12:00') at time zone 'America/Sao_Paulo')) returning id`, [P.TEC, hire])).id
@@ -118,6 +142,36 @@ try {
   const indClash = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ idempotencyKey: indKey, phone: "11911112011", name: "Outro Nome" }))])
   const indRow = await one(`select r.origin_kind, r.reward_eligible, r.indicator_profile_id, (select count(*)::int from public.sales_opportunity_attributions a where a.opportunity_id=s.opportunity_id) employee_attr, (select count(*)::int from public.rewards rw where rw.referral_id=s.opportunity_id) rewards from public.referral_share_submissions s join public.referrals r on r.id=s.opportunity_id where s.public_protocol=$1`, [indSubmit.r?.protocol])
   await t("INDICATOR_ATTRIBUTION", () => indSubmit.r?.ok === true && indReplay.r?.idempotent === true && indClash.r?.code === "idempotency_conflict" && indRow.origin_kind === "indicator" && indRow.reward_eligible === true && indRow.indicator_profile_id === P.IND && indRow.employee_attr === 0 && indRow.rewards === 0)
+  const missingDoc = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ phone: "11911113001", document: "" }))])
+  const badCpf = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ phone: "11911113002", document: "123.456.789-01" }))])
+  const repeated = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ phone: "11911113003", document: "111.111.111-11" }))])
+  const repeatedCnpj = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ phone: "11911113004", document: "00.000.000/0000-00" }))])
+  await t("DOCUMENT_REJECTED", () => [missingDoc, badCpf, repeated, repeatedCnpj].every((row) => row.r?.code === "invalid_document") && ![missingDoc, badCpf, repeated, repeatedCnpj].some((row) => JSON.stringify(row.r).includes("12345678901")))
+  const masked = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ phone: "11911113011", document: "529.982.247-25", planCode: "mega_1000" }))])
+  const maskedRow = await one(`select referred_document, public_offer_code, public_offer_name, plan_id, reward_eligible from public.referrals r join public.referral_share_submissions s on s.opportunity_id=r.id where s.public_protocol=$1`, [masked.r?.protocol])
+  const plan1000 = await one(`select id from public.plans where name='1000 Mega'`)
+  await t("MASK_PERSISTED_DIGITS", () => masked.r?.ok === true && maskedRow.referred_document === "52998224725" && maskedRow.public_offer_code === "mega_1000" && maskedRow.public_offer_name === "1000 Mega" && maskedRow.plan_id === plan1000.id && maskedRow.reward_eligible === true)
+  const cnpjLead = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ phone: "11911113021", document: "11.222.333/0001-81", planCode: "business_internet" }))])
+  const cnpjRow = await one(`select referred_document, referred_person_type, public_offer_name, plan_id from public.referrals r join public.referral_share_submissions s on s.opportunity_id=r.id where s.public_protocol=$1`, [cnpjLead.r?.protocol])
+  await t("CNPJ_VALID", () => cnpjLead.r?.ok === true && cnpjRow.referred_document === "11222333000181" && cnpjRow.referred_person_type === "pj" && cnpjRow.public_offer_name === "Internet Empresarial" && cnpjRow.plan_id === PLAN)
+  const forgedPlan = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ phone: "11911113031", planCode: "plano_antigo" }))])
+  const forgedId = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify({ ...lead({ phone: "11911113032" }), planId: PLAN })])
+  await t("FORGED_PLAN_BLOCKED", () => forgedPlan.r?.code === "invalid_plan" && forgedId.r?.code === "unknown_field")
+  const catalog = ["plan_400_fixed_line", "corporate_broadband", "mega_500"]
+  const labels = { plan_400_fixed_line: "Plano 400 Mega com linha fixa", corporate_broadband: "Banda Larga Corporativa", mega_500: "500 Mega" }
+  let catalogOk = true
+  for (const [index, code] of catalog.entries()) {
+    const sent = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ phone: `119111131${index}1`, planCode: code }))])
+    const row = await one(`select public_offer_code, public_offer_name, plan_id from public.referrals r join public.referral_share_submissions s on s.opportunity_id=r.id where s.public_protocol=$1`, [sent.r?.protocol])
+    const expectedPlan = code === "mega_500" ? PLAN : PLAN
+    if (!(sent.r?.ok === true && row.public_offer_code === code && row.public_offer_name === labels[code] && row.plan_id === expectedPlan)) catalogOk = false
+  }
+  const planCount = await one(`select count(*)::int n from public.plans`)
+  const ctx = await pub("referral_share_public_context", "$1,$2", [tokenInd, clientKey()])
+  const names = Array.isArray(ctx.r?.plans) ? ctx.r.plans.map((plan) => plan.name).join("|") : ""
+  await t("PLAN_CATALOG", () => catalogOk && planCount.n === 2 && names === "Plano 400 Mega com linha fixa|Banda Larga Corporativa|Internet Empresarial|500 Mega|1000 Mega" && !names.includes("300 Mega"))
+  const duplicateDoc = await pub("submit_referral_share", "$1,$2,$3::jsonb", [tokenInd, clientKey(), JSON.stringify(lead({ phone: "11911113041", document: "52998224725" }))])
+  await t("DOCUMENT_DUPLICATE", () => duplicateDoc.r?.code === "duplicate_open")
 
   const issuedTech = await rpc(P.TEC, "issue_referral_share_link", { idempotencyKey: key(), mode: "issue", originKind: "employee", attributionRole: "technician_originator" })
   const techSubmit = await pub("submit_referral_share", "$1,$2,$3::jsonb", [issuedTech.r.token, clientKey(), JSON.stringify(lead({ phone: "11911112021" }))])

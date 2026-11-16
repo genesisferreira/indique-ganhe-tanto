@@ -11,9 +11,10 @@ import {
 } from "lucide-react"
 
 function formatCpf(value: string): string {
-  const d = value.replace(/\D/g, "")
-  if (d.length !== 11) return value
-  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`
+  const digits = value.replace(/\D/g, "")
+  if (digits.length === 11) return `${digits.slice(0, 3)}.***.***-${digits.slice(9)}`
+  if (digits.length === 14) return `${digits.slice(0, 2)}.***.***/****-${digits.slice(12)}`
+  return "Documento informado"
 }
 
 function formatCep(value: string): string {
@@ -106,7 +107,7 @@ export function ReferralInterestedFields({
             {indicacao.cpfIndicado ? (
               <div className="flex items-center gap-2">
                 <CreditCard className="h-4 w-4 text-muted-foreground" />
-                <span>CPF: {formatCpf(indicacao.cpfIndicado)}</span>
+                <span>CPF/CNPJ: {formatCpf(indicacao.cpfIndicado)}</span>
               </div>
             ) : null}
             {indicacao.rgIndicado ? (
@@ -178,7 +179,7 @@ export function ReferralInterestedFields({
             {indicacao.cpfIndicado ? (
               <FieldRow
                 icon={<CreditCard className="w-5 h-5 text-primary" />}
-                label="CPF"
+                label="CPF/CNPJ"
                 value={formatCpf(indicacao.cpfIndicado)}
               />
             ) : null}

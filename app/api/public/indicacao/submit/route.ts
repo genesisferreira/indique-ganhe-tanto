@@ -6,7 +6,7 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 const ALLOWED = new Set([
-  "idempotencyKey", "planId", "name", "phone", "document", "zipcode", "street", "number",
+  "idempotencyKey", "planCode", "name", "phone", "document", "zipcode", "street", "number",
   "complement", "neighborhood", "city", "observation", "consent", "confirmRecentDuplicate",
 ])
 

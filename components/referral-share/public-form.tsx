@@ -10,8 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { fetchAddressByCEP } from "@/lib/client/viacep"
 import { onlyDigits } from "@/lib/client/formatters"
-
-type Plan = { id: string; name: string }
+import { maskReferralDocument, REFERRAL_SHARE_PLANS, referralDocumentDigits } from "@/lib/referral-share/public-catalog"
 
 function newKey() {
   return (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, "").slice(0, 40)
@@ -23,8 +22,7 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
   const [loading, setLoading] = useState(true)
   const [unavailable, setUnavailable] = useState(false)
   const [headline, setHeadline] = useState("")
-  const [plans, setPlans] = useState<Plan[]>([])
-  const [planId, setPlanId] = useState("")
+  const [planCode, setPlanCode] = useState("")
   const [name, setName] = useState("")
   const [phone, setPhone] = useState("")
   const [document, setDocument] = useState("")
@@ -54,7 +52,6 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
       if (!response.ok || !body?.ok) setUnavailable(true)
       else {
         setHeadline(String(body.headline ?? ""))
-        setPlans(Array.isArray(body.plans) ? body.plans : [])
       }
       setLoading(false)
     })()
@@ -76,6 +73,15 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
 
   async function submit(confirmRecentDuplicate = false) {
     if (submittingRef.current) return
+    const documentDigits = referralDocumentDigits(document)
+    if (!documentDigits) {
+      setMessage("Informe um CPF ou CNPJ válido.")
+      return
+    }
+    if (!planCode) {
+      setMessage("Escolha um plano de interesse.")
+      return
+    }
     submittingRef.current = true
     setSubmitting(true)
     setMessage(null)
@@ -86,7 +92,7 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
         body: JSON.stringify({
           token,
           payload: {
-            idempotencyKey: keyRef.current, planId, name, phone, document, zipcode, street, number,
+            idempotencyKey: keyRef.current, planCode, name, phone, document: documentDigits, zipcode, street, number,
             complement, neighborhood, city, observation, consent, confirmRecentDuplicate,
           },
         }),
@@ -144,7 +150,7 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
           <CardContent className="grid gap-3">
             <Field id="share-name" label="Nome completo"><Input id="share-name" value={name} onChange={(event) => setName(event.target.value)} required autoComplete="name" className="w-full" /></Field>
             <Field id="share-phone" label="Telefone / WhatsApp"><Input id="share-phone" value={phone} onChange={(event) => setPhone(event.target.value)} required inputMode="tel" autoComplete="tel" className="w-full" /></Field>
-            <Field id="share-document" label="Documento (opcional)"><Input id="share-document" value={document} onChange={(event) => setDocument(event.target.value)} className="w-full" /></Field>
+            <Field id="share-document" label="CPF ou CNPJ"><Input id="share-document" value={document} onChange={(event) => setDocument(maskReferralDocument(event.target.value))} placeholder="Digite o CPF ou CNPJ" required inputMode="numeric" autoComplete="off" className="w-full" /></Field>
             <Field id="share-zip" label="CEP"><Input id="share-zip" value={zipcode} onChange={(event) => void lookupCep(event.target.value)} required inputMode="numeric" autoComplete="postal-code" className="w-full" /></Field>
             <Field id="share-street" label="Endereço"><Input id="share-street" value={street} onChange={(event) => setStreet(event.target.value)} required autoComplete="address-line1" className="w-full" /></Field>
             <Field id="share-number" label="Número"><Input id="share-number" value={number} onChange={(event) => setNumber(event.target.value)} required className="w-full" /></Field>
@@ -152,9 +158,9 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
             <Field id="share-neighborhood" label="Bairro"><Input id="share-neighborhood" value={neighborhood} onChange={(event) => setNeighborhood(event.target.value)} required className="w-full" /></Field>
             <Field id="share-city" label="Cidade"><Input id="share-city" value={city} onChange={(event) => setCity(event.target.value)} required className="w-full" /></Field>
             <Field id="share-plan" label="Plano de interesse">
-              <Select value={planId} onValueChange={setPlanId}>
-                <SelectTrigger id="share-plan" className="w-full"><SelectValue placeholder="Escolha um plano" /></SelectTrigger>
-                <SelectContent>{plans.map((plan) => <SelectItem key={plan.id} value={plan.id}>{plan.name}</SelectItem>)}</SelectContent>
+              <Select value={planCode} onValueChange={setPlanCode}>
+                <SelectTrigger id="share-plan" className="h-auto min-h-9 w-full whitespace-normal text-left"><SelectValue placeholder="Escolha um plano" /></SelectTrigger>
+                <SelectContent>{REFERRAL_SHARE_PLANS.map((plan) => <SelectItem key={plan.code} value={plan.code} className="whitespace-normal">{plan.label}</SelectItem>)}</SelectContent>
               </Select>
             </Field>
             <Field id="share-observation" label="Observação (opcional)"><Textarea id="share-observation" value={observation} onChange={(event) => setObservation(event.target.value)} className="w-full" /></Field>
@@ -162,6 +168,7 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
               <Checkbox id="share-consent" checked={consent} onCheckedChange={(value) => setConsent(value === true)} />
               <span>Autorizo o contato da Tanto Telecom sobre este pré-cadastro.</span>
             </label>
+            <p className="text-sm text-muted-foreground">Seus dados serão utilizados pela Tanto Telecom para consultar a disponibilidade e entrar em contato sobre os serviços selecionados.</p>
             {message ? <p className="text-sm text-destructive" role="status">{message}</p> : null}
             {needsConfirm ? <Button type="button" variant="outline" disabled={submitting} onClick={() => void submit(true)}>Confirmar mesmo assim</Button> : null}
             <Button type="submit" disabled={submitting || !consent} className="w-full">{submitting ? "Enviando…" : "Enviar indicação"}</Button>

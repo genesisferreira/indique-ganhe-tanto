@@ -71,6 +71,8 @@ function mapResult(data: unknown): { status: number; body: unknown } {
     if (row.code === "duplicate_open") return { status: 409, body: { ok: false, code: "duplicate_open", message: "Já existe uma oportunidade em aberto para este contato." } }
     if (row.code === "duplicate_recent_closed") return { status: 409, body: { ok: false, code: "duplicate_recent_closed", requiresConfirmation: true, message: "Houve uma oportunidade encerrada há menos de 90 dias. Confirme para registrar uma nova." } }
     if (row.code === "consent_required") return { status: 400, body: { ok: false, message: "O consentimento é obrigatório." } }
+    if (row.code === "invalid_document") return { status: 400, body: { ok: false, message: "Informe um CPF ou CNPJ válido." } }
+    if (row.code === "invalid_plan") return { status: 400, body: { ok: false, message: "Escolha um plano de interesse." } }
     if (row.code === "idempotency_conflict") return { status: 409, body: { ok: false, message: "Este envio já foi usado com outros dados." } }
     if (row.code === "active_link_exists") return { status: 409, body: { ok: false, message: "Já existe um link ativo. Use a rotação." } }
     if (row.code === "originator_inactive") return { status: 409, body: { ok: false, message: "O originador não está ativo." } }
