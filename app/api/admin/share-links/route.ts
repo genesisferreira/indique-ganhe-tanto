@@ -1,4 +1,4 @@
-import { shareJson, shareSessionRpc } from "@/lib/referral-share/service"
+import { shareAdminCapability, shareJson, shareSessionRpc } from "@/lib/referral-share/service"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -15,6 +15,12 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
   if (!body) return shareJson({ ok: false, message: "Não foi possível concluir." }, 400)
   const action = body.action === "revoke" ? "revoke" : "issue"
+  if (action === "revoke") {
+    const capability = await shareAdminCapability()
+    if (capability !== "master" && capability !== "finance") {
+      return shareJson({ ok: false, message: "Sem permissão para esta ação." }, 403)
+    }
+  }
   const fn = action === "revoke" ? "revoke_referral_share_link" : "issue_referral_share_link"
   const payload = { ...body }
   delete payload.action

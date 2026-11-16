@@ -28,6 +28,14 @@ function withoutSecret(data: unknown) {
   return data
 }
 
+export async function shareAdminCapability() {
+  const supabase = (await createClient()) as unknown as RpcClient
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user?.id) return null
+  const { data } = await supabase.rpc("partner_admin_capability")
+  return data === "master" || data === "finance" || data === "readonly" || data === "commercial" || data === "none" ? data : null
+}
+
 export async function shareSessionRpc(fn: string, args: Record<string, unknown> = {}) {
   const supabase = (await createClient()) as unknown as RpcClient
   const { data: { user } } = await supabase.auth.getUser()

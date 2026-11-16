@@ -3,6 +3,15 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { partnerQrMatrix, partnerQrSvg } from "@/lib/partner-merchants/qr-matrix"
 
 type LinkRow = {
@@ -12,6 +21,7 @@ type LinkRow = {
   useCount: number
   campaign?: string | null
   publicDisplayName?: string
+  createdAt?: string
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -57,6 +67,12 @@ function pngBlob(url: string): Promise<Blob> {
   return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob ?? new Blob()), "image/png"))
 }
 
+function latestFor(role: string, links: LinkRow[]) {
+  return links
+    .filter((row) => row.attributionRole === role)
+    .sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")))[0]
+}
+
 export function ShareLinksCard({
   title,
   description,
@@ -74,8 +90,11 @@ export function ShareLinksCard({
 }) {
   const [links, setLinks] = useState<LinkRow[]>([])
   const [roles, setRoles] = useState<string[]>([])
+  const [canRevoke, setCanRevoke] = useState(false)
   const [revealed, setRevealed] = useState<Record<string, string>>({})
   const [confirmRole, setConfirmRole] = useState<string | null>(null)
+  const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
   async function load() {
@@ -89,33 +108,66 @@ export function ShareLinksCard({
     }
     setLinks(Array.isArray(body.links) ? body.links.filter((row: LinkRow) => row.status === "active" || mode === "admin") : [])
     setRoles(Array.isArray(body.eligibleRoles) ? body.eligibleRoles : [])
+    setCanRevoke(mode === "admin" && body.canRevoke === true)
   }
 
   useEffect(() => { void load() }, [mode, originKind, originatorId])
 
   async function issue(role: string, actionMode: "issue" | "rotate") {
+    if (busy) return
+    setBusy(true)
     const endpoint = mode === "self" ? "/api/referral-share/mine" : "/api/admin/share-links"
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "issue",
-        idempotencyKey: newKey(),
-        mode: actionMode,
-        originKind: originKind ?? (role === "indicator" ? "indicator" : "employee"),
-        attributionRole: role,
-        originatorId,
-      }),
-    })
-    const body = await response.json().catch(() => null)
-    if (body?.url) setRevealed((current) => ({ ...current, [role]: String(body.url) }))
-    setMessage(body?.message ?? (body?.tokenRevealed === false ? "O link já foi emitido. Rotacione para ver outro." : response.ok ? "Link atualizado." : "Não foi possível gerar o link."))
-    setConfirmRole(null)
-    await load()
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "issue",
+          idempotencyKey: newKey(),
+          mode: actionMode,
+          originKind: originKind ?? (role === "indicator" ? "indicator" : "employee"),
+          attributionRole: role,
+          originatorId,
+        }),
+      })
+      const body = await response.json().catch(() => null)
+      if (body?.url) setRevealed((current) => ({ ...current, [role]: String(body.url) }))
+      setMessage(body?.message ?? (body?.tokenRevealed === false ? "O link já foi emitido. Rotacione para ver outro." : response.ok ? "Link atualizado." : "Não foi possível gerar o link."))
+      setConfirmRole(null)
+      await load()
+    } finally {
+      setBusy(false)
+    }
   }
 
-  const visibleRoles = roles.length > 0 ? roles : links.map((row) => row.attributionRole)
-  const activeByRole = new Map(links.filter((row) => row.status === "active").map((row) => [row.attributionRole, row]))
+  async function revoke(role: string, linkId: string) {
+    if (busy) return
+    setBusy(true)
+    try {
+      const response = await fetch("/api/admin/share-links", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "revoke", idempotencyKey: newKey(), linkId, reason: "revogacao administrativa" }),
+      })
+      const body = await response.json().catch(() => null)
+      if (!response.ok || body?.ok === false) {
+        setMessage(body?.message ?? "Não foi possível revogar o link.")
+        return
+      }
+      setRevealed((current) => {
+        const next = { ...current }
+        delete next[role]
+        return next
+      })
+      setConfirmRevoke(null)
+      setMessage("Link revogado. Nenhum substituto foi criado.")
+      await load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const visibleRoles = [...new Set([...roles, ...links.map((row) => row.attributionRole)])]
 
   return (
     <Card className="border-border/50">
@@ -126,13 +178,19 @@ export function ShareLinksCard({
       <CardContent className="grid gap-4">
         {visibleRoles.length === 0 ? <p className="text-sm text-muted-foreground">Nenhum link disponível para esta conta.</p> : null}
         {visibleRoles.map((role) => {
-          const row = activeByRole.get(role)
-          const url = revealed[role]
+          const latest = latestFor(role, links)
+          const active = latest?.status === "active" ? latest : undefined
+          const url = active ? revealed[role] : undefined
+          const statusText = active
+            ? `Ativo · ${active.useCount} indicação(ões)`
+            : latest?.status === "revoked"
+              ? "Revogado"
+              : "Sem link ativo"
           return (
             <section key={role} className="grid gap-2 rounded-lg border border-border/60 p-3" aria-label={ROLE_LABEL[role] ?? "Link"}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-medium">{ROLE_LABEL[role] ?? "Link"}</h3>
-                <span className="text-xs text-muted-foreground">{row ? `Ativo · ${row.useCount} indicação(ões)` : "Sem link ativo"}</span>
+                <span className="text-xs text-muted-foreground">{statusText}</span>
               </div>
               {url ? (
                 <div className="grid gap-2">
@@ -152,18 +210,35 @@ export function ShareLinksCard({
                   </div>
                 </div>
               ) : null}
-              {allowIssue ? (
+              {allowIssue || (canRevoke && active) ? (
                 <div className="flex flex-wrap gap-2">
-                  {!row ? <Button type="button" size="sm" onClick={() => void issue(role, "issue")}>Gerar link</Button> : null}
-                  {row && confirmRole !== role ? <Button type="button" size="sm" variant="outline" onClick={() => setConfirmRole(role)}>Rotacionar link</Button> : null}
-                  {confirmRole === role ? (
+                  {allowIssue && !active ? <Button type="button" size="sm" disabled={busy} onClick={() => void issue(role, "issue")}>{latest?.status === "revoked" ? "Gerar novo link" : "Gerar link"}</Button> : null}
+                  {allowIssue && active && confirmRole !== role ? <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { setConfirmRevoke(null); setConfirmRole(role) }}>Rotacionar link</Button> : null}
+                  {allowIssue && confirmRole === role ? (
                     <>
-                      <Button type="button" size="sm" onClick={() => void issue(role, "rotate")}>Confirmar rotação</Button>
-                      <Button type="button" size="sm" variant="ghost" onClick={() => setConfirmRole(null)}>Cancelar</Button>
+                      <Button type="button" size="sm" disabled={busy} onClick={() => void issue(role, "rotate")}>Confirmar rotação</Button>
+                      <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => setConfirmRole(null)}>Cancelar</Button>
                     </>
                   ) : null}
+                  {canRevoke && active ? <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => { setConfirmRole(null); setConfirmRevoke(role) }}>Revogar link</Button> : null}
                 </div>
               ) : null}
+              <AlertDialog open={confirmRevoke === role} onOpenChange={(open) => { if (!open && !busy) setConfirmRevoke(null) }}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Revogar link</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      O link e o QR deixarão de funcionar imediatamente. Nenhum link substituto será criado.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={busy}>Cancelar</AlertDialogCancel>
+                    <Button type="button" variant="destructive" disabled={busy} onClick={() => active && void revoke(role, active.linkId)}>
+                      {busy ? "Revogando…" : "Confirmar revogação"}
+                    </Button>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </section>
           )
         })}
