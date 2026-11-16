@@ -6,6 +6,7 @@ import { operationalHrefForSectorCode } from "@/lib/auth/operational-routes"
 import { PageHeader } from "@/components/ui/page-header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { EmployeeDashboardSection } from "@/components/employee-portal/employee-dashboard-section"
+import { ShareLinksCard } from "@/components/referral-share/share-card"
 
 export const dynamic = "force-dynamic"
 
@@ -42,6 +43,12 @@ export default async function FuncionarioHomePage() {
 
   return (
     <div className="space-y-8">
+      <ShareLinksCard
+        title="Meu link de vendas"
+        description="Cada papel tem o próprio link. A oportunidade fica atribuída a esse papel."
+        mode="self"
+        originKind="employee"
+      />
       <EmployeeDashboardSection />
       <PageHeader
         title="Operação"

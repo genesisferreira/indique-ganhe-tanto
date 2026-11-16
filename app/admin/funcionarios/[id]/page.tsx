@@ -26,6 +26,7 @@ import {
   presentSectorMembershipLabel,
 } from "@/lib/employees/admin-policy"
 import type { EmployeeStatus } from "@/types/employee"
+import { ShareLinksCard } from "@/components/referral-share/share-card"
 
 type Sector = { id: string; code: string; name: string; isActive: boolean }
 
@@ -185,6 +186,14 @@ export default function FuncionarioDetailPage({
           <Link href="/admin/funcionarios">Voltar</Link>
         </Button>
       </PageHeader>
+
+      <ShareLinksCard
+        title="Links de vendas"
+        description="Um link para cada papel elegível. A função do link não muda depois da emissão."
+        mode="admin"
+        originKind="employee"
+        originatorId={employee.id}
+      />
 
       <Card className="border-border/50 bg-card/50">
         <CardHeader>

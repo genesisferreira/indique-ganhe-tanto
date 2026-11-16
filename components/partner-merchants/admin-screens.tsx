@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { isPartnerPublicUrl } from "@/lib/partner-merchants/public-url"
 import { partnerQrMatrix, partnerQrSvg } from "@/lib/partner-merchants/qr-matrix"
+import { ShareLinksCard } from "@/components/referral-share/share-card"
 
 type Capability = "master" | "finance" | "commercial" | "readonly" | "none"
 
@@ -194,6 +195,14 @@ export function PartnerDetail({ id, basePath, showFinancial }: { id: string; bas
           </CardContent>
         </Card>
       ) : null}
+      <ShareLinksCard
+        title="Uso do link"
+        description="O mesmo token abre /parceiro e /indicacao. A geração continua no cartão de link."
+        mode="admin"
+        originKind="partner_merchant"
+        originatorId={id}
+        allowIssue={false}
+      />
       {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
       <Card>
         <CardHeader><CardTitle>Auditoria</CardTitle></CardHeader>

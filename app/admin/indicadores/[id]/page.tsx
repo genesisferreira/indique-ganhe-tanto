@@ -14,6 +14,7 @@ import { loadAdminIndicatorDetailFromSupabase } from "@/lib/services/supabase-da
 import { ArrowLeft, FileText, DollarSign, TrendingUp, Calendar, Mail, Phone, CreditCard, Edit, Ban, CheckCircle } from "lucide-react"
 import Link from "next/link"
 import type { Indicador, Indicacao, Pagamento } from "@/types"
+import { ShareLinksCard } from "@/components/referral-share/share-card"
 
 const indicacoesColumns = [
   {
@@ -165,6 +166,14 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
           description={`Cadastrado em ${new Date(indicador.createdAt).toLocaleDateString("pt-BR")}`}
         />
       </div>
+
+      <ShareLinksCard
+        title="Link de indicação"
+        description="Gere, revogue ou consulte o uso. O token antigo não pode ser recuperado."
+        mode="admin"
+        originKind="indicator"
+        originatorId={indicador.id}
+      />
 
       <div className="flex flex-wrap gap-2">
         <StatusBadge status={isAtivo ? "disponivel" : "offline"} />

@@ -17,6 +17,7 @@ import {
   ArrowRight,
 } from "lucide-react"
 import { useIndicadorHome } from "./indicador-home-provider"
+import { ShareLinksCard } from "@/components/referral-share/share-card"
 
 export default function IndicadorDashboard() {
   const { indicador, dashboard, recentIndicacoes } = useIndicadorHome()
@@ -34,6 +35,15 @@ export default function IndicadorDashboard() {
           </Link>
         </Button>
       </PageHeader>
+
+      <div className="mb-8">
+        <ShareLinksCard
+          title="Meu link de indicação"
+          description="Compartilhe seu link ou QR. A indicação fica atribuída a você."
+          mode="self"
+          originKind="indicator"
+        />
+      </div>
 
       {/* Stats Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
