@@ -22,6 +22,7 @@ interface DataTableProps<T> {
   onSearchChange?: (value: string) => void
   emptyMessage?: string
   className?: string
+  stickyHeader?: boolean
 }
 
 export function DataTable<T>({
@@ -34,6 +35,7 @@ export function DataTable<T>({
   onSearchChange,
   emptyMessage = "Nenhum item encontrado",
   className,
+  stickyHeader = false,
 }: DataTableProps<T>) {
   return (
     <div className={cn("space-y-4", className)}>
@@ -49,9 +51,9 @@ export function DataTable<T>({
         </div>
       )}
       <div className="rounded-xl border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className={cn("overflow-x-auto", stickyHeader && "max-h-[70vh]")}>
           <table className="w-full">
-            <thead>
+            <thead className={stickyHeader ? "sticky top-0 z-10 bg-card" : undefined}>
               <tr className="border-b bg-muted/30">
                 {columns.map((column) => (
                   <th

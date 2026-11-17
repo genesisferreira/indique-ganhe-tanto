@@ -28,6 +28,7 @@ const indicatorDetail = readFileSync("app/admin/indicadores/[id]/page.tsx", "utf
 const clean: ReferralGateInput = {
   rewards: 0, wallet: 0, payments: 0, withdrawals: 0, entitlements: 0, competences: 0,
   financialAttributions: 0, contractOrInvoice: 0, pendingFinancial: 0, financeAudit: 0, sharedDependency: 0,
+  externalPayment: false,
   testRecord: true,
 }
 const reason = "Cadastro sintético inválido e sem histórico financeiro."
@@ -53,23 +54,18 @@ describe("3.1F-J17 exclusão controlada", () => {
     assert.equal(canHardDelete(clean, reason), true)
     assert.equal(canHardDelete({ ...clean, testRecord: false }, reason), true)
     assert.equal(canHardDelete({ ...clean, testRecord: false }, "curto"), false)
-    assert.deepEqual(referralBlockers({ ...clean, rewards: 1 }), ["reward"])
-    assert.deepEqual(referralBlockers({ ...clean, wallet: 1 }), ["wallet"])
-    assert.deepEqual(referralBlockers({ ...clean, payments: 1 }), ["payment"])
-    assert.deepEqual(referralBlockers({ ...clean, withdrawals: 1 }), ["withdrawal"])
-    assert.deepEqual(referralBlockers({ ...clean, contractOrInvoice: 1 }), ["contract_or_invoice"])
-    assert.deepEqual(referralBlockers({ ...clean, pendingFinancial: 1 }), ["pending_financial"])
-    assert.deepEqual(referralBlockers({ ...clean, financeAudit: 1 }), ["finance_audit"])
+    assert.deepEqual(referralBlockers({ ...clean, rewards: 1 }), [])
+    assert.deepEqual(referralBlockers({ ...clean, externalPayment: true }), ["external_payment"])
     assert.deepEqual(referralBlockers({ ...clean, entitlements: 1, competences: 2, sharedDependency: 1 }), ["entitlement", "competence", "shared_dependency"])
     assert.equal(reasonIssue("12345678901 no motivo"), "digits")
     assert.equal(reasonIssue(reason), "ok")
   })
 
   it("confirmação, lote misto e replay não apagam financeiro nem o Controllr", () => {
-    assert.equal(REFERRAL_CONFIRMATION, "EXCLUIR INDICAÇÃO")
+    assert.equal(REFERRAL_CONFIRMATION, "EXCLUIR INDICACAO")
     assert.equal(INDICATOR_CONFIRMATION, "EXCLUIR INDICADOR")
     assert.equal(AUTH_DELETE_CONFIRMATION, "EXCLUIR CONTA DE ACESSO")
-    assert.equal(bulkConfirmation(3), "EXCLUIR 3 REGISTROS")
+    assert.equal(bulkConfirmation(3), "EXCLUIR SELECIONADOS")
     assert.match(sql, /EXCLUIR INDICAÇÃO/)
     assert.match(sql, /EXCLUIR INDICADOR/)
     assert.match(sql, /EXCLUIR CONTA DE ACESSO/)

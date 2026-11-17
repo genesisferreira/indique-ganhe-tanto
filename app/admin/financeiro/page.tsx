@@ -14,7 +14,9 @@ import { pagamentos } from "@/lib/services/mock-data.service"
 import { loadAdminAllPaymentsFromSupabase } from "@/lib/services/supabase-data.service"
 import type { Pagamento } from "@/types"
 import { DollarSign, TrendingUp, Clock, CheckCircle, ArrowUpRight, ArrowDownRight, Wallet } from "lucide-react"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from "recharts"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from "recharts"
+import { PeriodFilter } from "@/components/period/period-filter"
+import { chartAxis, chartColor, chartGrid, chartTooltip, pieSlices } from "@/lib/charts/theme"
 import Link from "next/link"
 
 const MOCK_MONTHLY = [
@@ -120,11 +122,11 @@ export default function AdminFinanceiroPage() {
     }))
   }, [lista])
 
-  const statusData = [
-    { name: "Pago", value: pagamentosPagos.length, color: "#22c55e" },
-    { name: "Pendente", value: pagamentosPendentes.length, color: "#f59e0b" },
-    { name: "Cancelado", value: pagamentosCancelados.length, color: "#ef4444" },
-  ]
+  const statusData = pieSlices([
+    { name: "Pago", value: pagamentosPagos.length, color: chartColor(2) },
+    { name: "Pendente", value: pagamentosPendentes.length, color: chartColor(1) },
+    { name: "Cancelado", value: pagamentosCancelados.length, color: chartColor(4) },
+  ])
 
   const receitaMesCard =
     fluxoCaixa.length > 0 ? fluxoCaixa[fluxoCaixa.length - 1]?.entrada ?? 0 : 0
@@ -133,7 +135,7 @@ export default function AdminFinanceiroPage() {
     <div className="space-y-6">
       <PageHeader
         title="Financeiro"
-        description="Visao geral financeira do programa de indicacoes"
+        description="Saldo atual é cumulativo. Os gráficos mensais respeitam o período escolhido."
       >
         <div className="flex gap-2">
           <Button variant="outline" asChild>
@@ -147,6 +149,7 @@ export default function AdminFinanceiroPage() {
           </Button>
         </div>
       </PageHeader>
+      <PeriodFilter />
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
@@ -171,9 +174,9 @@ export default function AdminFinanceiroPage() {
           variant="warning"
         />
         <StatCard
-          title="Saldo Disponivel"
+          title="Saldo atual"
           value={`R$ ${Math.max(0, totalGeral - totalPago).toLocaleString("pt-BR")}`}
-          subtitle="Para pagamento"
+          subtitle="Cumulativo, sem filtro mensal"
           icon={Wallet}
         />
       </div>
@@ -187,19 +190,15 @@ export default function AdminFinanceiroPage() {
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={monthlyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="mes" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
+                  <XAxis dataKey="mes" stroke={chartAxis.stroke} fontSize={12} />
+                  <YAxis stroke={chartAxis.stroke} fontSize={12} />
                   <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                     formatter={(value: number) => `R$ ${value.toLocaleString("pt-BR")}`}
                   />
-                  <Bar dataKey="pago" fill="hsl(var(--success))" radius={[4, 4, 0, 0]} name="Pago" />
-                  <Bar dataKey="pendente" fill="hsl(var(--warning))" radius={[4, 4, 0, 0]} name="Pendente" />
+                  <Bar dataKey="pago" fill={chartColor(2)} radius={[4, 4, 0, 0]} name="Pago" />
+                  <Bar dataKey="pendente" fill={chartColor(1)} radius={[4, 4, 0, 0]} name="Pendente" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -222,19 +221,16 @@ export default function AdminFinanceiroPage() {
                     outerRadius={100}
                     paddingAngle={5}
                     dataKey="value"
-                    label={({ name, value }) => `${name}: ${value}`}
+                    nameKey="name"
                   >
                     {statusData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
                   <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
+                    contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                   />
+                  <Legend />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -250,31 +246,27 @@ export default function AdminFinanceiroPage() {
           <div className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={fluxoCaixa}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="mes" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
+                <XAxis dataKey="mes" stroke={chartAxis.stroke} fontSize={12} />
+                <YAxis stroke={chartAxis.stroke} fontSize={12} />
                 <Tooltip
-                  contentStyle={{
-                    backgroundColor: "hsl(var(--card))",
-                    border: "1px solid hsl(var(--border))",
-                    borderRadius: "8px",
-                  }}
+                  contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                   formatter={(value: number) => `R$ ${value.toLocaleString("pt-BR")}`}
                 />
                 <Line
                   type="monotone"
                   dataKey="entrada"
-                  stroke="hsl(var(--success))"
+                  stroke={chartColor(2)}
                   strokeWidth={2}
-                  dot={{ fill: "hsl(var(--success))" }}
+                  dot={{ fill: chartColor(2) }}
                   name="Volume (pago + pendente)"
                 />
                 <Line
                   type="monotone"
                   dataKey="saida"
-                  stroke="hsl(var(--destructive))"
+                  stroke={chartColor(4)}
                   strokeWidth={2}
-                  dot={{ fill: "hsl(var(--destructive))" }}
+                  dot={{ fill: chartColor(4) }}
                   name="Pago no mes"
                 />
               </LineChart>

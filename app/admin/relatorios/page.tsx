@@ -21,7 +21,9 @@ import {
   loadAdminReferralsFromSupabase,
 } from "@/lib/services/supabase-data.service"
 import { Download, TrendingUp, Users, DollarSign, FileText, BarChart3, PieChart as PieChartIcon } from "lucide-react"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, Legend } from "recharts"
+import { PeriodFilter } from "@/components/period/period-filter"
+import { chartAxis, chartColor, chartGrid, chartTooltip, pieSlices } from "@/lib/charts/theme"
 import type { Indicacao, Indicador, Comercial, Pagamento } from "@/types"
 
 const MOCK_REPORT_MONTHLY = [
@@ -129,7 +131,7 @@ function statusPieFromIndicacoes(indicacoes: Indicacao[]) {
       color: "#ef4444",
     },
   ]
-  return rows.filter((r) => r.value > 0)
+  return pieSlices(rows)
 }
 
 function comercialRanking(comerciais: Comercial[]) {
@@ -284,8 +286,9 @@ export default function AdminRelatoriosPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <PageHeader
           title="Relatórios"
-          description="Análises e métricas detalhadas do sistema"
+          description="Métricas do período selecionado. O saldo atual permanece cumulativo."
         />
+        <PeriodFilter />
         <div className="flex items-center gap-2">
           <Select value={periodo} onValueChange={setPeriodo}>
             <SelectTrigger className="w-[150px]">
@@ -348,18 +351,14 @@ export default function AdminRelatoriosPage() {
                 <div className="h-[300px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={monthlyData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis dataKey="mes" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                      <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
+                      <XAxis dataKey="mes" stroke={chartAxis.stroke} fontSize={12} />
+                      <YAxis stroke={chartAxis.stroke} fontSize={12} />
                       <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "8px",
-                        }}
+                        contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                       />
-                      <Bar dataKey="indicacoes" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} name="Indicações" />
-                      <Bar dataKey="conversoes" fill="hsl(var(--success))" radius={[4, 4, 0, 0]} name="Conversões" />
+                      <Bar dataKey="indicacoes" fill={chartColor(0)} radius={[4, 4, 0, 0]} name="Indicações" />
+                      <Bar dataKey="conversoes" fill={chartColor(2)} radius={[4, 4, 0, 0]} name="Conversões" />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -387,19 +386,16 @@ export default function AdminRelatoriosPage() {
                           outerRadius={100}
                           paddingAngle={5}
                           dataKey="value"
-                          label={({ name, value }) => `${name}: ${value}`}
+                          nameKey="name"
                         >
                           {statusData.map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.color} />
                           ))}
                         </Pie>
                         <Tooltip
-                          contentStyle={{
-                            backgroundColor: "hsl(var(--card))",
-                            border: "1px solid hsl(var(--border))",
-                            borderRadius: "8px",
-                          }}
+                          contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                         />
+                        <Legend />
                       </PieChart>
                     </ResponsiveContainer>
                   ) : (
@@ -424,25 +420,21 @@ export default function AdminRelatoriosPage() {
                 {comercialData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={comercialData} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
+                      <XAxis type="number" stroke={chartAxis.stroke} fontSize={12} />
                       <YAxis
                         dataKey="nome"
                         type="category"
-                        stroke="hsl(var(--muted-foreground))"
+                        stroke={chartAxis.stroke}
                         fontSize={12}
                         width={100}
                       />
                       <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "8px",
-                        }}
+                        contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                       />
                       <Bar
                         dataKey="conversoes"
-                        fill="hsl(var(--primary))"
+                        fill={chartColor(0)}
                         radius={[0, 4, 4, 0]}
                         name="Conversões"
                       />
@@ -469,15 +461,11 @@ export default function AdminRelatoriosPage() {
                 {planoData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={planoData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis dataKey="plano" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                      <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
+                      <XAxis dataKey="plano" stroke={chartAxis.stroke} fontSize={12} />
+                      <YAxis stroke={chartAxis.stroke} fontSize={12} />
                       <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "8px",
-                        }}
+                        contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                       />
                       <Bar dataKey="quantidade" radius={[4, 4, 0, 0]} name="Quantidade">
                         {planoData.map((entry, index) => (
@@ -506,26 +494,22 @@ export default function AdminRelatoriosPage() {
               <div className="h-[400px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={monthlyData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="mes" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
+                    <XAxis dataKey="mes" stroke={chartAxis.stroke} fontSize={12} />
                     <YAxis
-                      stroke="hsl(var(--muted-foreground))"
+                      stroke={chartAxis.stroke}
                       fontSize={12}
                       tickFormatter={(value) => `R$ ${value}`}
                     />
                     <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "8px",
-                      }}
+                      contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                       formatter={(value: number) => [`R$ ${value.toLocaleString("pt-BR")}`, "Valor Pago"]}
                     />
                     <Area
                       type="monotone"
                       dataKey="valor"
-                      stroke="hsl(var(--success))"
-                      fill="hsl(var(--success) / 0.2)"
+                      stroke={chartColor(2)}
+                      fill={chartColor(2)}
                       name="Valor Pago"
                     />
                   </AreaChart>

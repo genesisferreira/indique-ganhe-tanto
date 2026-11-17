@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
-import { adminIndicacoesHttp } from "@/lib/admin-legacy/admin-list-api"
+import { adminIndicacoesHttp, adminIndicacoesPageHttp } from "@/lib/admin-legacy/admin-list-api"
 import type { AdminReadClient } from "@/lib/services/supabase-data.service"
 
 /**
@@ -13,6 +13,8 @@ export const dynamic = "force-dynamic"
 
 export async function GET(request: Request) {
   const supabase = (await createClient()) as unknown as AdminReadClient
-  const result = await adminIndicacoesHttp(supabase, request.signal)
+  const url = new URL(request.url)
+  const paged = url.searchParams.has("page") || url.searchParams.has("month") || url.searchParams.has("period") || url.searchParams.has("from")
+  const result = paged ? await adminIndicacoesPageHttp(supabase, url, request.signal) : await adminIndicacoesHttp(supabase, request.signal)
   return NextResponse.json(result.body, { status: result.status, headers: { "Cache-Control": "no-store" } })
 }

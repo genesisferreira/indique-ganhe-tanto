@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,7 +13,10 @@ import {
 } from "@/hooks/use-supabase-realtime"
 import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle, Globe } from "lucide-react"
 import type { PublicPreRegistrationMetrics } from "@/lib/public-pre-registration/dashboard"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } from "recharts"
+import { PeriodFilter } from "@/components/period/period-filter"
+import { chartAxis, chartColor, chartGrid, chartIsEmpty, chartTooltip, pieSlices } from "@/lib/charts/theme"
+import { currentMonthKey } from "@/lib/period/range"
 
 function isDev(): boolean {
   return process.env.NODE_ENV === "development"
@@ -39,6 +43,8 @@ const EMPTY_ADMIN_DASHBOARD: AdminDashboardMetrics = {
 }
 
 export default function AdminDashboard() {
+  const searchParams = useSearchParams()
+  const [periodLabel, setPeriodLabel] = useState(currentMonthKey())
   const fallbackMetrics: AdminDashboardMetrics = {
     totalReferrals: 157,
     pendingReferrals: 12,
@@ -79,6 +85,42 @@ export default function AdminDashboard() {
     useState<PublicPreRegistrationMetrics | null>(null)
 
   const loadMetrics = useCallback(async () => {
+    if (!isDataProviderMock()) {
+      const params = new URLSearchParams(searchParams.toString())
+      if (!params.get("month") && !params.get("period") && !params.get("from")) params.set("month", currentMonthKey())
+      const response = await fetch(`/api/admin/dashboard?${params.toString()}`, { cache: "no-store", credentials: "same-origin" })
+      if (response.ok) {
+        const data = await response.json() as {
+          ok?: boolean
+          periodLabel?: string
+          totalReferrals?: number
+          pendingReferrals?: number
+          inAttendanceReferrals?: number
+          approvedReferrals?: number
+          rejectedReferrals?: number
+          paidValue?: number
+          pendingValue?: number
+          pendingCount?: number
+          currentBalance?: number
+        }
+        if (data.ok) {
+          setPeriodLabel(data.periodLabel ?? currentMonthKey())
+          setDashboardMetrics({
+            ...EMPTY_ADMIN_DASHBOARD,
+            totalReferrals: data.totalReferrals ?? 0,
+            pendingReferrals: data.pendingReferrals ?? 0,
+            inAttendanceReferrals: data.inAttendanceReferrals ?? 0,
+            approvedReferrals: data.approvedReferrals ?? 0,
+            rejectedReferrals: data.rejectedReferrals ?? 0,
+            pendingPaymentsCount: data.pendingCount ?? 0,
+            pendingPaymentsValue: Number(data.pendingValue ?? 0),
+            totalPaidValue: Number(data.paidValue ?? 0),
+            monthlyData: [{ mes: data.periodLabel ?? "Período", indicacoes: data.totalReferrals ?? 0, conversoes: data.approvedReferrals ?? 0 }],
+          })
+          return
+        }
+      }
+    }
     const metricsFromSupabase = await loadAdminDashboardMetricsFromSupabase()
 
     if (!isDataProviderMock()) {
@@ -123,11 +165,11 @@ export default function AdminDashboard() {
       console.log("[admin-dashboard] métricas recebidas do Supabase", metricsFromSupabase)
     }
     setDashboardMetrics(metricsFromSupabase)
-  }, [])
+  }, [searchParams])
 
   useEffect(() => {
     void loadMetrics()
-  }, [loadMetrics])
+  }, [loadMetrics, searchParams])
 
   useRealtimeReload(loadMetrics, REALTIME_TABLES_ADMIN, {
     enabled: !isDataProviderMock(),
@@ -144,12 +186,12 @@ export default function AdminDashboard() {
   const totalPendente = dashboardMetrics.pendingPaymentsValue
   const totalPago = dashboardMetrics.totalPaidValue
 
-  const statusData = [
-    { name: "Pendente", value: dashboardMetrics.pendingReferrals, color: "#f59e0b" },
-    { name: "Em Andamento", value: dashboardMetrics.inAttendanceReferrals, color: "#3b82f6" },
-    { name: "Aprovada", value: dashboardMetrics.approvedReferrals, color: "#22c55e" },
-    { name: "Recusada", value: dashboardMetrics.rejectedReferrals, color: "#ef4444" },
-  ]
+  const statusData = pieSlices([
+    { name: "Pendente", value: dashboardMetrics.pendingReferrals, color: chartColor(0) },
+    { name: "Em Andamento", value: dashboardMetrics.inAttendanceReferrals, color: chartColor(1) },
+    { name: "Aprovada", value: dashboardMetrics.approvedReferrals, color: chartColor(2) },
+    { name: "Recusada", value: dashboardMetrics.rejectedReferrals, color: chartColor(4) },
+  ])
   const monthlyData = dashboardMetrics.monthlyData
   const topIndicadores = dashboardMetrics.topIndicadores
 
@@ -166,8 +208,9 @@ export default function AdminDashboard() {
     <div className="space-y-6">
       <PageHeader
         title="Dashboard Administrativo"
-        description="Visao geral completa do sistema de indicacoes"
+        description={`Período: ${periodLabel}. O saldo contábil atual permanece cumulativo.`}
       />
+      <PeriodFilter />
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
@@ -260,34 +303,16 @@ export default function AdminDashboard() {
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
+              {chartIsEmpty(monthlyData) ? <p className="text-sm text-muted-foreground">Sem séries neste período.</p> : null}
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={monthlyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="mes" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="indicacoes"
-                    stroke="hsl(var(--primary))"
-                    strokeWidth={2}
-                    dot={{ fill: "hsl(var(--primary))" }}
-                    name="Indicacoes"
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="conversoes"
-                    stroke="hsl(var(--success))"
-                    strokeWidth={2}
-                    dot={{ fill: "hsl(var(--success))" }}
-                    name="Conversoes"
-                  />
+                <LineChart data={monthlyData} aria-label="Indicações e conversões do período">
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
+                  <XAxis dataKey="mes" stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} />
+                  <YAxis stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} />
+                  <Tooltip {...chartTooltip} />
+                  <Legend />
+                  <Line type="monotone" dataKey="indicacoes" stroke={chartColor(0)} strokeWidth={2} dot={{ fill: chartColor(0) }} name="Indicacoes" />
+                  <Line type="monotone" dataKey="conversoes" stroke={chartColor(2)} strokeWidth={2} dot={{ fill: chartColor(2) }} name="Conversoes" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -310,19 +335,14 @@ export default function AdminDashboard() {
                     outerRadius={100}
                     paddingAngle={5}
                     dataKey="value"
-                    label={({ name, value }) => `${name}: ${value}`}
+                    nameKey="name"
                   >
                     {statusData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
-                  />
+                  <Tooltip {...chartTooltip} />
+                  <Legend />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -339,17 +359,11 @@ export default function AdminDashboard() {
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={topIndicadores} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                  <YAxis dataKey="nome" type="category" stroke="hsl(var(--muted-foreground))" fontSize={12} width={80} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
-                  />
-                  <Bar dataKey="conversoes" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} name="Conversoes" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
+                  <XAxis type="number" stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} />
+                  <YAxis dataKey="nome" type="category" stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} width={80} />
+                  <Tooltip {...chartTooltip} />
+                  <Bar dataKey="conversoes" fill={chartColor(0)} radius={[0, 4, 4, 0]} name="Conversoes" />
                 </BarChart>
               </ResponsiveContainer>
             </div>

@@ -2,6 +2,7 @@ import {
   AUTH_DELETE_CONFIRMATION,
   BULK_LIMIT,
   DEACTIVATE_CONFIRMATION,
+  FINANCE_CONFIRMATION,
   INDICATOR_CONFIRMATION,
   REFERRAL_CONFIRMATION,
   bulkConfirmation,
@@ -54,7 +55,7 @@ export async function runDeletion(
   }
   const allowed = action.startsWith("preview")
     ? ["referralId", "referralIds", "indicatorId"]
-    : ["referralId", "referralIds", "indicatorId", "reason", "confirmation", "idempotencyKey", "mode", "authConfirmation"]
+    : ["referralId", "referralIds", "indicatorId", "reason", "confirmation", "idempotencyKey", "mode", "authConfirmation", "financeConfirmation"]
   if (Object.keys(body).some((key) => !allowed.includes(key))) return deletionError("unknown_field")
   if (!client) return deletionError("unavailable", 503)
 
@@ -91,11 +92,16 @@ export async function runDeletion(
     if (body.authConfirmation === AUTH_DELETE_CONFIRMATION && !(kind === "commit_indicator" && body.mode === "hard_delete")) {
       return deletionError("auth_confirmation_mismatch")
     }
+    if (body.financeConfirmation != null && body.financeConfirmation !== FINANCE_CONFIRMATION) {
+      return deletionError("finance_confirmation_mismatch")
+    }
+    const sendsFinance = kind === "delete_referral" || kind === "delete_bulk" || (kind === "commit_indicator" && body.mode === "hard_delete")
     args = {
       ...args,
       p_reason: body.reason.trim(),
       p_confirmation: confirmation,
       p_idempotency_key: body.idempotencyKey,
+      ...(sendsFinance ? { p_finance_confirmation: body.financeConfirmation ?? null } : {}),
       ...(kind === "commit_indicator" ? { p_mode: body.mode, p_auth_confirmation: body.authConfirmation ?? null } : {}),
     }
   }

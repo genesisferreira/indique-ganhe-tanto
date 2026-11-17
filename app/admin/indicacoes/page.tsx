@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import {
   emitReferralDataMutated,
@@ -37,6 +37,8 @@ import {
 import { Search, Eye, MoreHorizontal, UserPlus, RefreshCw } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ControlledDeletionButton } from "@/components/admin/controlled-deletion"
+import { PeriodFilter } from "@/components/period/period-filter"
+import { currentMonthKey } from "@/lib/period/range"
 import { CommercialSlaOverdueBadge } from "@/components/commercial/commercial-sla-overdue-badge"
 import { CommercialRedistributedBadge } from "@/components/commercial/commercial-redistributed-badge"
 import { devLogCommercialSla } from "@/lib/commercial-sla"
@@ -64,10 +66,14 @@ const STATUS_ALTERAR_OPCOES: IndicacaoStatus[] = [
   "recusada",
 ]
 
+type ReferralPageMeta = { label: string; total: number; page: number; pageSize: number; from: number; to: number; pages: number }
+
 export default function AdminIndicacoesPage() {
   const router = useRouter()
-  const [search, setSearch] = useState("")
-  const [statusFilter, setStatusFilter] = useState<string>("todos")
+  const searchParams = useSearchParams()
+  const [search, setSearch] = useState(searchParams.get("q") ?? "")
+  const [pageMeta, setPageMeta] = useState<ReferralPageMeta | null>(null)
+  const [statusFilter, setStatusFilter] = useState<string>(searchParams.get("status") ?? "todos")
   const [lista, setLista] = useState<Indicacao[]>([])
   const [comerciaisLista, setComerciaisLista] = useState<Comercial[]>([])
   const [comerciaisDisponiveis, setComerciaisDisponiveis] = useState(true)
@@ -81,6 +87,7 @@ export default function AdminIndicacoesPage() {
 
   // 3.1F-K1: um carregamento lógico = uma resolução de identidade (auth.getUser 1×).
   // Estados explícitos; erro/timeout nunca viram "zero indicações"; sem retry automático.
+  const listQuery = searchParams.toString()
   const loadBundle = useCallback(async ({ signal }: { signal: AbortSignal }) => {
     if (isDataProviderMock()) {
       const bundle: AdminIndicacoesBundle = {
@@ -93,9 +100,24 @@ export default function AdminIndicacoesPage() {
     }
     // 3.1F-K1S: leitura via /api/admin/indicacoes (sessão do usuário no servidor; sem lock de auth do
     // navegador). O signal do carregamento cancela o fetch real (timeout/desmontagem/retry).
-    return fetchIndicacoesPageOutcome(signal)
-  }, [])
-  const { state, reload, retry } = useGuardedLoader<AdminIndicacoesBundle>(loadBundle, "admin-indicacoes")
+    const params = new URLSearchParams(listQuery)
+    if (!params.get("month") && !params.get("period") && !params.get("from")) params.set("month", currentMonthKey())
+    if (!params.get("page")) params.set("page", "1")
+    if (!params.get("pageSize")) params.set("pageSize", "20")
+    const response = await fetch(`/api/admin/indicacoes?${params.toString()}`, { signal, cache: "no-store", credentials: "same-origin" })
+    if (!response.ok) return fetchIndicacoesPageOutcome(signal)
+    const body = await response.json() as { ok?: boolean; role?: string; comerciais?: Comercial[]; comerciaisDisponiveis?: boolean; page?: ReferralPageMeta & { items?: Indicacao[] } }
+    if (!body.ok || !body.page || !Array.isArray(body.page.items)) return fetchIndicacoesPageOutcome(signal)
+    setPageMeta(body.page)
+    const bundle: AdminIndicacoesBundle = {
+      lista: body.page.items,
+      comerciais: body.comerciais ?? [],
+      comerciaisDisponiveis: body.comerciaisDisponiveis === true,
+      role: (body.role ?? "admin_consulta") as UserRole,
+    }
+    return dataOutcome(bundle, bundle.lista.length === 0)
+  }, [listQuery])
+  const { state, reload, retry } = useGuardedLoader<AdminIndicacoesBundle>(loadBundle, `admin-indicacoes:${listQuery}`)
   const carregando = state.status === "idle" || state.status === "loading"
 
   useEffect(() => {
@@ -145,13 +167,31 @@ export default function AdminIndicacoesPage() {
     router.refresh()
   }, [loadAdminReferrals, router])
 
-  const filteredIndicacoes = lista.filter((indicacao: Indicacao) => {
-    const matchesSearch =
-      (indicacao.nomeIndicado ?? "").toLowerCase().includes(search.toLowerCase()) ||
-      (indicacao.telefoneIndicado ?? "").includes(search)
-    const matchesStatus = statusFilter === "todos" || indicacao.status === statusFilter
-    return matchesSearch && matchesStatus
-  })
+  const filteredIndicacoes = pageMeta
+    ? lista
+    : lista.filter((indicacao: Indicacao) => {
+        const matchesSearch =
+          (indicacao.nomeIndicado ?? "").toLowerCase().includes(search.toLowerCase()) ||
+          (indicacao.telefoneIndicado ?? "").includes(search)
+        const matchesStatus = statusFilter === "todos" || indicacao.status === statusFilter
+        return matchesSearch && matchesStatus
+      })
+
+  useEffect(() => {
+    if (isDataProviderMock()) return
+    const timer = window.setTimeout(() => {
+      const next = new URLSearchParams(searchParams.toString())
+      if (search.trim().length >= 2) next.set("q", search.trim())
+      else next.delete("q")
+      if (statusFilter !== "todos") next.set("status", statusFilter)
+      else next.delete("status")
+      if (!next.get("month") && !next.get("period") && !next.get("from")) next.set("month", currentMonthKey())
+      if (next.get("q") !== (search.trim().length >= 2 ? search.trim() : null) || next.get("status") !== (statusFilter === "todos" ? null : statusFilter)) next.set("page", "1")
+      if (!next.get("page")) next.set("page", "1")
+      if (next.toString() !== searchParams.toString()) router.replace(`/admin/indicacoes?${next.toString()}`, { scroll: false })
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [search, statusFilter, isDataProviderMock, router, searchParams])
 
   const getIndicadorNome = (indicacao: Indicacao) => {
     if (
@@ -323,7 +363,7 @@ export default function AdminIndicacoesPage() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem asChild>
-              <Link href={`/admin/indicacoes/${indicacao.id}`}>
+              <Link href={`/admin/indicacoes/${indicacao.id}?${searchParams.toString()}`}>
                 <Eye className="mr-2 h-4 w-4" />
                 Ver Detalhes
               </Link>
@@ -396,6 +436,7 @@ export default function AdminIndicacoesPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle className="text-lg">Lista de Indicações</CardTitle>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <PeriodFilter />
               <div className="relative">
                 <Label htmlFor="indicacoes-busca" className="sr-only">
                   Buscar indicações por nome ou telefone
@@ -461,7 +502,8 @@ export default function AdminIndicacoesPage() {
                 </p>
               ) : null}
               {canDelete ? (
-                <div className="mb-3">
+                <div className="mb-3 space-y-1">
+                  <p className="text-xs text-muted-foreground">A seleção vale somente para as linhas marcadas. Não inclui as outras páginas.</p>
                   <ControlledDeletionButton
                     kind="bulk"
                     ids={selectedIds}
@@ -474,17 +516,60 @@ export default function AdminIndicacoesPage() {
                   />
                 </div>
               ) : null}
+              <div className="mb-3 grid gap-2 md:hidden">
+                {filteredIndicacoes.map((indicacao) => (
+                  <article key={indicacao.id} className="rounded-lg border p-3">
+                    <p className="font-medium">{indicacao.nomeIndicado}</p>
+                    <p className="text-sm text-muted-foreground">{indicacao.telefoneIndicado}</p>
+                    <p className="text-sm">{indicacao.plano?.nome || "Plano não informado"}</p>
+                    <StatusBadge status={indicacao.status} />
+                  </article>
+                ))}
+              </div>
               <DataTable
                 key={dataVersion}
+                className="hidden md:block"
+                stickyHeader
                 data={filteredIndicacoes}
                 getRowKey={(i) => i.id}
                 columns={columns}
                 emptyMessage={
                   lista.length === 0
-                    ? "Nenhuma indicação cadastrada."
+                    ? "Nenhuma indicação cadastrada neste período."
                     : "Nenhuma indicação corresponde aos filtros."
                 }
               />
+              {pageMeta ? (
+                <div className="mt-3 flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+                  <p>Página {pageMeta.page} de {pageMeta.pages}. Exibindo {pageMeta.from}–{pageMeta.to} de {pageMeta.total}. Período: {pageMeta.label}.</p>
+                  <div className="flex gap-2">
+                    <Button type="button" variant="outline" size="sm" disabled={pageMeta.page <= 1} onClick={() => {
+                      const next = new URLSearchParams(searchParams.toString())
+                      next.set("page", String(pageMeta.page - 1))
+                      router.replace(`/admin/indicacoes?${next.toString()}`, { scroll: false })
+                    }}>Anterior</Button>
+                    <Button type="button" variant="outline" size="sm" disabled={pageMeta.page >= pageMeta.pages} onClick={() => {
+                      const next = new URLSearchParams(searchParams.toString())
+                      next.set("page", String(pageMeta.page + 1))
+                      router.replace(`/admin/indicacoes?${next.toString()}`, { scroll: false })
+                    }}>Próxima</Button>
+                    <Select value={String(pageMeta.pageSize)} onValueChange={(value) => {
+                      const next = new URLSearchParams(searchParams.toString())
+                      next.set("pageSize", value)
+                      next.set("page", "1")
+                      router.replace(`/admin/indicacoes?${next.toString()}`, { scroll: false })
+                    }}>
+                      <SelectTrigger className="w-[110px]" aria-label="Itens por página"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="20">20</SelectItem>
+                        <SelectItem value="50">50</SelectItem>
+                        <SelectItem value="100">100</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => router.replace(`/admin/indicacoes?month=${currentMonthKey()}&page=1&pageSize=20`, { scroll: false })}>Limpar filtros</Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : (
             <LoaderStatus

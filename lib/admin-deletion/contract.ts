@@ -10,21 +10,24 @@ export const DELETION_BLOCKED_ROLES = [
   "funcionario",
 ] as const satisfies readonly UserRole[]
 
-export const REFERRAL_CONFIRMATION = "EXCLUIR INDICAÇÃO"
+export const REFERRAL_CONFIRMATION = "EXCLUIR INDICACAO"
 export const INDICATOR_CONFIRMATION = "EXCLUIR INDICADOR"
+export const BULK_CONFIRMATION = "EXCLUIR SELECIONADOS"
+export const FINANCE_CONFIRMATION = "EXCLUIR HISTORICO FINANCEIRO DE TESTE"
 export const DEACTIVATE_CONFIRMATION = "DESATIVAR REGISTRO"
 export const AUTH_DELETE_CONFIRMATION = "EXCLUIR CONTA DE ACESSO"
 export const PRESERVE_MESSAGE = "Registro preservado por vínculo financeiro"
 export const CONTROLLR_WARNING = "O cadastro no Controllr não será apagado"
 export const BULK_LIMIT = 20
 export const MIN_REASON = 20
+export const REAL_REASON_MIN = 40
 
 export function isDeletionAuthorizedRole(role: string | null | undefined): boolean {
   return role === "admin_master"
 }
 
-export function bulkConfirmation(count: number): string {
-  return `EXCLUIR ${count} REGISTROS`
+export function bulkConfirmation(_count?: number): string {
+  return BULK_CONFIRMATION
 }
 
 export function reasonIssue(reason: string): "ok" | "short" | "digits" {
@@ -46,6 +49,12 @@ export function parseUuidList(ids: unknown): string[] | null {
   return out
 }
 
+export type DeletionClass =
+  | "TESTE_SEM_FINANCEIRO"
+  | "TESTE_COM_FINANCEIRO_INTERNO"
+  | "REGISTRO_REAL_SEM_PAGAMENTO_EXTERNO"
+  | "REGISTRO_COM_PAGAMENTO_EXTERNO"
+
 export type ReferralGateInput = {
   rewards: number
   wallet: number
@@ -58,25 +67,35 @@ export type ReferralGateInput = {
   pendingFinancial: number
   financeAudit: number
   sharedDependency: number
+  externalPayment: boolean
   testRecord: boolean
+}
+
+export function classifyDeletion(input: Pick<ReferralGateInput, "testRecord" | "rewards" | "wallet" | "payments" | "externalPayment">): DeletionClass {
+  if (input.externalPayment) return "REGISTRO_COM_PAGAMENTO_EXTERNO"
+  const internal = input.rewards + input.wallet + input.payments > 0
+  if (input.testRecord && internal) return "TESTE_COM_FINANCEIRO_INTERNO"
+  if (input.testRecord) return "TESTE_SEM_FINANCEIRO"
+  return "REGISTRO_REAL_SEM_PAGAMENTO_EXTERNO"
 }
 
 export function referralBlockers(input: ReferralGateInput): string[] {
   const blockers: string[] = []
-  if (input.rewards > 0) blockers.push("reward")
-  if (input.wallet > 0) blockers.push("wallet")
-  if (input.payments > 0) blockers.push("payment")
-  if (input.withdrawals > 0) blockers.push("withdrawal")
+  if (input.externalPayment) blockers.push("external_payment")
   if (input.entitlements > 0) blockers.push("entitlement")
   if (input.competences > 0) blockers.push("competence")
-  if (input.financialAttributions > 0) blockers.push("financial_attribution")
-  if (input.contractOrInvoice > 0) blockers.push("contract_or_invoice")
-  if (input.pendingFinancial > 0) blockers.push("pending_financial")
-  if (input.financeAudit > 0) blockers.push("finance_audit")
   if (input.sharedDependency > 0) blockers.push("shared_dependency")
   return blockers
 }
 
-export function canHardDelete(input: ReferralGateInput, reason: string): boolean {
-  return referralBlockers(input).length === 0 && (input.testRecord || reasonIssue(reason) === "ok")
+export function financeConfirmationRequired(input: ReferralGateInput): boolean {
+  return !input.externalPayment && input.rewards + input.wallet + input.payments > 0 && referralBlockers(input).length === 0
+}
+
+export function canHardDelete(input: ReferralGateInput, reason: string, financeConfirmation?: string | null): boolean {
+  if (referralBlockers(input).length > 0 || reasonIssue(reason) !== "ok") return false
+  const classification = classifyDeletion(input)
+  if (classification === "REGISTRO_REAL_SEM_PAGAMENTO_EXTERNO" && reason.trim().length < REAL_REASON_MIN) return false
+  if (financeConfirmationRequired(input) && financeConfirmation !== FINANCE_CONFIRMATION) return false
+  return true
 }

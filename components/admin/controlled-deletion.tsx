@@ -11,6 +11,7 @@ import {
   AUTH_DELETE_CONFIRMATION,
   CONTROLLR_WARNING,
   DEACTIVATE_CONFIRMATION,
+  FINANCE_CONFIRMATION,
   INDICATOR_CONFIRMATION,
   PRESERVE_MESSAGE,
   REFERRAL_CONFIRMATION,
@@ -54,6 +55,7 @@ export function ControlledDeletionButton({
   const [reason, setReason] = useState("")
   const [confirmation, setConfirmation] = useState("")
   const [authConfirmation, setAuthConfirmation] = useState("")
+  const [financeConfirmation, setFinanceConfirmation] = useState("")
   const [dropAuth, setDropAuth] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -71,6 +73,7 @@ export function ControlledDeletionButton({
     setReason("")
     setConfirmation("")
     setAuthConfirmation("")
+    setFinanceConfirmation("")
     setDropAuth(false)
     setMessage(null)
     setPreview(null)
@@ -100,7 +103,7 @@ export function ControlledDeletionButton({
         setMessage("A confirmação digitada não confere.")
         return
       }
-      const common = { reason, confirmation: phrase, idempotencyKey: keyRef.current }
+      const common = { reason, confirmation: phrase, idempotencyKey: keyRef.current, financeConfirmation: financeConfirmation || null }
       const action = mode === "deactivate"
         ? kind === "indicator" ? "commit_indicator" : "deactivate_referral"
         : kind === "indicator" ? "commit_indicator" : kind === "bulk" ? "delete_bulk" : "delete_referral"
@@ -113,8 +116,10 @@ export function ControlledDeletionButton({
       if (!result.ok) {
         setMessage(result.body?.code === "confirmation_mismatch"
           ? "A confirmação digitada não confere."
-          : result.body?.code === "reason_invalid"
-            ? "Informe um motivo com pelo menos 20 caracteres, sem documento ou e-mail."
+          : result.body?.code === "reason_invalid" || result.body?.code === "reason_too_short"
+            ? "Informe um motivo detalhado, sem documento ou e-mail. Registro real exige pelo menos 40 caracteres."
+            : result.body?.code === "finance_confirmation_required" || result.body?.code === "finance_confirmation_mismatch"
+              ? "A limpeza financeira exige a confirmação adicional."
             : "A exclusão não foi concluída. Nenhum dado financeiro foi apagado.")
         return
       }
@@ -143,6 +148,8 @@ export function ControlledDeletionButton({
               {preview.controllrInterest === true || preview.controllrWarning ? <p className="font-medium">{CONTROLLR_WARNING}</p> : null}
               {blocked ? <p>{PRESERVE_MESSAGE}</p> : <p>A exclusão definitiva está disponível. O Controllr não será alterado.</p>}
               <ul className="grid gap-1 text-muted-foreground">
+                {preview.classification ? <li>Classificação: {String(preview.classification)}</li> : null}
+                {preview.externalPayment === true ? <li>Pagamento externo comprovado: sim</li> : <li>Pagamento externo comprovado: não</li>}
                 {preview.masked ? <li>Indicação: {String(preview.masked)}</li> : null}
                 {preview.origin ? <li>Origem: {String(preview.origin)}</li> : null}
                 {preview.originatorMasked ? <li>Originador: {String(preview.originatorMasked)}</li> : null}
@@ -165,6 +172,12 @@ export function ControlledDeletionButton({
                 <Label htmlFor="deletion-reason">Motivo</Label>
                 <Textarea id="deletion-reason" value={reason} onChange={(event) => setReason(event.target.value)} />
               </div>
+              {preview.financeConfirmationRequired === true && !blocked ? (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="deletion-finance-confirmation">Digite {FINANCE_CONFIRMATION}</Label>
+                  <Input id="deletion-finance-confirmation" value={financeConfirmation} onChange={(event) => setFinanceConfirmation(event.target.value)} autoComplete="off" />
+                </div>
+              ) : null}
               <div className="grid gap-1.5">
                 <Label htmlFor="deletion-confirmation">Digite {blocked ? DEACTIVATE_CONFIRMATION : expected}</Label>
                 <Input id="deletion-confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" />

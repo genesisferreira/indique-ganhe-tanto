@@ -2,7 +2,7 @@
 
 import { use, useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/ui/page-header"
 import { ControlledDeletionButton } from "@/components/admin/controlled-deletion"
@@ -76,6 +76,7 @@ export default function AdminIndicacaoDetalhePage({
 }) {
   const { id } = use(params)
   const router = useRouter()
+  const listQuery = useSearchParams().toString()
 
   const mockIndicacao = useMemo(
     () => (isDataProviderMock() ? indicacoes.find((i) => i.id === id) : undefined),
@@ -288,7 +289,7 @@ export default function AdminIndicacaoDetalhePage({
       <div className="flex flex-col items-center justify-center py-20">
         <p className="text-muted-foreground mb-4">Indicação não encontrada</p>
         <Button asChild variant="outline">
-          <Link href="/admin/indicacoes">Voltar</Link>
+          <Link href={`/admin/indicacoes?${listQuery}`}>Voltar</Link>
         </Button>
       </div>
     )
@@ -320,7 +321,7 @@ export default function AdminIndicacaoDetalhePage({
     <div className="space-y-6">
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="sm" asChild>
-          <Link href="/admin/indicacoes">
+          <Link href={`/admin/indicacoes?${listQuery}`}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Voltar
           </Link>
