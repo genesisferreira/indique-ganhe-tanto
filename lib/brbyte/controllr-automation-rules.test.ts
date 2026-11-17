@@ -11,6 +11,7 @@ import {
   PARTIAL_PAYMENT_BLOCKS_REWARD,
   PERCENTAGE_COMMISSION_ENABLED,
   REWARD_AMOUNT_SOURCE,
+  buildOfficialContractWhere,
   buildOfficialInvoiceWhere,
   classifyTransport,
   creditDateProvesIndicatorPayment,
@@ -43,6 +44,11 @@ describe("filtro oficial", () => {
     assert.deepEqual(where[2], { field: "invoice.contract_pk", oper: INVOICE_EQUAL_OPER, value: 20 })
     assert.deepEqual(where[4], { field: "invoice_deleted", oper: INVOICE_IS_OPER, value: false })
     assert.equal(JSON.stringify(where).includes('"oper":7,"value":20'), false)
+    const contractWhere = buildOfficialContractWhere(client)
+    assert.deepEqual(contractWhere, [
+      { field: "client.client_pk", oper: INVOICE_EQUAL_OPER, value: 10 },
+    ])
+    assert.equal(JSON.stringify(contractWhere).includes('"oper":7'), false)
   })
 })
 

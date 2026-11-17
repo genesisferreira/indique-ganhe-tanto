@@ -91,9 +91,7 @@ export function buildOfficialInvoiceWhere(clientPk: string, contractPk: string) 
 
 export function buildOfficialContractWhere(clientPk: string) {
   return [
-    { field: "client_pk", oper: INVOICE_EQUAL_OPER, value: Number(clientPk) },
-    { field: "AND" },
-    { field: "contract_deleted", oper: INVOICE_IS_OPER, value: false },
+    { field: "client.client_pk", oper: INVOICE_EQUAL_OPER, value: Number(clientPk) },
   ]
 }
 
