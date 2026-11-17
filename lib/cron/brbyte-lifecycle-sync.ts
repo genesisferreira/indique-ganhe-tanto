@@ -252,94 +252,106 @@ export async function runBrbyteLifecycleSync(): Promise<BrbyteLifecycleSyncResul
     statuses.push("converted", "waiting_contract", "waiting_invoice")
   }
 
-  const referrals = await loadEligibleReferrals(statuses, batchSize)
   let success = 0
   let errors = 0
   let ignored = 0
+  let cursor: string | null = null
+  let thrown = false
 
-  console.log(LOG_TAG, {
-    step: "start",
-    syncRunId,
-    batchSize,
-    maxAttempts,
-    retryMinutes,
-    candidates: referrals.length,
-    autoConversion,
-    autoInvoice,
-  })
+  try {
+    const referrals = await loadEligibleReferrals(statuses, batchSize)
 
-  for (const row of referrals) {
-    const status = (row.brbyte_sync_status ?? "pending") as BrbyteSyncStatus
-    const attempts =
-      typeof row.brbyte_sync_attempts === "number" ? row.brbyte_sync_attempts : 0
+    console.log(LOG_TAG, {
+      step: "start",
+      syncRunId,
+      batchSize,
+      maxAttempts,
+      retryMinutes,
+      candidates: referrals.length,
+      autoConversion,
+      autoInvoice,
+    })
 
-    if (status === "paid_confirmed" || status === "completed") {
-      ignored += 1
-      continue
-    }
+    for (const row of referrals) {
+      cursor = row.id
+      const status = (row.brbyte_sync_status ?? "pending") as BrbyteSyncStatus
+      const attempts =
+        typeof row.brbyte_sync_attempts === "number" ? row.brbyte_sync_attempts : 0
 
-    if (attempts >= maxAttempts) {
-      ignored += 1
-      continue
-    }
-
-    if (status === "error" || status === "retry") {
-      if (!isRetryReady(row, retryMinutes)) {
+      if (status === "paid_confirmed" || status === "completed") {
         ignored += 1
         continue
       }
-    }
 
-    try {
-      if (status === "created" && autoConversion && isBrbyteSyncEnabled()) {
-        const result = await checkBrbyteInterestConversionFromReferral({
-          referralId: row.id,
-          actorUserId: null,
-          triggeredBy: "cron_automatic",
-        })
-        if (result.ok) success += 1
-        else if (result.skipped) ignored += 1
-        else errors += 1
+      if (attempts >= maxAttempts) {
+        ignored += 1
         continue
       }
 
-      if (
-        autoInvoice &&
-        (status === "converted" ||
-          status === "waiting_contract" ||
-          status === "waiting_invoice")
-      ) {
-        const result = await checkBrbyteFirstInvoiceFromReferral({
-          referralId: row.id,
-          actorUserId: null,
-          triggeredBy: "cron_automatic",
-        })
-        if (result.ok) success += 1
-        else if (result.skipped) ignored += 1
-        else errors += 1
-        continue
+      if (status === "error" || status === "retry") {
+        if (!isRetryReady(row, retryMinutes)) {
+          ignored += 1
+          continue
+        }
       }
 
-      ignored += 1
-    } catch (e) {
-      errors += 1
-      console.error(LOG_TAG, {
-        step: "referral_error",
-        referralId: row.id,
-        message: e instanceof Error ? e.message : String(e),
-      })
+      try {
+        if (status === "created" && autoConversion && isBrbyteSyncEnabled()) {
+          const result = await checkBrbyteInterestConversionFromReferral({
+            referralId: row.id,
+            actorUserId: null,
+            triggeredBy: "cron_automatic",
+          })
+          if (result.ok) success += 1
+          else if (result.skipped) ignored += 1
+          else errors += 1
+          continue
+        }
+
+        if (
+          autoInvoice &&
+          (status === "converted" ||
+            status === "waiting_contract" ||
+            status === "waiting_invoice")
+        ) {
+          const result = await checkBrbyteFirstInvoiceFromReferral({
+            referralId: row.id,
+            actorUserId: null,
+            triggeredBy: "cron_automatic",
+          })
+          if (result.ok) success += 1
+          else if (result.skipped) ignored += 1
+          else errors += 1
+          continue
+        }
+
+        ignored += 1
+      } catch (e) {
+        errors += 1
+        console.error(LOG_TAG, {
+          step: "referral_error",
+          referralId: row.id,
+          message: e instanceof Error ? e.message : String(e),
+        })
+      }
     }
+  } catch (e) {
+    thrown = true
+    errors += 1
+    console.error(LOG_TAG, {
+      step: "phase_error",
+      message: e instanceof Error ? e.message : String(e),
+    })
   }
 
   const durationMs = Date.now() - started
-  const status =
-    errors === 0 ? "ok" : success > 0 ? "partial" : "error"
+  const status = thrown ? "error" : errors === 0 ? "ok" : success > 0 ? "partial" : "error"
 
   await finishLifecycleRun(syncRunId, {
     status,
     phase: "check_conversion",
     api_reachable: true,
-    fetched: referrals.length,
+    fetched: success + errors + ignored,
     processed: success + errors,
     matched: success,
     skipped_records: ignored,
@@ -350,17 +362,19 @@ export async function runBrbyteLifecycleSync(): Promise<BrbyteLifecycleSyncResul
       triggered_by: "cron_automatic",
       auto_conversion: autoConversion,
       auto_first_invoice: autoInvoice,
-      verified: referrals.length,
+      verified: success + errors + ignored,
       success,
       errors,
       ignored,
+      cursor: cursor ?? "none",
+      lease_released: true,
     },
   })
 
   console.log(LOG_TAG, {
     step: "done",
     syncRunId,
-    verified: referrals.length,
+    verified: success + errors + ignored,
     success,
     errors,
     ignored,
@@ -368,11 +382,11 @@ export async function runBrbyteLifecycleSync(): Promise<BrbyteLifecycleSyncResul
   })
 
   return {
-    ok: errors === 0 || success > 0,
+    ok: !thrown && (errors === 0 || success > 0),
     skipped: false,
     durationMs,
     syncRunId,
-    verified: referrals.length,
+    verified: success + errors + ignored,
     success,
     errors,
     ignored,

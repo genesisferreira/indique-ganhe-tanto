@@ -1,6 +1,7 @@
 import "server-only"
 
 import { createBrbyteInterestFromReferral } from "@/lib/brbyte/create-interest.service"
+import { enqueuePreRegistrationInterestOperation } from "@/lib/brbyte/interest-operation"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import {
   getPublicPreRegistrationBaseCrmPlanId,
@@ -389,6 +390,7 @@ export async function submitPublicPreRegistration(
     }
   }
 
+  await enqueuePreRegistrationInterestOperation(referralId)
   const brbyteResult = await createBrbyteInterestFromReferral({
     referralId,
     actorUserId: null,

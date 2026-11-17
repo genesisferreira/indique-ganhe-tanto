@@ -42,45 +42,69 @@ export function logCronBrbyteSyncSkip(payload: unknown): void {
  */
 export async function runBrbyteSyncCron(): Promise<BrbyteSyncCronPayload> {
   const executedAt = new Date().toISOString()
-
+  let interestDispatch: AutomaticInterestDispatchResult
   try {
-    const interestDispatch = await runAutomaticInterestDispatch()
-    const result = await runBrbyteLifecycleSync()
-
-    if (result.skipped) {
-      logCronBrbyteSyncSkip({ executedAt, result, interestDispatch })
-      return {
-        ok: interestDispatch.ok,
-        source: "brbyte-sync-cron",
-        executedAt,
-        result,
-        interestDispatch,
-      }
+    interestDispatch = await runAutomaticInterestDispatch()
+  } catch {
+    interestDispatch = {
+      ok: false,
+      skipped: false,
+      reason: "phase_failed",
+      examined: 0,
+      processed: 0,
+      created: 0,
+      cursor: null,
+      leaseReleased: true,
     }
+  }
 
-    if (!result.ok) {
-      logCronBrbyteSyncError({ executedAt, result, interestDispatch })
-      return {
-        ok: false,
-        source: "brbyte-sync-cron",
-        executedAt,
-        result,
-        interestDispatch,
-        error: result.message ?? result.reason ?? "sync_failed",
-      }
+  let result: BrbyteLifecycleSyncResult
+  try {
+    result = await runBrbyteLifecycleSync()
+  } catch {
+    result = {
+      ok: false,
+      skipped: false,
+      reason: "phase_failed",
+      durationMs: 0,
+      syncRunId: null,
+      verified: 0,
+      success: 0,
+      errors: 1,
+      ignored: 0,
+      message: "Fase financeira isolada após falha.",
     }
+  }
 
-    logCronBrbyteSyncSuccess({ executedAt, result, interestDispatch })
+  if (result.skipped) {
+    logCronBrbyteSyncSkip({ executedAt, result, interestDispatch })
     return {
-      ok: true,
+      ok: interestDispatch.ok,
       source: "brbyte-sync-cron",
       executedAt,
       result,
       interestDispatch,
     }
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    logCronBrbyteSyncError({ executedAt, message })
-    throw e
+  }
+
+  if (!result.ok) {
+    logCronBrbyteSyncError({ executedAt, result, interestDispatch })
+    return {
+      ok: false,
+      source: "brbyte-sync-cron",
+      executedAt,
+      result,
+      interestDispatch,
+      error: result.message ?? result.reason ?? "sync_failed",
+    }
+  }
+
+  logCronBrbyteSyncSuccess({ executedAt, result, interestDispatch })
+  return {
+    ok: true,
+    source: "brbyte-sync-cron",
+    executedAt,
+    result,
+    interestDispatch,
   }
 }

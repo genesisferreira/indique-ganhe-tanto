@@ -1,6 +1,7 @@
 import "server-only"
 
 import { createBrbyteInterestFromReferral } from "@/lib/brbyte/create-interest.service"
+import { enqueueAutomaticInterestOperation } from "@/lib/brbyte/interest-operation"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 
 const LOG_TAG = "[referral-share:controllr]"
@@ -32,6 +33,10 @@ export async function dispatchReferralShareControllrInterest(
       console.warn(LOG_TAG, { step: error ? "lookup_failed" : "missing_referral" })
       return
     }
+    await enqueueAutomaticInterestOperation({
+      referralId,
+      idempotencyKey: key,
+    })
     const result = await createBrbyteInterestFromReferral({
       referralId,
       actorUserId: null,
