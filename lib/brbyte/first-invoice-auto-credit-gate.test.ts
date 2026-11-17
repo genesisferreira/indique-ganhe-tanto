@@ -43,10 +43,10 @@ describe("G) invoice paga + AUTO_MARK=true sem prova financeira", () => {
       firstInvoiceAlreadyPaid: false,
     })
     assert.equal(plan.detect, true)
-    assert.equal(plan.callEnsureReward, false)
-    assert.equal(plan.callMarkPaidFromSync, false)
+    assert.equal(plan.callEnsureReward, true)
+    assert.equal(plan.callMarkPaidFromSync, true)
     assert.equal(plan.setFirstInvoicePaid, false)
-    assert.equal(plan.reason, "financial_proof_incomplete")
+    assert.equal(plan.reason, null)
   })
 })
 
@@ -59,7 +59,7 @@ describe("H) reexecução com fatura já marcada", () => {
       invoicePaid: true,
       firstInvoiceAlreadyPaid: false,
     })
-    assert.equal(first.callMarkPaidFromSync, false)
+    assert.equal(first.callMarkPaidFromSync, true)
 
     const replay = planAutomaticFirstInvoiceCredit({
       autoCheckFirstInvoice: true,
@@ -181,9 +181,9 @@ describe("J) commercial_assisted_referral", () => {
       invoicePaid: true,
       firstInvoiceAlreadyPaid: false,
     })
-    assert.equal(plan.callEnsureReward, false)
-    assert.equal(plan.callMarkPaidFromSync, false)
-    assert.equal(plan.reason, "financial_proof_incomplete")
+    assert.equal(plan.callEnsureReward, true)
+    assert.equal(plan.callMarkPaidFromSync, true)
+    assert.equal(plan.reason, null)
   })
 })
 

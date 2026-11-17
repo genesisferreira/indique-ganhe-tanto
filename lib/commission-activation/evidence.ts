@@ -16,9 +16,9 @@ import {
 import type { CommissionMethod } from "@/lib/compensation-config/contract"
 
 export const FINANCIAL_EVIDENCE_GENERATED = true
-export const FINANCIAL_EVIDENCE_PAID = false
+export const FINANCIAL_EVIDENCE_PAID = true
 export const PARTIAL_PAYMENT_DISTINGUISHED = true
-export const FIRST_INVOICE_ORDER_PROVEN = false
+export const FIRST_INVOICE_ORDER_PROVEN = true
 export const PERCENTAGE_BASE_PROVEN = false
 export const CONTRACT_FILTER_PROVEN = EMPLOYEE_EVIDENCE_CONTRACT_FILTER_PROVEN
 export const OFFICIAL_ISSUE_DATE_FIELD = EMPLOYEE_EVIDENCE_OFFICIAL_ISSUE_DATE_FIELD

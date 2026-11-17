@@ -6,7 +6,6 @@ import {
 import {
   logCheckFirstInvoiceResponseBody,
   parseInvoiceCreditDate,
-  pickFirstValidInvoice,
 } from "@/lib/brbyte/check-first-invoice-response"
 import { canAutoCreditFirstInvoiceReward } from "@/lib/brbyte/first-invoice-auto-credit-gate"
 import { validateFirstInvoiceRewardGuards } from "@/lib/brbyte/first-invoice-reward-guards"
@@ -18,8 +17,10 @@ import {
   isBrbyteAutoMarkPaidEnabled,
   isBrbyteCreateInterestEnabled,
 } from "@/lib/brbyte/config"
-import { fetchInvoiceInfo } from "@/lib/brbyte/invoice-info"
-import { listContractInvoices } from "@/lib/brbyte/invoice-list"
+import {
+  findSingleActiveContract,
+  listOfficialContractInvoices,
+} from "@/lib/brbyte/invoice-list"
 import { logBrbyteReferralHistory } from "@/lib/brbyte/referral-history"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import {
@@ -302,8 +303,7 @@ async function hasExistingFirstInvoiceReward(
 }
 
 async function ensureRewardForReferral(
-  row: ReferralCheckFirstInvoiceRow,
-  paidAmount: number
+  row: ReferralCheckFirstInvoiceRow
 ): Promise<{ ok: boolean; rewardId?: string; message?: string }> {
   if (!isReferralRewardEligible(row)) {
     return {
@@ -315,15 +315,6 @@ async function ensureRewardForReferral(
   if (!row.indicator_profile_id) {
     return { ok: false, message: "Indicação sem indicador vinculado." }
   }
-
-  if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
-    return {
-      ok: false,
-      message: "Valor da primeira fatura inválido ou ausente.",
-    }
-  }
-
-  const amount = paidAmount
 
   const db = getDb() as unknown as {
     from: (table: string) => {
@@ -341,19 +332,11 @@ async function ensureRewardForReferral(
           }>
         }
       }
-      insert: (values: unknown) => {
-        select: (cols: string) => Promise<{
-          data: { id: string }[] | null
-          error: { message: string; code?: string } | null
-        }>
-      }
-      update: (values: unknown) => {
-        eq: (
-          col: string,
-          val: string
-        ) => Promise<{ error: { message: string } | null }>
-      }
     }
+    rpc: (
+      fn: string,
+      args: { p_referral_id: string }
+    ) => Promise<{ data: { ok?: boolean; reward_id?: string; code?: string } | null; error: { message: string } | null }>
   }
 
   const { data: existingRows, error: existingError } = await db
@@ -369,63 +352,20 @@ async function ensureRewardForReferral(
     }
   }
 
-  // Reward já existente (histórico): não recalcular valor.
   if (existingRows && existingRows.length > 0) {
     return { ok: true, rewardId: existingRows[0].id }
   }
 
-  // Persiste o valor real da 1ª fatura na indicação (substitui null / provisório).
-  const { error: updateReferralError } = await db
-    .from("referrals")
-    .update({ reward_amount: amount })
-    .eq("id", row.id)
-
-  if (updateReferralError) {
+  const { data, error } = await db.rpc("ensure_referral_reward", {
+    p_referral_id: row.id,
+  })
+  if (error || !data?.ok || !data.reward_id) {
     return {
       ok: false,
-      message: `Falha ao gravar valor da fatura: ${updateReferralError.message}`,
+      message: error?.message || "A regra do programa não liberou a recompensa.",
     }
   }
-
-  const rewardType =
-    row.reward_type === "desconto_fatura" ? "desconto_fatura" : "pix"
-
-  const { data: inserted, error: insertError } = await db
-    .from("rewards")
-    .insert({
-      referral_id: row.id,
-      indicator_profile_id: row.indicator_profile_id,
-      amount,
-      reward_type: rewardType,
-      status: "pendente",
-      available_at: null,
-      paid_at: null,
-    })
-    .select("id")
-
-  if (insertError) {
-    if (insertError.code === "23505") {
-      const { data: raced } = await db
-        .from("rewards")
-        .select("id")
-        .eq("referral_id", row.id)
-        .order("created_at", { ascending: true })
-      if (raced && raced.length > 0) {
-        return { ok: true, rewardId: raced[0].id }
-      }
-    }
-    return {
-      ok: false,
-      message: `Falha ao criar recompensa: ${insertError.message}`,
-    }
-  }
-
-  const rewardId = inserted?.[0]?.id
-  if (!rewardId) {
-    return { ok: false, message: "Recompensa criada sem identificador retornado." }
-  }
-
-  return { ok: true, rewardId, message: "Recompensa criada com valor da primeira fatura." }
+  return { ok: true, rewardId: data.reward_id }
 }
 
 async function persistContractPk(
@@ -443,6 +383,9 @@ async function persistContractPk(
       brbyte_last_endpoint: source,
     })
     .eq("id", referralId)
+  await (getDb() as unknown as {
+    rpc: (fn: string, args: { p_referral_id: string }) => Promise<unknown>
+  }).rpc("cron_accrue_fixed_commission", { p_referral_id: referralId }).catch(() => undefined)
 }
 
 /**
@@ -496,6 +439,9 @@ async function persistPaidDetectedWithoutCredit(
       },
     })
     .eq("id", referralId)
+  await (getDb() as unknown as {
+    rpc: (fn: string, args: { p_referral_id: string }) => Promise<unknown>
+  }).rpc("cron_accrue_fixed_commission", { p_referral_id: referralId }).catch(() => undefined)
 }
 
 async function persistWaitingInvoice(
@@ -533,6 +479,9 @@ async function persistWaitingInvoice(
       },
     })
     .eq("id", referralId)
+  await (getDb() as unknown as {
+    rpc: (fn: string, args: { p_referral_id: string }) => Promise<unknown>
+  }).rpc("cron_accrue_fixed_commission", { p_referral_id: referralId }).catch(() => undefined)
 }
 
 /** Só após crédito autorizado (RPC) ou skip financeiro de pré-cadastro. Não usar se AUTO_MARK=false. */
@@ -574,6 +523,9 @@ async function persistPaidInvoice(
       },
     })
     .eq("id", referralId)
+  await (getDb() as unknown as {
+    rpc: (fn: string, args: { p_referral_id: string }) => Promise<unknown>
+  }).rpc("cron_accrue_fixed_commission", { p_referral_id: referralId }).catch(() => undefined)
 }
 
 async function logAudit(
@@ -787,6 +739,52 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
     }
   }
 
+  const activeContract = await findSingleActiveContract({
+    config,
+    cookie: login.cookie,
+    clientPk,
+  })
+  if (!activeContract.ok) {
+    const message = activeContract.message
+    await getDb()
+      .from("referrals")
+      .update({
+        brbyte_sync_status: "waiting_contract",
+        brbyte_sync_error: null,
+        brbyte_last_sync_at: new Date().toISOString(),
+        brbyte_last_http_status: activeContract.httpStatus,
+        brbyte_last_endpoint: "/controllrctl/contract/list",
+      })
+      .eq("id", referralId)
+    await finishSyncRun(syncRunId, {
+      status: "partial",
+      api_reachable: true,
+      skipped_records: 1,
+      duration_ms: Date.now() - started,
+      meta: syncRunAuditMeta({
+        referralId,
+        endpoint: "/controllrctl/contract/list",
+        httpStatus: activeContract.httpStatus,
+        success: false,
+        paid: false,
+        error: message,
+      }),
+    })
+    return {
+      ok: true,
+      paid: false,
+      referralId,
+      syncRunId,
+      contractPk: null,
+      invoicePk: null,
+      brbyteClientPk: clientPk,
+      message,
+      durationMs: Date.now() - started,
+    }
+  }
+  contractPk = activeContract.contractPk
+  await persistContractPk(referralId, contractPk, "/controllrctl/contract/list")
+
   if (!contractPk) {
     const interestPk = referral.brbyte_id_interessado?.trim()
     if (!interestPk) {
@@ -886,16 +884,71 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
     )
   }
 
-  const listResult = await listContractInvoices({
+  const officialInvoices = await listOfficialContractInvoices({
     config,
     cookie: login.cookie,
+    clientPk,
     contractPk,
   })
+
+  if (!officialInvoices.ok || !officialInvoices.first) {
+    const message =
+      officialInvoices.message ??
+      "Nenhuma fatura válida encontrada para o contrato no Controllr."
+    await persistWaitingInvoice(referralId, {
+      contractPk,
+      invoicePk: officialInvoices.first?.invoicePk ?? null,
+      listPayload: null,
+      infoPayload: null,
+      syncRunId,
+      httpStatus: officialInvoices.httpStatus,
+      checkedAtIso: new Date().toISOString(),
+    })
+    await finishSyncRun(syncRunId, {
+      status: officialInvoices.ok ? "partial" : "error",
+      api_reachable: true,
+      skipped_records: 1,
+      errors_count: officialInvoices.ok ? 0 : 1,
+      duration_ms: Date.now() - started,
+      meta: syncRunAuditMeta({
+        referralId,
+        endpoint: BRBYTE_API_PATHS.invoiceList,
+        httpStatus: officialInvoices.httpStatus,
+        success: officialInvoices.ok,
+        paid: false,
+        contractPk,
+        error: message,
+      }),
+    })
+    return {
+      ok: officialInvoices.ok,
+      paid: false,
+      referralId,
+      syncRunId,
+      contractPk,
+      invoicePk: null,
+      brbyteClientPk: clientPk,
+      message,
+      durationMs: Date.now() - started,
+    }
+  }
+
+  const firstInvoice = {
+    invoicePk: officialInvoices.first.invoicePk,
+    invoiceDateCredit: officialInvoices.first.creditAtIso,
+  }
+  const listResult = {
+    ok: true,
+    rows: [],
+    payload: null as Record<string, unknown> | null,
+    httpStatus: officialInvoices.httpStatus,
+    message: undefined as string | undefined,
+  }
 
   logCheckFirstInvoiceResponseBody(
     BRBYTE_API_PATHS.invoiceList,
     listResult.httpStatus,
-    listResult.payload
+    { invoiceCount: officialInvoices.invoiceCount, firstFound: true }
   )
 
   if (!listResult.ok) {
@@ -938,7 +991,6 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
     }
   }
 
-  const firstInvoice = pickFirstValidInvoice(listResult.rows)
   if (!firstInvoice?.invoicePk) {
     const message = "Nenhuma fatura encontrada para o contrato no Controllr."
     await persistWaitingInvoice(referralId, {
@@ -989,47 +1041,21 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
   }
 
   const invoicePk = firstInvoice.invoicePk
-  const infoResult = await fetchInvoiceInfo({
-    config,
-    cookie: login.cookie,
-    invoicePk,
-  })
-
-  logCheckFirstInvoiceResponseBody(
-    BRBYTE_API_PATHS.invoiceListInfo,
-    infoResult.httpStatus,
-    infoResult.payload
-  )
-
-  if (!infoResult.ok || !infoResult.info) {
-    await finishSyncRun(syncRunId, {
-      status: "error",
-      api_reachable: true,
-      errors_count: 1,
-      duration_ms: Date.now() - started,
-      error_summary: { step: "invoice_info", message: infoResult.message },
-    })
-    await logBrbyteReferralHistory({
-      referralId,
-      phase: CHECK_FIRST_INVOICE_PHASE,
-      oldStatus: referral.brbyte_sync_status,
-      newStatus: "error",
-      endpoint: BRBYTE_API_PATHS.invoiceListInfo,
-      httpStatus: infoResult.httpStatus,
-      message: infoResult.message ?? "Falha ao consultar fatura.",
-      createdBy: input.actorUserId ?? null,
-    })
-    return {
-      ok: false,
-      paid: false,
-      referralId,
-      syncRunId,
-      contractPk,
+  const infoResult = {
+    ok: true as const,
+    httpStatus: listResult.httpStatus,
+    payload: null as Record<string, unknown> | null,
+    message: undefined as string | undefined,
+    info: {
       invoicePk,
-      brbyteClientPk: clientPk,
-      message: infoResult.message,
-      durationMs: Date.now() - started,
-    }
+      invoiceMsg: null as string | null,
+      invoiceDateCredit: firstInvoice.invoiceDateCredit,
+      invoiceAmountPaid: null as number | null,
+      invoiceAmountDocument: null as number | null,
+      paidAmount: null as number | null,
+      isPaid: Boolean(firstInvoice.invoiceDateCredit),
+      raw: null,
+    },
   }
 
   if (!infoResult.info.isPaid) {
@@ -1280,10 +1306,7 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
     }
   }
 
-  const rewardEnsure = await ensureRewardForReferral(
-    referral,
-    invoicePaidAmount as number
-  )
+  const rewardEnsure = await ensureRewardForReferral(referral)
   if (!rewardEnsure.ok) {
     await finishSyncRun(syncRunId, {
       status: "error",
@@ -1311,7 +1334,7 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
       p_referral_id: referralId,
       p_paid_at: paidAtIso,
       p_external_reference: invoicePk,
-      p_amount: invoicePaidAmount,
+      p_amount: null,
       p_payload: {
         source: "brbyte_check_first_invoice",
         contract_pk: contractPk,

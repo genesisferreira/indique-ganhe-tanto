@@ -408,6 +408,6 @@ describe("won_at coalesce e 1.2R-C intocado", () => {
       autoMarkPaidEnabled: true,
     })
     assert.equal(blocked.allowed, false)
-    assert.equal(allowed.allowed, false)
+    assert.equal(allowed.allowed, true)
   })
 })

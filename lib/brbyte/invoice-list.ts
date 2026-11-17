@@ -1,6 +1,14 @@
 import "server-only"
 
 import { brbyteAdminPostForm } from "@/lib/brbyte/admin-http"
+import {
+  buildOfficialContractWhere,
+  buildOfficialInvoiceWhere,
+  classifyTransport,
+  selectActiveContract,
+  selectFirstInvoice,
+  type ClosedInvoice,
+} from "@/lib/brbyte/controllr-automation-rules"
 import type { BrbyteCreateInterestConfig } from "@/lib/brbyte/config"
 import {
   extractInvoiceListRows,
@@ -562,96 +570,157 @@ export async function listOverdueInvoices(input: {
   }
 }
 
-export async function listContractInvoices(input: {
+const OFFICIAL_PAGE_SIZE = 15
+const OFFICIAL_MAX_PAGES = 8
+
+function resultRows(json: unknown): Record<string, unknown>[] | null {
+  if (!json || typeof json !== "object") return null
+  const root = json as Record<string, unknown>
+  const candidates = [root.results, root.data, root.rows]
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter((row) => row && typeof row === "object") as Record<string, unknown>[]
+    }
+  }
+  return null
+}
+
+async function postOfficialList(input: {
   config: BrbyteCreateInterestConfig
   cookie: string
-  contractPk: string
+  path: string
+  where: unknown[]
+  start: number
 }): Promise<{
   ok: boolean
-  rows: ReturnType<typeof extractInvoiceListRows>
-  payload: Record<string, unknown> | null
+  rows: Record<string, unknown>[]
+  total: number | null
   httpStatus: number | null
   message?: string
 }> {
-  const contractPk = input.contractPk.trim()
-  if (!contractPk) {
+  const result = await brbyteAdminPostForm(input.config, input.cookie, input.path, {
+    where: JSON.stringify(input.where),
+    page: String(input.start / OFFICIAL_PAGE_SIZE + 1),
+    start: String(input.start),
+    limit: String(OFFICIAL_PAGE_SIZE),
+    sort: "invoice_pk",
+    dir: "ASC",
+  })
+  const transport = classifyTransport({
+    httpStatus: result.status,
+    timedOut: result.abortClass === "timeout",
+    malformed: result.ok && resultRows(result.json) == null,
+  })
+  if (!result.ok || transport !== "ok" || !isInvoiceApiResponseSuccessful(result.json, result.status)) {
     return {
       ok: false,
       rows: [],
-      payload: null,
-      httpStatus: null,
-      message: "contract_pk ausente para consulta de faturas.",
+      total: null,
+      httpStatus: result.status,
+      message: result.ok
+        ? resolveInvoiceApiErrorMessage(result.json, "Consulta Controllr inconclusiva.")
+        : "Consulta Controllr inconclusiva.",
     }
   }
+  const rows = resultRows(result.json) ?? []
+  const total = extractInvoiceListTotal(result.json, rows.length)
+  return { ok: true, rows, total, httpStatus: result.status }
+}
 
-  const lookupForms: Record<string, string>[] = [
-    {
-      "where[contract_pk]": contractPk,
-      "where[invoice_deleted]": "false",
-    },
-    {
-      where: JSON.stringify({
-        contract_pk: contractPk,
-        invoice_deleted: false,
-      }),
-    },
-    {
-      contract_pk: contractPk,
-      invoice_deleted: "false",
-    },
-  ]
-
-  for (const fields of lookupForms) {
-    const result = await brbyteAdminPostForm(
-      input.config,
-      input.cookie,
-      BRBYTE_API_PATHS.invoiceList,
-      fields
-    )
-
-    if (!result.ok) continue
-
-    const payload =
-      result.json && typeof result.json === "object"
-        ? (result.json as Record<string, unknown>)
-        : { raw: result.json }
-
-    if (!isInvoiceApiResponseSuccessful(result.json, result.status)) {
-      return {
-        ok: false,
-        rows: [],
-        payload,
-        httpStatus: result.status,
-        message: resolveInvoiceApiErrorMessage(
-          result.json,
-          "Falha ao listar faturas no Controllr."
-        ),
-      }
-    }
-
-    const rows = extractInvoiceListRows(result.json).filter(
-      (row) => !row.invoiceDeleted
-    )
-
-    console.log(LOG_TAG, {
-      contractPk,
-      httpStatus: result.status,
-      count: rows.length,
-    })
-
+export async function findSingleActiveContract(input: {
+  config: BrbyteCreateInterestConfig
+  cookie: string
+  clientPk: string
+}): Promise<
+  | { ok: true; contractPk: string; httpStatus: number | null }
+  | { ok: false; reason: "none" | "ambiguous" | "inconclusive"; httpStatus: number | null; message: string }
+> {
+  const page = await postOfficialList({
+    config: input.config,
+    cookie: input.cookie,
+    path: "/controllrctl/contract/list",
+    where: buildOfficialContractWhere(input.clientPk),
+    start: 0,
+  })
+  if (!page.ok) {
     return {
-      ok: true,
-      rows,
-      payload,
-      httpStatus: result.status,
+      ok: false,
+      reason: "inconclusive",
+      httpStatus: page.httpStatus,
+      message: page.message ?? "Contrato inconclusivo.",
     }
   }
-
-  return {
-    ok: false,
-    rows: [],
-    payload: null,
-    httpStatus: null,
-    message: "Não foi possível consultar faturas no Controllr.",
+  if (page.total != null && page.total > page.rows.length) {
+    return {
+      ok: false,
+      reason: "inconclusive",
+      httpStatus: page.httpStatus,
+      message: "Lista de contratos incompleta.",
+    }
   }
+  const decision = selectActiveContract(page.rows, input.clientPk)
+  if (decision.status !== "found") {
+    return {
+      ok: false,
+      reason: decision.status,
+      httpStatus: page.httpStatus,
+      message: "Nenhum contrato ativo inequívoco.",
+    }
+  }
+  return { ok: true, contractPk: decision.contractPk, httpStatus: page.httpStatus }
+}
+
+export async function listOfficialContractInvoices(input: {
+  config: BrbyteCreateInterestConfig
+  cookie: string
+  clientPk: string
+  contractPk: string
+}): Promise<{
+  ok: boolean
+  first: ClosedInvoice | null
+  invoiceCount: number
+  httpStatus: number | null
+  message?: string
+}> {
+  const collected: Record<string, unknown>[] = []
+  let total: number | null = null
+  let httpStatus: number | null = null
+  for (let page = 0; page < OFFICIAL_MAX_PAGES; page += 1) {
+    const start = page * OFFICIAL_PAGE_SIZE
+    const result = await postOfficialList({
+      config: input.config,
+      cookie: input.cookie,
+      path: BRBYTE_API_PATHS.invoiceList,
+      where: buildOfficialInvoiceWhere(input.clientPk, input.contractPk),
+      start,
+    })
+    httpStatus = result.httpStatus
+    if (!result.ok) {
+      return { ok: false, first: null, invoiceCount: 0, httpStatus, message: result.message }
+    }
+    total = result.total
+    collected.push(...result.rows)
+    if (result.rows.length < OFFICIAL_PAGE_SIZE) break
+    if (total != null && collected.length >= total) break
+  }
+  if (total != null && collected.length < total) {
+    return {
+      ok: false,
+      first: null,
+      invoiceCount: collected.length,
+      httpStatus,
+      message: "Lista de faturas incompleta. Primeira fatura inconclusiva.",
+    }
+  }
+  const first = selectFirstInvoice(collected, {
+    clientPk: input.clientPk,
+    contractPk: input.contractPk,
+  })
+  console.log(LOG_TAG, {
+    scope: "official_contract",
+    httpStatus,
+    count: collected.length,
+    firstFound: Boolean(first),
+  })
+  return { ok: true, first, invoiceCount: collected.length, httpStatus }
 }

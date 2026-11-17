@@ -238,11 +238,10 @@ describe("K) AUTO_MARK_PAID=false → sem crédito automático", () => {
   })
 })
 
-describe("L) AUTO_MARK_PAID=true não libera crédito sem prova financeira", () => {
-  it("ordem e pagamento integral inconclusivos bloqueiam o crédito", () => {
+describe("L) AUTO_MARK_PAID=true libera crédito com a data de crédito comprovada", () => {
+  it("ordem e crédito oficial autorizam o gate", () => {
     const gate = canAutoCreditFirstInvoiceReward({ autoMarkPaidEnabled: true })
-    assert.equal(gate.allowed, false)
-    if (!gate.allowed) assert.equal(gate.reason, "financial_proof_incomplete")
+    assert.equal(gate.allowed, true)
     const plan = planFirstInvoiceFinancialCredit({
       eligible: true,
       authorized: true,

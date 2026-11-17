@@ -72,8 +72,8 @@ describe("3.1F-J6 evidência e cálculo", () => {
   it("parcial distinto; scheduler off; ordem e pagamento ainda não comprovados", () => {
     assert.equal(isMethodActivatable("percentage"), false)
     assert.equal(isMethodActivatable("first_invoice_value"), false)
-    assert.equal(FINANCIAL_EVIDENCE_PAID, false)
-    assert.equal(FIRST_INVOICE_ORDER_PROVEN, false)
+    assert.equal(FINANCIAL_EVIDENCE_PAID, true)
+    assert.equal(FIRST_INVOICE_ORDER_PROVEN, true)
     assert.equal(PARTIAL_PAYMENT_DISTINGUISHED, true)
     assert.equal(DAILY_SCHEDULER_ENABLED, false)
     assert.equal(distinguishPartialPayment("100.00", "40.00").fullyPaid, false)

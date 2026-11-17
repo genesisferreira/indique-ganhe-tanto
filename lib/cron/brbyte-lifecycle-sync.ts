@@ -192,7 +192,7 @@ async function loadEligibleReferrals(
 export async function runBrbyteLifecycleSync(): Promise<BrbyteLifecycleSyncResult> {
   const started = Date.now()
 
-  if (!isBrbyteSyncEnabled()) {
+  if (!isBrbyteSyncEnabled() && !isBrbyteAutoCheckFirstInvoiceEnabled()) {
     return {
       ok: true,
       skipped: true,
@@ -291,7 +291,7 @@ export async function runBrbyteLifecycleSync(): Promise<BrbyteLifecycleSyncResul
     }
 
     try {
-      if (status === "created" && autoConversion) {
+      if (status === "created" && autoConversion && isBrbyteSyncEnabled()) {
         const result = await checkBrbyteInterestConversionFromReferral({
           referralId: row.id,
           actorUserId: null,

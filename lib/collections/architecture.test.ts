@@ -269,20 +269,20 @@ describe("3.1E-H consulta de atrasados não contamina consumidores financeiros",
       join(repoRoot, "lib/brbyte/invoice-list-probe-result.ts"),
       "utf8"
     )
-    const contractFn = invoiceList.slice(invoiceList.indexOf("export async function listContractInvoices"))
+    const contractFn = invoiceList.slice(invoiceList.indexOf("export async function listOfficialContractInvoices"))
     const overdueFn = invoiceList.slice(invoiceList.indexOf("export async function listOverdueInvoicesPage"))
     const pageFn = invoiceList.slice(
       invoiceList.indexOf("export async function listInvoicesPage"),
       invoiceList.indexOf("export async function listAllOpenInvoices")
     )
-    assert.match(contractFn, /where\[contract_pk\]/)
-    assert.equal(contractFn.includes("invoice_date_credit"), false)
+    assert.match(contractFn, /buildOfficialInvoiceWhere/)
+    assert.equal(contractFn.includes("where[contract_pk]"), false)
     assert.equal(pageFn.includes("invoice_date_credit"), false)
     assert.equal(pageFn.includes("buildOverdueInvoiceListFormFields"), false)
     assert.match(overdueFn, /buildOverdueInvoiceListFormFields/)
     assert.match(overdueFn, /maxAttempts: OVERDUE_INVOICE_LIST_HTTP_ATTEMPTS/)
     assert.equal(overdueFn.includes("invoiceListPageQueryForms"), false)
-    assert.match(firstInvoice, /listContractInvoices/)
+    assert.match(firstInvoice, /listOfficialContractInvoices/)
     assert.equal(firstInvoice.includes("listOverdueInvoices"), false)
     assert.equal(firstInvoice.includes("listInvoicesPage"), false)
     assert.equal(probe.includes("listOverdueInvoices"), false)
