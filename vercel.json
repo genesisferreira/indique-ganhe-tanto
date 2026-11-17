@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/brbyte-sync",
-      "schedule": "*/2 * * * *"
+      "schedule": "15 12 * * *"
     }
   ]
 }
