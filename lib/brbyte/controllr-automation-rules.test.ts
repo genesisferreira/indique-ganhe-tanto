@@ -11,8 +11,12 @@ import {
   PARTIAL_PAYMENT_BLOCKS_REWARD,
   PERCENTAGE_COMMISSION_ENABLED,
   REWARD_AMOUNT_SOURCE,
+  buildIndicatorFirstInvoiceCreditKey,
   buildOfficialContractWhere,
   buildOfficialInvoiceWhere,
+  classifyAutomaticReward,
+  indicatorRuleVersion,
+  shouldAlertFirstAutomaticReward,
   classifyTransport,
   creditDateProvesIndicatorPayment,
   fixedCommissionMayAccrue,
@@ -209,5 +213,58 @@ describe("transporte e comissão", () => {
       }),
       false
     )
+  })
+})
+
+describe("reward automático", () => {
+  it("monta a chave com indicação, fatura e versão da regra", () => {
+    const key = buildIndicatorFirstInvoiceCreditKey({
+      referralId: "referral-1",
+      invoicePk: "55",
+      ruleVersion: indicatorRuleVersion({ planId: "plan-9", rewardAmount: "30.00" }),
+    })
+    assert.equal(key, "indicator_first_invoice_credit:referral-1:55:plan:plan-9")
+    assert.equal(indicatorRuleVersion({ planId: null, rewardAmount: "30.00" }), "rule:30.00")
+    assert.equal(indicatorRuleVersion({ rewardAmount: null }), "rule:missing")
+  })
+
+  it("classifica ausência, crédito, replay e origens isoladas", () => {
+    assert.equal(classifyAutomaticReward({
+      eligible: true, invoiceFound: false, creditValid: false,
+      rewardExists: false, walletExists: false, origin: "indicator",
+    }), "inconclusive")
+    assert.equal(classifyAutomaticReward({
+      eligible: true, invoiceFound: true, creditValid: false,
+      rewardExists: false, walletExists: false, origin: "indicator",
+    }), "blocked")
+    assert.equal(classifyAutomaticReward({
+      eligible: true, invoiceFound: true, creditValid: true,
+      rewardExists: false, walletExists: false, origin: "legacy",
+    }), "created")
+    assert.equal(classifyAutomaticReward({
+      eligible: false, invoiceFound: true, creditValid: true,
+      rewardExists: false, walletExists: false, origin: "legacy",
+    }), "blocked")
+    assert.equal(classifyAutomaticReward({
+      eligible: true, invoiceFound: true, creditValid: true,
+      rewardExists: true, walletExists: true, origin: "indicator",
+    }), "replayed")
+    assert.equal(classifyAutomaticReward({
+      eligible: true, invoiceFound: true, creditValid: true,
+      rewardExists: true, walletExists: false, origin: "indicator",
+    }), "blocked")
+    assert.equal(classifyAutomaticReward({
+      eligible: true, invoiceFound: true, creditValid: true,
+      rewardExists: false, walletExists: false, origin: "employee",
+    }), "blocked")
+    assert.equal(classifyAutomaticReward({
+      eligible: true, invoiceFound: true, creditValid: true,
+      rewardExists: false, walletExists: false, origin: "partner",
+    }), "blocked")
+  })
+
+  it("alerta só o primeiro reward automático", () => {
+    assert.equal(shouldAlertFirstAutomaticReward(0), true)
+    assert.equal(shouldAlertFirstAutomaticReward(1), false)
   })
 })

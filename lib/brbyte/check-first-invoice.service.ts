@@ -7,6 +7,12 @@ import {
   logCheckFirstInvoiceResponseBody,
   parseInvoiceCreditDate,
 } from "@/lib/brbyte/check-first-invoice-response"
+import {
+  buildIndicatorFirstInvoiceCreditKey,
+  INDICATOR_CREDIT_KEY_TYPE,
+  indicatorRuleVersion,
+  shouldAlertFirstAutomaticReward,
+} from "@/lib/brbyte/controllr-automation-rules"
 import { canAutoCreditFirstInvoiceReward } from "@/lib/brbyte/first-invoice-auto-credit-gate"
 import { validateFirstInvoiceRewardGuards } from "@/lib/brbyte/first-invoice-reward-guards"
 import { brbyteAdminLogin } from "@/lib/brbyte/admin-http"
@@ -55,6 +61,8 @@ type ReferralCheckFirstInvoiceRow = {
   brbyte_contract_pk: string | null
   brbyte_first_invoice_pk: string | null
   brbyte_sync_status: string | null
+  plan_id: string | null
+  origin_kind: string | null
 }
 
 type BrbyteLooseDb = {
@@ -198,7 +206,9 @@ async function loadReferralForCheck(
       brbyte_id_contrato,
       brbyte_contract_pk,
       brbyte_first_invoice_pk,
-      brbyte_sync_status
+      brbyte_sync_status,
+      plan_id,
+      origin_kind
     `
     )
     .eq("id", referralId)
@@ -300,72 +310,6 @@ async function hasExistingFirstInvoiceReward(
     .limit(1)
 
   return Boolean(txs && txs.length > 0)
-}
-
-async function ensureRewardForReferral(
-  row: ReferralCheckFirstInvoiceRow
-): Promise<{ ok: boolean; rewardId?: string; message?: string }> {
-  if (!isReferralRewardEligible(row)) {
-    return {
-      ok: false,
-      message: "Registro sem elegibilidade financeira (pré-cadastro público).",
-    }
-  }
-
-  if (!row.indicator_profile_id) {
-    return { ok: false, message: "Indicação sem indicador vinculado." }
-  }
-
-  const db = getDb() as unknown as {
-    from: (table: string) => {
-      select: (cols: string) => {
-        eq: (
-          col: string,
-          val: string
-        ) => {
-          order: (
-            col: string,
-            opts: { ascending: boolean }
-          ) => Promise<{
-            data: { id: string }[] | null
-            error: { message: string } | null
-          }>
-        }
-      }
-    }
-    rpc: (
-      fn: string,
-      args: { p_referral_id: string }
-    ) => Promise<{ data: { ok?: boolean; reward_id?: string; code?: string } | null; error: { message: string } | null }>
-  }
-
-  const { data: existingRows, error: existingError } = await db
-    .from("rewards")
-    .select("id")
-    .eq("referral_id", row.id)
-    .order("created_at", { ascending: true })
-
-  if (existingError) {
-    return {
-      ok: false,
-      message: `Falha ao verificar recompensa: ${existingError.message}`,
-    }
-  }
-
-  if (existingRows && existingRows.length > 0) {
-    return { ok: true, rewardId: existingRows[0].id }
-  }
-
-  const { data, error } = await db.rpc("ensure_referral_reward", {
-    p_referral_id: row.id,
-  })
-  if (error || !data?.ok || !data.reward_id) {
-    return {
-      ok: false,
-      message: error?.message || "A regra do programa não liberou a recompensa.",
-    }
-  }
-  return { ok: true, rewardId: data.reward_id }
 }
 
 async function accrueFixedCommission(referralId: string): Promise<void> {
@@ -1316,46 +1260,32 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
     }
   }
 
-  const rewardEnsure = await ensureRewardForReferral(referral)
-  if (!rewardEnsure.ok) {
-    await finishSyncRun(syncRunId, {
-      status: "error",
-      api_reachable: true,
-      errors_count: 1,
-      duration_ms: Date.now() - started,
-      error_summary: { step: "ensure_reward", message: rewardEnsure.message },
-    })
-    return {
-      ok: false,
-      paid: false,
-      referralId,
-      syncRunId,
-      contractPk,
-      invoicePk,
-      brbyteClientPk: clientPk,
-      message: rewardEnsure.message,
-      durationMs: Date.now() - started,
-    }
-  }
-
+  const creditKey = buildIndicatorFirstInvoiceCreditKey({
+    referralId,
+    invoicePk,
+    ruleVersion: indicatorRuleVersion({
+      planId: referral.plan_id,
+      rewardAmount: referral.reward_amount,
+    }),
+  })
   const { data: rpcData, error: rpcError } = await getDb().rpc(
     "mark_first_invoice_paid_from_sync",
     {
       p_referral_id: referralId,
       p_paid_at: paidAtIso,
-      p_external_reference: invoicePk,
+      p_external_reference: creditKey,
       p_amount: null,
       p_payload: {
         source: "brbyte_check_first_invoice",
+        credit_key_type: INDICATOR_CREDIT_KEY_TYPE,
         contract_pk: contractPk,
         invoice_pk: invoicePk,
-        invoice_msg: infoResult.info.invoiceMsg,
+        credit_present: Boolean(infoResult.info.invoiceDateCredit),
         invoice_date_credit: infoResult.info.invoiceDateCredit,
-        invoice_amount_paid: infoResult.info.invoiceAmountPaid,
-        invoice_amount_document: infoResult.info.invoiceAmountDocument,
-        paid_amount: invoicePaidAmount,
-        list: listResult.payload,
-        info: infoResult.payload,
+        rule_version: indicatorRuleVersion({
+          planId: referral.plan_id,
+          rewardAmount: referral.reward_amount,
+        }),
         sync_run_id: syncRunId,
       },
     }
@@ -1467,13 +1397,35 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
 
   await logAudit(input.actorUserId ?? null, referralId, {
     action: "first_invoice_paid",
+    result: idempotent ? "replayed" : "created",
+    credit_key_type: "indicator_first_invoice_credit",
+    credit_key: creditKey,
     contract_pk: contractPk,
     invoice_pk: invoicePk,
     paid_at: paidAtIso,
     idempotent,
-    reward_id: rpcResult.reward_id ?? rewardEnsure.rewardId ?? null,
+    reward_id: typeof rpcResult.reward_id === "string" ? rpcResult.reward_id : null,
     transaction_id: rpcResult.transaction_id ?? null,
   })
+
+  if (!idempotent && shouldAlertFirstAutomaticReward(0)) {
+    try {
+      await (getDb() as unknown as {
+        rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<unknown>
+      }).rpc("notify_first_automatic_indicator_reward", {
+        p_referral_id: referralId,
+        p_contract_pk: contractPk,
+        p_invoice_pk: invoicePk,
+        p_rule_version: indicatorRuleVersion({
+          planId: referral.plan_id,
+          rewardAmount: referral.reward_amount,
+        }),
+        p_amount: typeof rpcResult.amount === "number" ? rpcResult.amount : null,
+      })
+    } catch {
+      // O alerta não desfaz o reward já confirmado.
+    }
+  }
 
   return {
     ok: true,

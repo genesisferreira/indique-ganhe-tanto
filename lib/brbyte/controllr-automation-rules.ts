@@ -12,6 +12,53 @@ export const INVOICE_PAID_AMOUNT_USED_FOR_REWARD = false
 export const ACTIVE_CONTRACT_STATUS = 0
 export const INVOICE_EQUAL_OPER = 5
 export const INVOICE_IS_OPER = 7
+export const INDICATOR_CREDIT_KEY_TYPE = "indicator_first_invoice_credit" as const
+
+export function indicatorRuleVersion(input: {
+  planId?: string | null
+  rewardAmount?: string | number | null
+}): string {
+  const planId = input.planId?.trim()
+  if (planId) return `plan:${planId}`
+  if (input.rewardAmount != null && String(input.rewardAmount).trim()) {
+    return `rule:${String(input.rewardAmount).trim()}`
+  }
+  return "rule:missing"
+}
+
+export function buildIndicatorFirstInvoiceCreditKey(input: {
+  referralId: string
+  invoicePk: string
+  ruleVersion: string
+}): string {
+  return [
+    INDICATOR_CREDIT_KEY_TYPE,
+    input.referralId.trim(),
+    input.invoicePk.trim(),
+    input.ruleVersion.trim(),
+  ].join(":")
+}
+
+export function classifyAutomaticReward(input: {
+  eligible: boolean
+  invoiceFound: boolean
+  creditValid: boolean
+  rewardExists: boolean
+  walletExists: boolean
+  origin: "indicator" | "legacy" | "employee" | "partner" | "other"
+}): "created" | "replayed" | "blocked" | "inconclusive" {
+  if (input.origin === "employee" || input.origin === "partner") return "blocked"
+  if (!input.invoiceFound) return "inconclusive"
+  if (!input.creditValid || !input.eligible) return "blocked"
+  if (input.rewardExists && input.walletExists) return "replayed"
+  if (input.rewardExists !== input.walletExists) return "blocked"
+  return "created"
+}
+
+export function shouldAlertFirstAutomaticReward(previousAutomaticRewards: number): boolean {
+  return previousAutomaticRewards === 0
+}
+
 export const PERCENTAGE_COMMISSION_ENABLED = false
 export const FIRST_INVOICE_VALUE_COMMISSION_ENABLED = false
 
