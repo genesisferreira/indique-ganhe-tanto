@@ -33,8 +33,8 @@ describe("F) invoice paga + AUTO_CHECK=true + AUTO_MARK=false", () => {
   })
 })
 
-describe("G) invoice paga + AUTO_CHECK=true + AUTO_MARK=true + elegível", () => {
-  it("permite ensureReward e mark_first_invoice_paid_from_sync uma vez", () => {
+describe("G) invoice paga + AUTO_MARK=true sem prova financeira", () => {
+  it("não credita enquanto a ordem e o pagamento integral não estão comprovados", () => {
     const plan = planAutomaticFirstInvoiceCredit({
       autoCheckFirstInvoice: true,
       autoMarkPaidEnabled: true,
@@ -43,19 +43,15 @@ describe("G) invoice paga + AUTO_CHECK=true + AUTO_MARK=true + elegível", () =>
       firstInvoiceAlreadyPaid: false,
     })
     assert.equal(plan.detect, true)
-    assert.equal(plan.callEnsureReward, true)
-    assert.equal(plan.callMarkPaidFromSync, true)
-    assert.equal(
-      plan.setFirstInvoicePaid,
-      false,
-      "first_invoice_paid só a RPC from_sync marca, não este fluxo TS"
-    )
-    assert.equal(plan.reason, null)
+    assert.equal(plan.callEnsureReward, false)
+    assert.equal(plan.callMarkPaidFromSync, false)
+    assert.equal(plan.setFirstInvoicePaid, false)
+    assert.equal(plan.reason, "financial_proof_incomplete")
   })
 })
 
-describe("H) reexecução do cenário G", () => {
-  it("não autoriza segundo crédito quando first_invoice_paid já é true", () => {
+describe("H) reexecução com fatura já marcada", () => {
+  it("não autoriza outro crédito", () => {
     const first = planAutomaticFirstInvoiceCredit({
       autoCheckFirstInvoice: true,
       autoMarkPaidEnabled: true,
@@ -63,7 +59,7 @@ describe("H) reexecução do cenário G", () => {
       invoicePaid: true,
       firstInvoiceAlreadyPaid: false,
     })
-    assert.equal(first.callMarkPaidFromSync, true)
+    assert.equal(first.callMarkPaidFromSync, false)
 
     const replay = planAutomaticFirstInvoiceCredit({
       autoCheckFirstInvoice: true,
@@ -172,7 +168,7 @@ describe("J) commercial_assisted_referral", () => {
     assert.equal(plan.callMarkPaidFromSync, false)
   })
 
-  it("AUTO_MARK=true + elegível → fluxo financeiro automático permitido", () => {
+  it("AUTO_MARK=true sem prova de ordem e pagamento não credita", () => {
     const plan = planAutomaticFirstInvoiceCredit({
       autoCheckFirstInvoice: true,
       autoMarkPaidEnabled: true,
@@ -185,8 +181,9 @@ describe("J) commercial_assisted_referral", () => {
       invoicePaid: true,
       firstInvoiceAlreadyPaid: false,
     })
-    assert.equal(plan.callEnsureReward, true)
-    assert.equal(plan.callMarkPaidFromSync, true)
+    assert.equal(plan.callEnsureReward, false)
+    assert.equal(plan.callMarkPaidFromSync, false)
+    assert.equal(plan.reason, "financial_proof_incomplete")
   })
 })
 

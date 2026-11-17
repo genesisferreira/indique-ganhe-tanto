@@ -1,3 +1,8 @@
+import {
+  FINANCIAL_EVIDENCE_PAID,
+  FIRST_INVOICE_ORDER_PROVEN,
+} from "@/lib/commission-activation/evidence"
+
 /**
  * Gate de crédito automático da 1ª fatura (Sprint 1.2R-C).
  *
@@ -14,22 +19,32 @@
  */
 
 export const AUTO_MARK_PAID_DISABLED_REASON = "auto_mark_paid_disabled" as const
+export const FINANCIAL_PROOF_INCOMPLETE_REASON = "financial_proof_incomplete" as const
 export const AUTO_CHECK_FIRST_INVOICE_DISABLED_REASON =
   "auto_check_first_invoice_disabled" as const
 
 export type AutoCreditGateResult =
   | { allowed: true; reason: null }
-  | { allowed: false; reason: typeof AUTO_MARK_PAID_DISABLED_REASON }
+  | {
+      allowed: false
+      reason:
+        | typeof AUTO_MARK_PAID_DISABLED_REASON
+        | typeof FINANCIAL_PROOF_INCOMPLETE_REASON
+    }
 
 /**
  * Autoriza efeitos financeiros automáticos (ensureReward + RPC from_sync).
- * Único critério desta função: o flag de crédito automático.
+ * A flag sozinha não libera crédito: a ordem da primeira fatura e o
+ * pagamento integral precisam estar comprovados.
  */
 export function canAutoCreditFirstInvoiceReward(input: {
   autoMarkPaidEnabled: boolean
 }): AutoCreditGateResult {
   if (!input.autoMarkPaidEnabled) {
     return { allowed: false, reason: AUTO_MARK_PAID_DISABLED_REASON }
+  }
+  if (!FIRST_INVOICE_ORDER_PROVEN || !FINANCIAL_EVIDENCE_PAID) {
+    return { allowed: false, reason: FINANCIAL_PROOF_INCOMPLETE_REASON }
   }
   return { allowed: true, reason: null }
 }
