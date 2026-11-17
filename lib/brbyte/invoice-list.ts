@@ -634,7 +634,7 @@ export async function findSingleActiveContract(input: {
   clientPk: string
 }): Promise<
   | { ok: true; contractPk: string; httpStatus: number | null }
-  | { ok: false; reason: "none" | "ambiguous" | "inconclusive"; httpStatus: number | null; message: string }
+  | { ok: false; reason: "none" | "ambiguous" | "ineligible" | "inconclusive"; httpStatus: number | null; message: string }
 > {
   const page = await postOfficialList({
     config: input.config,
@@ -662,9 +662,11 @@ export async function findSingleActiveContract(input: {
   }
   const decision = selectActiveContract(page.rows, input.clientPk)
   if (decision.status !== "found") {
+    const reason =
+      decision.status === "none" && page.rows.length > 0 ? "ineligible" : decision.status
     return {
       ok: false,
-      reason: decision.status,
+      reason,
       httpStatus: page.httpStatus,
       message: "Nenhum contrato ativo inequívoco.",
     }

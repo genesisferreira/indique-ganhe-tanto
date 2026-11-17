@@ -368,6 +368,16 @@ async function ensureRewardForReferral(
   return { ok: true, rewardId: data.reward_id }
 }
 
+async function accrueFixedCommission(referralId: string): Promise<void> {
+  try {
+    await (getDb() as unknown as {
+      rpc: (fn: string, args: { p_referral_id: string }) => PromiseLike<unknown>
+    }).rpc("cron_accrue_fixed_commission", { p_referral_id: referralId })
+  } catch {
+    return
+  }
+}
+
 async function persistContractPk(
   referralId: string,
   contractPk: string,
@@ -381,11 +391,10 @@ async function persistContractPk(
       brbyte_id_contrato: contractPk,
       brbyte_last_sync_at: syncedAt,
       brbyte_last_endpoint: source,
+      brbyte_sync_error: null,
     })
     .eq("id", referralId)
-  await (getDb() as unknown as {
-    rpc: (fn: string, args: { p_referral_id: string }) => Promise<unknown>
-  }).rpc("cron_accrue_fixed_commission", { p_referral_id: referralId }).catch(() => undefined)
+  await accrueFixedCommission(referralId)
 }
 
 /**
@@ -439,9 +448,7 @@ async function persistPaidDetectedWithoutCredit(
       },
     })
     .eq("id", referralId)
-  await (getDb() as unknown as {
-    rpc: (fn: string, args: { p_referral_id: string }) => Promise<unknown>
-  }).rpc("cron_accrue_fixed_commission", { p_referral_id: referralId }).catch(() => undefined)
+  await accrueFixedCommission(referralId)
 }
 
 async function persistWaitingInvoice(
@@ -479,9 +486,7 @@ async function persistWaitingInvoice(
       },
     })
     .eq("id", referralId)
-  await (getDb() as unknown as {
-    rpc: (fn: string, args: { p_referral_id: string }) => Promise<unknown>
-  }).rpc("cron_accrue_fixed_commission", { p_referral_id: referralId }).catch(() => undefined)
+  await accrueFixedCommission(referralId)
 }
 
 /** Só após crédito autorizado (RPC) ou skip financeiro de pré-cadastro. Não usar se AUTO_MARK=false. */
@@ -523,9 +528,7 @@ async function persistPaidInvoice(
       },
     })
     .eq("id", referralId)
-  await (getDb() as unknown as {
-    rpc: (fn: string, args: { p_referral_id: string }) => Promise<unknown>
-  }).rpc("cron_accrue_fixed_commission", { p_referral_id: referralId }).catch(() => undefined)
+  await accrueFixedCommission(referralId)
 }
 
 async function logAudit(
@@ -745,12 +748,19 @@ export async function checkBrbyteFirstInvoiceFromReferral(input: {
     clientPk,
   })
   if (!activeContract.ok) {
-    const message = activeContract.message
+    const message =
+      activeContract.reason === "ambiguous"
+        ? "multiple_active_contracts"
+        : activeContract.reason === "none"
+          ? "no_active_contract"
+          : activeContract.reason === "ineligible"
+            ? "ineligible_contract"
+            : "inconclusive"
     await getDb()
       .from("referrals")
       .update({
         brbyte_sync_status: "waiting_contract",
-        brbyte_sync_error: null,
+        brbyte_sync_error: message,
         brbyte_last_sync_at: new Date().toISOString(),
         brbyte_last_http_status: activeContract.httpStatus,
         brbyte_last_endpoint: "/controllrctl/contract/list",
