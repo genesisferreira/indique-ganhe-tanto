@@ -35,6 +35,8 @@ import {
   updateAdminReferralStatusFromSupabase,
 } from "@/lib/services"
 import { Search, Eye, MoreHorizontal, UserPlus, RefreshCw } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { ControlledDeletionButton } from "@/components/admin/controlled-deletion"
 import { CommercialSlaOverdueBadge } from "@/components/commercial/commercial-sla-overdue-badge"
 import { CommercialRedistributedBadge } from "@/components/commercial/commercial-redistributed-badge"
 import { devLogCommercialSla } from "@/lib/commercial-sla"
@@ -72,8 +74,10 @@ export default function AdminIndicacoesPage() {
   const [authRole, setAuthRole] = useState<UserRole | null>(null)
   const [dataVersion, setDataVersion] = useState(0)
   const [hasLoaded, setHasLoaded] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
 
   const podeMutar = authRole === "admin_master" || authRole === "admin_financeiro"
+  const canDelete = authRole === "admin_master"
 
   // 3.1F-K1: um carregamento lógico = uma resolução de identidade (auth.getUser 1×).
   // Estados explícitos; erro/timeout nunca viram "zero indicações"; sem retry automático.
@@ -225,6 +229,19 @@ export default function AdminIndicacoesPage() {
   )
 
   const columns = useMemo(() => [
+    ...(canDelete ? [{
+      key: "select",
+      header: "Seleção",
+      cell: (indicacao: Indicacao) => (
+        <Checkbox
+          checked={selectedIds.includes(indicacao.id)}
+          onCheckedChange={(value) => {
+            setSelectedIds((current) => value === true ? [...new Set([...current, indicacao.id])] : current.filter((id) => id !== indicacao.id))
+          }}
+          aria-label="Selecionar indicação"
+        />
+      ),
+    }] : []),
     {
       key: "indicado",
       header: "Indicado",
@@ -361,7 +378,7 @@ export default function AdminIndicacoesPage() {
         )
       },
     },
-  ], [podeMutar, comerciaisLista, comerciaisDisponiveis, handleAtribuirComercial, handleAlterarStatus])
+  ], [canDelete, selectedIds, podeMutar, comerciaisLista, comerciaisDisponiveis, handleAtribuirComercial, handleAlterarStatus])
 
   return (
     <div className="space-y-6">
@@ -442,6 +459,20 @@ export default function AdminIndicacoesPage() {
                 <p role="status" aria-live="polite" className="mb-2 text-xs text-muted-foreground">
                   Atualizando…
                 </p>
+              ) : null}
+              {canDelete ? (
+                <div className="mb-3">
+                  <ControlledDeletionButton
+                    kind="bulk"
+                    ids={selectedIds}
+                    enabled
+                    label="Excluir selecionadas"
+                    onCompleted={() => {
+                      setSelectedIds([])
+                      void loadAdminReferrals({ silent: true })
+                    }}
+                  />
+                </div>
               ) : null}
               <DataTable
                 key={dataVersion}

@@ -10,7 +10,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { indicadores, indicacoes, pagamentos } from "@/lib/services/mock-data.service"
-import { loadAdminIndicatorDetailFromSupabase } from "@/lib/services/supabase-data.service"
+import { getAuthProfileBasicsFromSupabase, loadAdminIndicatorDetailFromSupabase } from "@/lib/services/supabase-data.service"
+import { ControlledDeletionButton } from "@/components/admin/controlled-deletion"
 import { ArrowLeft, FileText, DollarSign, TrendingUp, Calendar, Mail, Phone, CreditCard, Edit, Ban, CheckCircle } from "lucide-react"
 import Link from "next/link"
 import type { Indicador, Indicacao, Pagamento } from "@/types"
@@ -92,6 +93,7 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
   const [indicadorIndicacoes, setIndicadorIndicacoes] = useState<Indicacao[]>([])
   const [indicadorPagamentos, setIndicadorPagamentos] = useState<Pagamento[]>([])
   const [loading, setLoading] = useState(true)
+  const [role, setRole] = useState<string | null>(null)
 
   useEffect(() => {
     if (isDataProviderMock()) {
@@ -112,6 +114,8 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
           ok: Boolean(data),
         })
       }
+      const basics = await getAuthProfileBasicsFromSupabase()
+      setRole(basics?.role ?? null)
       if (data) {
         setIndicador(data.indicador)
         setIndicadorIndicacoes(data.indicacoes)
@@ -165,6 +169,15 @@ export default function AdminIndicadorDetailPage({ params }: { params: Promise<{
           title={indicador.nome}
           description={`Cadastrado em ${new Date(indicador.createdAt).toLocaleDateString("pt-BR")}`}
         />
+        {role === "admin_master" ? (
+          <ControlledDeletionButton
+            kind="indicator"
+            ids={[indicador.id]}
+            enabled
+            label="Excluir indicador"
+            onCompleted={() => { window.location.href = "/admin/indicadores" }}
+          />
+        ) : null}
       </div>
 
       <ShareLinksCard

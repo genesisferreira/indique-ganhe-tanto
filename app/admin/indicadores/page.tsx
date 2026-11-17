@@ -19,7 +19,8 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { indicadores } from "@/lib/services/mock-data.service"
-import { loadAdminIndicatorsFromSupabase } from "@/lib/services/supabase-data.service"
+import { getAuthProfileBasicsFromSupabase, loadAdminIndicatorsFromSupabase } from "@/lib/services/supabase-data.service"
+import { ControlledDeletionButton } from "@/components/admin/controlled-deletion"
 import { Plus, Search, Eye, Edit, Ban, CheckCircle, MoreHorizontal } from "lucide-react"
 import {
   DropdownMenu,
@@ -36,6 +37,7 @@ export default function AdminIndicadoresPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [lista, setLista] = useState<Indicador[]>([])
   const [carregando, setCarregando] = useState(true)
+  const [role, setRole] = useState<string | null>(null)
 
   const recarregar = useCallback(async () => {
     setCarregando(true)
@@ -65,6 +67,9 @@ export default function AdminIndicadoresPage() {
 
   useEffect(() => {
     void recarregar()
+    if (!isDataProviderMock()) {
+      void getAuthProfileBasicsFromSupabase().then((basics) => setRole(basics?.role ?? null))
+    }
   }, [recarregar])
 
   const filteredIndicadores = lista.filter((indicador: Indicador) => {
@@ -136,6 +141,7 @@ export default function AdminIndicadoresPage() {
       key: "acoes",
       header: "Ações",
       cell: (indicador: Indicador) => (
+        <div className="flex items-center justify-end gap-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon">
@@ -166,6 +172,10 @@ export default function AdminIndicadoresPage() {
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        {role === "admin_master" ? (
+          <ControlledDeletionButton kind="indicator" ids={[indicador.id]} enabled label="Excluir indicador" onCompleted={() => void recarregar()} />
+        ) : null}
+        </div>
       ),
     },
   ]

@@ -5,6 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/ui/page-header"
+import { ControlledDeletionButton } from "@/components/admin/controlled-deletion"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -332,6 +333,15 @@ export default function AdminIndicacaoDetalhePage({
       >
         {isPublicPreReg ? (
           <Badge variant="secondary">Pré-cadastro Web</Badge>
+        ) : null}
+        {role === "admin_master" ? (
+          <ControlledDeletionButton
+            kind="referral"
+            ids={[indicacao.id]}
+            enabled
+            label="Excluir indicação"
+            onCompleted={() => router.push("/admin/indicacoes")}
+          />
         ) : null}
       </PageHeader>
 
