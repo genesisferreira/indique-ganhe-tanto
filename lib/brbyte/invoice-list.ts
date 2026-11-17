@@ -591,6 +591,7 @@ async function postOfficialList(input: {
   path: string
   where: unknown[]
   start: number
+  sortField: "contract_number" | "invoice_pk"
 }): Promise<{
   ok: boolean
   rows: Record<string, unknown>[]
@@ -603,7 +604,7 @@ async function postOfficialList(input: {
     page: String(input.start / OFFICIAL_PAGE_SIZE + 1),
     start: String(input.start),
     limit: String(OFFICIAL_PAGE_SIZE),
-    sort: "invoice_pk",
+    sort: input.sortField,
     dir: "ASC",
   })
   const transport = classifyTransport({
@@ -641,6 +642,7 @@ export async function findSingleActiveContract(input: {
     path: "/controllrctl/contract/list",
     where: buildOfficialContractWhere(input.clientPk),
     start: 0,
+    sortField: "contract_number",
   })
   if (!page.ok) {
     return {
@@ -693,6 +695,7 @@ export async function listOfficialContractInvoices(input: {
       path: BRBYTE_API_PATHS.invoiceList,
       where: buildOfficialInvoiceWhere(input.clientPk, input.contractPk),
       start,
+      sortField: "invoice_pk",
     })
     httpStatus = result.httpStatus
     if (!result.ok) {
