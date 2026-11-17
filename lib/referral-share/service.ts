@@ -73,6 +73,9 @@ function mapResult(data: unknown): { status: number; body: unknown } {
     if (row.code === "consent_required") return { status: 400, body: { ok: false, message: "O consentimento é obrigatório." } }
     if (row.code === "invalid_document") return { status: 400, body: { ok: false, message: "Informe um CPF ou CNPJ válido." } }
     if (row.code === "invalid_plan") return { status: 400, body: { ok: false, message: "Escolha um plano de interesse." } }
+    if (row.code === "birth_date_invalid") return { status: 400, body: { ok: false, message: "Informe a data de nascimento." } }
+    if (row.code === "birth_date_future") return { status: 400, body: { ok: false, message: "A data de nascimento não pode estar no futuro." } }
+    if (row.code === "invalid_due_day") return { status: 400, body: { ok: false, message: "Escolha o melhor dia para vencimento da fatura." } }
     if (row.code === "idempotency_conflict") return { status: 409, body: { ok: false, message: "Este envio já foi usado com outros dados." } }
     if (row.code === "active_link_exists") return { status: 409, body: { ok: false, message: "Já existe um link ativo. Use a rotação." } }
     if (row.code === "originator_inactive") return { status: 409, body: { ok: false, message: "O originador não está ativo." } }

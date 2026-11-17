@@ -10,6 +10,7 @@ export const maxDuration = 60
 const ALLOWED = new Set([
   "idempotencyKey", "planCode", "name", "phone", "document", "zipcode", "street", "number",
   "complement", "neighborhood", "city", "observation", "consent", "confirmRecentDuplicate",
+  "birthDate", "preferredInvoiceDueDay",
 ])
 
 function clientIp(request: NextRequest): string {

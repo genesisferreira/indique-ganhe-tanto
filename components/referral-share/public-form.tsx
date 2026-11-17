@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { fetchAddressByCEP } from "@/lib/client/viacep"
 import { onlyDigits } from "@/lib/client/formatters"
-import { maskReferralDocument, REFERRAL_SHARE_PLANS, referralDocumentDigits } from "@/lib/referral-share/public-catalog"
+import { maskBirthDateInput, maskReferralDocument, REFERRAL_SHARE_DUE_DAY_LABEL, REFERRAL_SHARE_DUE_DAYS, REFERRAL_SHARE_PLANS, birthDateInputToIso, isReferralShareDueDay, referralDocumentDigits, referralShareBirthIssue } from "@/lib/referral-share/public-catalog"
 
 function newKey() {
   return (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, "").slice(0, 40)
@@ -26,6 +26,8 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
   const [name, setName] = useState("")
   const [phone, setPhone] = useState("")
   const [document, setDocument] = useState("")
+  const [birthDate, setBirthDate] = useState("")
+  const [dueDay, setDueDay] = useState("")
   const [zipcode, setZipcode] = useState("")
   const [street, setStreet] = useState("")
   const [number, setNumber] = useState("")
@@ -78,6 +80,21 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
       setMessage("Informe um CPF ou CNPJ válido.")
       return
     }
+    const company = documentDigits.length === 14
+    const birthIssue = company ? "ok" : referralShareBirthIssue(birthDate)
+    if (birthIssue === "future") {
+      setMessage("A data de nascimento não pode estar no futuro.")
+      return
+    }
+    if (birthIssue !== "ok") {
+      setMessage("Informe a data de nascimento.")
+      return
+    }
+    const due = Number(dueDay)
+    if (!isReferralShareDueDay(due)) {
+      setMessage("Escolha o melhor dia para vencimento da fatura.")
+      return
+    }
     if (!planCode) {
       setMessage("Escolha um plano de interesse.")
       return
@@ -92,7 +109,10 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
         body: JSON.stringify({
           token,
           payload: {
-            idempotencyKey: keyRef.current, planCode, name, phone, document: documentDigits, zipcode, street, number,
+            idempotencyKey: keyRef.current, planCode, name, phone, document: documentDigits,
+            birthDate: company ? null : birthDateInputToIso(birthDate),
+            preferredInvoiceDueDay: due,
+            zipcode, street, number,
             complement, neighborhood, city, observation, consent, confirmRecentDuplicate,
           },
         }),
@@ -151,6 +171,11 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
             <Field id="share-name" label="Nome completo"><Input id="share-name" value={name} onChange={(event) => setName(event.target.value)} required autoComplete="name" className="w-full" /></Field>
             <Field id="share-phone" label="Telefone / WhatsApp"><Input id="share-phone" value={phone} onChange={(event) => setPhone(event.target.value)} required inputMode="tel" autoComplete="tel" className="w-full" /></Field>
             <Field id="share-document" label="CPF ou CNPJ"><Input id="share-document" value={document} onChange={(event) => setDocument(maskReferralDocument(event.target.value))} placeholder="Digite o CPF ou CNPJ" required inputMode="numeric" autoComplete="off" className="w-full" /></Field>
+            {referralDocumentDigits(document)?.length === 14 ? null : (
+              <Field id="share-birth" label="Data de nascimento">
+                <Input id="share-birth" value={birthDate} onChange={(event) => setBirthDate(maskBirthDateInput(event.target.value))} placeholder="DD/MM/AAAA" required inputMode="numeric" autoComplete="bday" className="w-full" />
+              </Field>
+            )}
             <Field id="share-zip" label="CEP"><Input id="share-zip" value={zipcode} onChange={(event) => void lookupCep(event.target.value)} required inputMode="numeric" autoComplete="postal-code" className="w-full" /></Field>
             <Field id="share-street" label="Endereço"><Input id="share-street" value={street} onChange={(event) => setStreet(event.target.value)} required autoComplete="address-line1" className="w-full" /></Field>
             <Field id="share-number" label="Número"><Input id="share-number" value={number} onChange={(event) => setNumber(event.target.value)} required className="w-full" /></Field>
@@ -161,6 +186,12 @@ export function ReferralSharePublicForm({ token }: { token: string }) {
               <Select value={planCode} onValueChange={setPlanCode}>
                 <SelectTrigger id="share-plan" className="h-auto min-h-9 w-full whitespace-normal text-left"><SelectValue placeholder="Escolha um plano" /></SelectTrigger>
                 <SelectContent>{REFERRAL_SHARE_PLANS.map((plan) => <SelectItem key={plan.code} value={plan.code} className="whitespace-normal">{plan.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </Field>
+            <Field id="share-due" label={REFERRAL_SHARE_DUE_DAY_LABEL}>
+              <Select value={dueDay} onValueChange={setDueDay}>
+                <SelectTrigger id="share-due" className="w-full"><SelectValue placeholder="Escolha o dia" /></SelectTrigger>
+                <SelectContent>{REFERRAL_SHARE_DUE_DAYS.map((day) => <SelectItem key={day} value={String(day)}>{String(day).padStart(2, "0")}</SelectItem>)}</SelectContent>
               </Select>
             </Field>
             <Field id="share-observation" label="Observação (opcional)"><Textarea id="share-observation" value={observation} onChange={(event) => setObservation(event.target.value)} className="w-full" /></Field>

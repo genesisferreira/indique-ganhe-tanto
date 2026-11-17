@@ -22,6 +22,8 @@ export const PUBLIC_PAYLOAD_KEYS = [
   "observation",
   "consent",
   "confirmRecentDuplicate",
+  "birthDate",
+  "preferredInvoiceDueDay",
 ] as const
 
 const FORBIDDEN_PUBLIC_KEYS = [
