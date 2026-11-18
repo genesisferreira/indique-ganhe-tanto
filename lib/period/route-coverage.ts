@@ -1,4 +1,4 @@
-export type RouteCoverage = "SERVER_FILTERED" | "CURRENT_STATE_NOT_PERIOD_FILTERED" | "NOT_APPLICABLE_WITH_REASON"
+export type RouteCoverage = "SERVER_FILTERED" | "CURRENT_STATE_NOT_PERIOD_FILTERED" | "NOT_APPLICABLE_WITH_REASON" | "UNFILTERED"
 
 export const ROUTE_COVERAGE: Record<string, { coverage: RouteCoverage; reason: string }> = {
   "/admin": { coverage: "SERVER_FILTERED", reason: "Séries, status, ranking e pagamentos do período vêm da RPC. Cadastro e saldo atual não." },
@@ -20,12 +20,12 @@ export const ROUTE_COVERAGE: Record<string, { coverage: RouteCoverage; reason: s
   "/admin/auditoria": { coverage: "NOT_APPLICABLE_WITH_REASON", reason: "A tela ainda é demonstração local, sem tabela operacional de auditoria geral." },
   "/admin/remuneracao/auditoria": { coverage: "CURRENT_STATE_NOT_PERIOD_FILTERED", reason: "Trilha da regra vigente, sem série temporal própria nesta sprint." },
   "/indicador": { coverage: "SERVER_FILTERED", reason: "Métricas do período pela RPC do próprio papel. Saldo atual permanece cumulativo." },
-  "/indicador/indicacoes": { coverage: "SERVER_FILTERED", reason: "Lista do indicador respeita o período na consulta." },
+  "/indicador/indicacoes": { coverage: "UNFILTERED", reason: "A lista é só do indicador logado. Busca e status ainda filtram no cliente e o mês da URL não entra na consulta." },
   "/indicador/carteira": { coverage: "CURRENT_STATE_NOT_PERIOD_FILTERED", reason: "Saldo atual do ledger, sem filtro mensal." },
   "/comercial": { coverage: "SERVER_FILTERED", reason: "Desempenho do comercial no período pela RPC do próprio papel." },
   "/comercial/pipeline": { coverage: "SERVER_FILTERED", reason: "O mesmo filtro de created_at do pipeline." },
-  "/comercial/desempenho": { coverage: "SERVER_FILTERED", reason: "Usa a agregação do período do comercial." },
+  "/comercial/desempenho": { coverage: "UNFILTERED", reason: "Os cards somam no cliente os leads atribuídos. O intervalo da URL ainda não limita essa consulta." },
   "/funcionario": { coverage: "SERVER_FILTERED", reason: "Vendas criadas pelo funcionário no período." },
-  "/funcionario/vendas": { coverage: "SERVER_FILTERED", reason: "Lista paginada das vendas do período." },
+  "/funcionario/vendas": { coverage: "UNFILTERED", reason: "A lista tem paginação própria, mas não usa o contrato global de mês, intervalo ou todo o período." },
   "/funcionario/remuneracao": { coverage: "CURRENT_STATE_NOT_PERIOD_FILTERED", reason: "Competências de folha são estado protegido e não entram no filtro mensal." },
 }
