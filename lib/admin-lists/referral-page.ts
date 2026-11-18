@@ -12,9 +12,11 @@ export type ReferralPageQuery = {
   indicatorId: string | null
   commercialId: string | null
   planId: string | null
+  channel: string
 }
 
 const STATUS = new Set(["pendente", "em_atendimento", "em_negociacao", "em_andamento", "aprovada", "recusada", "paga"])
+const CHANNELS = new Set(["direct", "referral", "indicator", "partner_merchant", "employee_technician", "employee_external_sales", "unclassified"])
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export function referralPageQuery(params: URLSearchParams, now = new Date()): ReferralPageQuery {
@@ -25,6 +27,7 @@ export function referralPageQuery(params: URLSearchParams, now = new Date()): Re
   const indicatorId = params.get("indicator")
   const commercialId = params.get("commercial")
   const planId = params.get("plan")
+  const channel = params.get("channel")
   return {
     from: period.from?.toISOString() ?? null,
     to: period.to?.toISOString() ?? null,
@@ -37,6 +40,7 @@ export function referralPageQuery(params: URLSearchParams, now = new Date()): Re
     indicatorId: indicatorId && UUID.test(indicatorId) ? indicatorId : null,
     commercialId: commercialId && UUID.test(commercialId) ? commercialId : null,
     planId: planId && UUID.test(planId) ? planId : null,
+    channel: channel && CHANNELS.has(channel) ? channel : "referral",
   }
 }
 

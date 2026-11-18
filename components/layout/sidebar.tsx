@@ -35,6 +35,7 @@ import {
   UserCog,
   Layers,
   Store,
+  Globe,
 } from "lucide-react"
 import { TantoBrand } from "@/components/branding/tanto-brand"
 import { Button } from "@/components/ui/button"
@@ -186,6 +187,7 @@ const adminNav: NavGroup[] = [
   {
     title: "Comercial",
     items: [
+      { label: "Captações diretas", href: "/admin/captacoes", icon: Globe },
       { label: "Indicações", href: "/admin/indicacoes", icon: Users },
       { label: "Pipeline", href: "/admin/pipeline", icon: LayoutGrid },
       { label: "Indicadores", href: "/admin/indicadores", icon: UserPlus },
@@ -292,6 +294,7 @@ export function Sidebar({
     null
   )
   const [adminReferralsCount, setAdminReferralsCount] = useState<number | null>(null)
+  const [adminDirectCount, setAdminDirectCount] = useState<number | null>(null)
   const [adminIndicadoresCount, setAdminIndicadoresCount] = useState<number | null>(
     null
   )
@@ -377,6 +380,7 @@ export function Sidebar({
         pipelineRes,
         returnsRes,
         referralsRes,
+        directRes,
         indicadoresRes,
         pixRes,
       ] = await Promise.all([
@@ -391,7 +395,10 @@ export function Sidebar({
           ? countComercialScheduledReturnsFromSupabase()
           : Promise.resolve<number | null>(null),
         variant === "admin"
-          ? countAdminReferralsFromSupabase()
+          ? countAdminReferralsFromSupabase("referral")
+          : Promise.resolve<number | null>(null),
+        variant === "admin"
+          ? countAdminReferralsFromSupabase("direct")
           : Promise.resolve<number | null>(null),
         variant === "admin"
           ? countAdminActiveIndicadoresFromSupabase()
@@ -411,6 +418,7 @@ export function Sidebar({
       setComercialPipelineCount(pipelineRes)
       setComercialReturnsCount(returnsRes)
       setAdminReferralsCount(referralsRes)
+      setAdminDirectCount(directRes)
       setAdminIndicadoresCount(indicadoresRes)
       setPendingPixWithdrawals(pixRes)
 
@@ -541,6 +549,12 @@ export function Sidebar({
                 pendingPixWithdrawals > 0
               ) {
                 badgeCount = capBadge(pendingPixWithdrawals)
+              } else if (
+                item.href === "/admin/captacoes" &&
+                adminDirectCount !== null &&
+                adminDirectCount > 0
+              ) {
+                badgeCount = capBadge(adminDirectCount)
               } else if (
                 item.href === "/admin/indicacoes" &&
                 adminReferralsCount !== null &&

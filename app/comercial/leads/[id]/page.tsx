@@ -366,7 +366,7 @@ export default function DetalheLeadPage({
   })
   const indicador = indicacao.indicador
   const indicadorNome = isPublicPreReg
-    ? "Captação direta"
+    ? "Sem originador"
     : indicador?.nome?.trim() || "Indicador não identificado"
   const exigeMotivoRecusa = isComercialLeadRejectStatus(status)
   const podeSalvarStatus =

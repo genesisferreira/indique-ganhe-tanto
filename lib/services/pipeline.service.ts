@@ -35,6 +35,8 @@ type ReferralPipelineRow = {
   lost_at?: string | null
   /** 3.1F-J3 (somente no select estendido) */
   origin_kind?: string | null
+  origin_group?: string | null
+  acquisition_kind?: string | null
 }
 
 export type PipelineLoadMeta = {
@@ -116,7 +118,9 @@ const PIPELINE_SELECT_EXTENDED = `
   last_redistributed_at,
   won_at,
   lost_at,
-  origin_kind
+  origin_kind,
+  origin_group,
+  acquisition_kind
 `
 
 function isMissingColumnPipelineError(
@@ -306,8 +310,21 @@ function rowToPipelineCard(
       : null,
     wonAt: row.won_at ? new Date(row.won_at) : null,
     lostAt: row.lost_at ? new Date(row.lost_at) : null,
-    originKind: row.origin_kind ?? null,
-    originLabel: row.origin_kind === "partner_merchant"
+    originKind: row.acquisition_kind ?? row.origin_kind ?? null,
+    originLabel: row.acquisition_kind
+      ? ({
+          direct_preregistration: "Captação direta",
+          direct_website: "Captação direta",
+          direct_campaign: "Captação direta",
+          direct_admin: "Captação direta",
+          direct_other: "Captação direta",
+          indicator: "Indique e Ganhe",
+          partner_merchant: "Comércio parceiro",
+          employee_technician: "Técnico",
+          employee_external_sales: "Vendedor externo",
+          unclassified_legacy: "Origem não classificada",
+        }[row.acquisition_kind] ?? "Origem não classificada")
+      : row.origin_kind === "partner_merchant"
       ? partnerOriginLabel(row.origin_kind)
       : employeeOriginLabel(row.origin_kind, origins.get(row.id)?.role),
     originatorNome: row.origin_kind === "partner_merchant"
@@ -424,7 +441,7 @@ async function loadPlanNamesForPipeline(
 
 export async function loadPipelineCardsFromSupabase(
   scope: "comercial" | "admin",
-  bounds?: { from: string | null; to: string | null }
+  bounds?: { from: string | null; to: string | null; channel?: string | null }
 ): Promise<PipelineBoardLoadResult> {
   const emptyMetrics = computePipelineMetrics([])
 
@@ -507,6 +524,8 @@ export async function loadPipelineCardsFromSupabase(
       let next = scope === "comercial" ? qb.eq("commercial_profile_id", profileId) : qb
       if (bounds?.from) next = next.gte("created_at", bounds.from)
       if (bounds?.to) next = next.lt("created_at", bounds.to)
+      if (bounds?.channel === "direct" || bounds?.channel === "referral") next = next.eq("origin_group", bounds.channel)
+      else if (bounds?.channel && ["indicator", "partner_merchant", "employee_technician", "employee_external_sales", "unclassified_legacy"].includes(bounds.channel)) next = next.eq("acquisition_kind", bounds.channel)
       filterDesc = scope === "comercial" ? `commercial_profile_id.eq.${profileId}` : "admin"
       return next
     }
@@ -627,7 +646,7 @@ export async function loadPipelineCardsFromSupabase(
 
 export async function loadPipelineBoardFromSupabase(
   scope: "comercial" | "admin",
-  bounds?: { from: string | null; to: string | null }
+  bounds?: { from: string | null; to: string | null; channel?: string | null }
 ): Promise<PipelineBoardLoadResult> {
   return loadPipelineCardsFromSupabase(scope, bounds)
 }

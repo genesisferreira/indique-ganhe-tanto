@@ -4961,7 +4961,7 @@ async function resolveIndicatorProfileForCommercialLead(
   if (!indicatorProfileId) {
     return {
       id: "",
-      nome: "Captação direta",
+      nome: "Sem originador",
       email: "",
       telefone: "",
       found: false,
@@ -8294,7 +8294,7 @@ export async function countComercialScheduledReturnsFromSupabase(): Promise<
 /**
  * Total de indicações visíveis ao admin (mesmas roles que `loadAdminReferralsFromSupabase`).
  */
-export async function countAdminReferralsFromSupabase(): Promise<number | null> {
+export async function countAdminReferralsFromSupabase(originGroup?: "direct" | "referral"): Promise<number | null> {
   try {
     const supabase = getSupabaseClient()
     const db = supabase as unknown as {
@@ -8317,9 +8317,11 @@ export async function countAdminReferralsFromSupabase(): Promise<number | null> 
       return null
     }
 
-    const { count, error } = await db
+    let request = db
       .from("referrals")
       .select("id", { count: "exact", head: true })
+    if (originGroup) request = request.eq("origin_group", originGroup)
+    const { count, error } = await request
 
     if (error) {
       devWarnSidebarCounts(`countAdminReferrals: ${error.message}`)

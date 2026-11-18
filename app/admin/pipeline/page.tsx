@@ -25,9 +25,10 @@ export default function AdminPipelinePage() {
   const period = parsePeriod(new URLSearchParams(searchParams.toString()))
   const fromIso = period.from?.toISOString() ?? null
   const toIso = period.to?.toISOString() ?? null
+  const channel = searchParams.get("channel")
 
   const loadBoard = useCallback(async () => {
-    const data = await loadPipelineBoardFromSupabase("admin", { from: fromIso, to: toIso })
+    const data = await loadPipelineBoardFromSupabase("admin", { from: fromIso, to: toIso, channel })
     if (!data.ok) {
       console.error("[pipeline:error]", data.error, data.meta)
       toast.error(
@@ -42,7 +43,7 @@ export default function AdminPipelinePage() {
       total: data.cards.length,
       byStage: data.meta,
     })
-  }, [fromIso, toIso])
+  }, [fromIso, toIso, channel])
 
   useEffect(() => {
     void loadBoard()
@@ -69,6 +70,26 @@ export default function AdminPipelinePage() {
         description={`Funil do período ${period.label}.`}
       />
       <PeriodFilter />
+      <nav className="flex gap-2 overflow-x-auto" aria-label="Canal do pipeline">
+        {[
+          ["", "Todos"],
+          ["direct", "Captação direta"],
+          ["referral", "Todas as indicações"],
+          ["indicator", "Indique e Ganhe"],
+          ["partner_merchant", "Comércio parceiro"],
+          ["employee_technician", "Técnico"],
+          ["employee_external_sales", "Vendedor externo"],
+        ].map(([value, label]) => {
+          const next = new URLSearchParams(searchParams.toString())
+          if (value) next.set("channel", value)
+          else next.delete("channel")
+          return (
+            <a key={label} href={`/admin/pipeline?${next.toString()}`} className="rounded-md border px-3 py-1 text-sm whitespace-nowrap" aria-current={channel === value || (!channel && value === "") ? "page" : undefined}>
+              {label}
+            </a>
+          )
+        })}
+      </nav>
 
       <PipelineMetricsBar metrics={metrics} showRanking />
 

@@ -89,6 +89,8 @@ export interface Indicacao {
   erpLeadSource?: string
   /** referrals.source — ex.: public_pre_registration | commercial_assisted_referral */
   source?: string
+  originGroup?: string
+  acquisitionKind?: string
   /**
    * Ator original que criou a referral (cadastro assistido).
    * Distinto do indicador beneficiário e do comercial responsável atual.

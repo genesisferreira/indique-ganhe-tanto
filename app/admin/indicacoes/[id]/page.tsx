@@ -433,10 +433,10 @@ export default function AdminIndicacaoDetalhePage({
               </p>
             </div>
             <div>
-              <p className="text-muted-foreground">Indicador</p>
+              <p className="text-muted-foreground">{isPublicPreReg ? "Originador" : "Indicador"}</p>
               <p>
                 {isPublicPreReg
-                  ? "Captação direta"
+                  ? "Sem originador"
                   : indicacao.indicador?.nome ?? "—"}
               </p>
             </div>

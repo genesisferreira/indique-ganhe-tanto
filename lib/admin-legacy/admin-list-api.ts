@@ -64,9 +64,14 @@ export async function adminIndicacoesPageHttp(client: AdminReadClient, url: URL,
       select: (columns: string, options?: { count?: "exact" }) => ReferralQuery
     }
   }
-  let request = db.from("referrals").select("id, referred_name, referred_phone, status, origin_kind, source, created_at, indicator_profile_id, commercial_profile_id, plan_id, plans(name)", { count: "exact" })
+  let request = db.from("referrals").select("id, referred_name, referred_phone, status, origin_kind, origin_group, acquisition_kind, source, created_at, indicator_profile_id, commercial_profile_id, plan_id, plans(name)", { count: "exact" })
   if (query.from) request = request.gte("created_at", query.from)
   if (query.to) request = request.lt("created_at", query.to)
+  if (query.channel === "direct" || query.channel === "referral") request = request.eq("origin_group", query.channel)
+  else if (query.channel === "unclassified") {
+    if (basics.role !== "admin_master") return { status: 403, body: { ok: false, errorClass: "forbidden" } }
+    request = request.eq("acquisition_kind", "unclassified_legacy")
+  } else request = request.eq("acquisition_kind", query.channel)
   if (query.status) request = request.eq("status", query.status)
   if (query.origin) request = request.eq("origin_kind", query.origin)
   if (query.indicatorId) request = request.eq("indicator_profile_id", query.indicatorId)
@@ -110,6 +115,8 @@ export async function adminIndicacoesPageHttp(client: AdminReadClient, url: URL,
           telefoneIndicado: row.referred_phone,
           status: row.status,
           source: row.source,
+          originGroup: row.origin_group,
+          acquisitionKind: row.acquisition_kind,
           createdAt: row.created_at,
           indicadorId: row.indicator_profile_id,
           comercialId: row.commercial_profile_id,

@@ -17,6 +17,7 @@ import {
 import { Download, TrendingUp, Users, DollarSign, FileText, BarChart3, PieChart as PieChartIcon } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, Legend } from "recharts"
 import { PeriodFilter } from "@/components/period/period-filter"
+import { ChannelSummary } from "@/components/channels/channel-summary"
 import { chartAxis, chartColor, chartGrid, chartTooltip, pieSlices } from "@/lib/charts/theme"
 import { currentMonthKey, parsePeriod } from "@/lib/period/range"
 import type { Indicacao, Indicador, Comercial, Pagamento } from "@/types"
@@ -283,6 +284,7 @@ export default function AdminRelatoriosPage() {
           </Button>
         </div>
       </div>
+      <ChannelSummary mode="report" />
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard

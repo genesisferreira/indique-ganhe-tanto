@@ -1,4 +1,4 @@
-const ALLOWED_KEYS = ["month", "period", "from", "to", "page", "pageSize", "q", "status", "origin", "indicator", "commercial", "plan", "offset", "limit", "sort", "stage", "commission", "role"] as const
+const ALLOWED_KEYS = ["month", "period", "from", "to", "page", "pageSize", "q", "status", "origin", "indicator", "commercial", "plan", "offset", "limit", "sort", "stage", "commission", "role", "channel"] as const
 const SCROLL_KEY = "igt-list-scroll"
 
 function keep(params: URLSearchParams): URLSearchParams {

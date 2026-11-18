@@ -39,11 +39,12 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { ControlledDeletionButton } from "@/components/admin/controlled-deletion"
 import { PeriodFilter } from "@/components/period/period-filter"
 import { currentMonthKey } from "@/lib/period/range"
+import { channelLabel } from "@/lib/channels/classification"
+import { ChannelSummary } from "@/components/channels/channel-summary"
 import { buildInternalReturn, rememberListScroll, restoreListScroll } from "@/lib/period/return-to"
 import { CommercialSlaOverdueBadge } from "@/components/commercial/commercial-sla-overdue-badge"
 import { CommercialRedistributedBadge } from "@/components/commercial/commercial-redistributed-badge"
 import { devLogCommercialSla } from "@/lib/commercial-sla"
-import { isPublicPreRegistrationReferral } from "@/lib/referral-reward-eligibility"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,9 +70,11 @@ const STATUS_ALTERAR_OPCOES: IndicacaoStatus[] = [
 
 type ReferralPageMeta = { label: string; total: number; page: number; pageSize: number; from: number; to: number; pages: number }
 
-export default function AdminIndicacoesPage() {
+export function AdminReferralList({ forcedChannel }: { forcedChannel?: "direct" } = {}) {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const channel = forcedChannel ?? searchParams.get("channel") ?? "referral"
+  const listPath = channel === "direct" ? "/admin/captacoes" : "/admin/indicacoes"
   const [search, setSearch] = useState(searchParams.get("q") ?? "")
   const [pageMeta, setPageMeta] = useState<ReferralPageMeta | null>(null)
   const [statusFilter, setStatusFilter] = useState<string>(searchParams.get("status") ?? "todos")
@@ -102,6 +105,7 @@ export default function AdminIndicacoesPage() {
     // 3.1F-K1S: leitura via /api/admin/indicacoes (sessão do usuário no servidor; sem lock de auth do
     // navegador). O signal do carregamento cancela o fetch real (timeout/desmontagem/retry).
     const params = new URLSearchParams(listQuery)
+    params.set("channel", channel)
     if (!params.get("month") && !params.get("period") && !params.get("from")) params.set("month", currentMonthKey())
     if (!params.get("page")) params.set("page", "1")
     if (!params.get("pageSize")) params.set("pageSize", "20")
@@ -117,7 +121,7 @@ export default function AdminIndicacoesPage() {
       role: (body.role ?? "admin_consulta") as UserRole,
     }
     return dataOutcome(bundle, bundle.lista.length === 0)
-  }, [listQuery])
+  }, [listQuery, channel])
   const { state, reload, retry } = useGuardedLoader<AdminIndicacoesBundle>(loadBundle, `admin-indicacoes:${listQuery}`)
   const carregando = state.status === "idle" || state.status === "loading"
 
@@ -194,22 +198,14 @@ export default function AdminIndicacoesPage() {
       if (!next.get("month") && !next.get("period") && !next.get("from")) next.set("month", currentMonthKey())
       if (next.get("q") !== (search.trim().length >= 2 ? search.trim() : null) || next.get("status") !== (statusFilter === "todos" ? null : statusFilter)) next.set("page", "1")
       if (!next.get("page")) next.set("page", "1")
-      if (next.toString() !== searchParams.toString()) router.replace(`/admin/indicacoes?${next.toString()}`, { scroll: false })
+      if (channel !== "direct") next.set("channel", channel)
+      else next.delete("channel")
+      if (next.toString() !== searchParams.toString()) router.replace(`${listPath}?${next.toString()}`, { scroll: false })
     }, 300)
     return () => window.clearTimeout(timer)
-  }, [search, statusFilter, isDataProviderMock, router, searchParams])
+  }, [search, statusFilter, isDataProviderMock, router, searchParams, channel, listPath])
 
-  const getIndicadorNome = (indicacao: Indicacao) => {
-    if (
-      isPublicPreRegistrationReferral({
-        source: indicacao.source,
-        erp_lead_source: indicacao.erpLeadSource,
-      })
-    ) {
-      return "Captação direta"
-    }
-    return indicacao.indicador?.nome ?? "—"
-  }
+  const getIndicadorNome = (indicacao: Indicacao) => indicacao.indicador?.nome ?? "Sem originador"
 
   const getComercialNome = (indicacao: Indicacao) => {
     if (!indicacao.comercialId) return "Não atribuído"
@@ -290,7 +286,7 @@ export default function AdminIndicacoesPage() {
     }] : []),
     {
       key: "indicado",
-      header: "Indicado",
+      header: channel === "direct" ? "Interessado" : "Indicado",
       cell: (indicacao: Indicacao) => (
         <div>
           <p className="font-medium">{indicacao.nomeIndicado}</p>
@@ -299,20 +295,20 @@ export default function AdminIndicacoesPage() {
       ),
     },
     {
-      key: "indicador",
-      header: "Indicador",
-      cell: (indicacao: Indicacao) => (
-        <Link
-          href={`/admin/indicadores/${indicacao.indicadorId}`}
-          className="text-primary hover:underline"
-        >
-          {getIndicadorNome(indicacao)}
-        </Link>
+      key: "origem",
+      header: channel === "direct" ? "Tipo de captação" : "Origem",
+      cell: (indicacao: Indicacao) => channel === "direct" ? (
+        <span>{channelLabel(indicacao.acquisitionKind)}</span>
+      ) : (
+        <div>
+          <p>{channelLabel(indicacao.acquisitionKind)}</p>
+          <p className="text-sm text-muted-foreground">{getIndicadorNome(indicacao)}</p>
+        </div>
       ),
     },
     {
       key: "comercial",
-      header: "Comercial",
+      header: "Comercial responsável",
       cell: (indicacao: Indicacao) => (
         <span className={indicacao.comercialId ? "" : "text-muted-foreground"}>
           {getComercialNome(indicacao)}
@@ -370,8 +366,8 @@ export default function AdminIndicacoesPage() {
           <DropdownMenuContent align="end">
             <DropdownMenuItem asChild>
               <Link
-                href={`/admin/indicacoes/${indicacao.id}?returnTo=${encodeURIComponent(buildInternalReturn("/admin/indicacoes", searchParams))}`}
-                onClick={() => rememberListScroll(buildInternalReturn("/admin/indicacoes", searchParams))}
+                href={`/admin/indicacoes/${indicacao.id}?returnTo=${encodeURIComponent(buildInternalReturn(listPath, searchParams))}`}
+                onClick={() => rememberListScroll(buildInternalReturn(listPath, searchParams))}
               >
                 <Eye className="mr-2 h-4 w-4" />
                 Ver Detalhes
@@ -427,18 +423,40 @@ export default function AdminIndicacoesPage() {
         )
       },
     },
-  ], [canDelete, selectedIds, podeMutar, comerciaisLista, comerciaisDisponiveis, handleAtribuirComercial, handleAlterarStatus])
+  ], [canDelete, selectedIds, podeMutar, comerciaisLista, comerciaisDisponiveis, handleAtribuirComercial, handleAlterarStatus, channel])
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Todas as Indicações"
+        title={channel === "direct" ? "Captações diretas" : "Indicações"}
         description={
           isDataProviderMock()
             ? "Dados de demonstração (modo mock)."
-            : "Dados do Supabase."
+            : channel === "direct"
+              ? "Captações sem originador remunerável."
+              : "Indicações do programa, de parceiros e de funcionários."
         }
       />
+      <ChannelSummary mode={channel === "direct" ? "direct" : "referral"} />
+      {channel === "direct" ? null : (
+        <nav className="flex gap-2 overflow-x-auto" aria-label="Tipo de originador">
+          {[
+            ["referral", "Todas as indicações"],
+            ["indicator", "Indique e Ganhe"],
+            ["partner_merchant", "Comércios parceiros"],
+            ["employee_technician", "Técnicos"],
+            ["employee_external_sales", "Vendedores externos"],
+            ...(authRole === "admin_master" ? [["unclassified", "Não classificadas"]] : []),
+          ].map(([value, label]) => (
+            <Button key={value} type="button" size="sm" variant={channel === value ? "default" : "outline"} onClick={() => {
+              const next = new URLSearchParams(searchParams.toString())
+              next.set("channel", value)
+              next.set("page", "1")
+              router.replace(`${listPath}?${next.toString()}`, { scroll: false })
+            }}>{label}</Button>
+          ))}
+        </nav>
+      )}
 
       <Card className="border-border/50 bg-card/50">
         <CardHeader>
@@ -533,8 +551,8 @@ export default function AdminIndicacoesPage() {
                     <p className="text-sm">{indicacao.plano?.nome || "Plano não informado"}</p>
                     <StatusBadge status={indicacao.status} />
                     <Link
-                      href={`/admin/indicacoes/${indicacao.id}?returnTo=${encodeURIComponent(buildInternalReturn("/admin/indicacoes", searchParams))}`}
-                      onClick={() => rememberListScroll(buildInternalReturn("/admin/indicacoes", searchParams))}
+                      href={`/admin/indicacoes/${indicacao.id}?returnTo=${encodeURIComponent(buildInternalReturn(listPath, searchParams))}`}
+                      onClick={() => rememberListScroll(buildInternalReturn(listPath, searchParams))}
                       className="mt-2 inline-flex text-sm font-medium text-primary"
                     >
                       Ver detalhes
@@ -562,18 +580,18 @@ export default function AdminIndicacoesPage() {
                     <Button type="button" variant="outline" size="sm" disabled={pageMeta.page <= 1} onClick={() => {
                       const next = new URLSearchParams(searchParams.toString())
                       next.set("page", String(pageMeta.page - 1))
-                      router.replace(`/admin/indicacoes?${next.toString()}`, { scroll: false })
+                      router.replace(`${listPath}?${next.toString()}`, { scroll: false })
                     }}>Anterior</Button>
                     <Button type="button" variant="outline" size="sm" disabled={pageMeta.page >= pageMeta.pages} onClick={() => {
                       const next = new URLSearchParams(searchParams.toString())
                       next.set("page", String(pageMeta.page + 1))
-                      router.replace(`/admin/indicacoes?${next.toString()}`, { scroll: false })
+                      router.replace(`${listPath}?${next.toString()}`, { scroll: false })
                     }}>Próxima</Button>
                     <Select value={String(pageMeta.pageSize)} onValueChange={(value) => {
                       const next = new URLSearchParams(searchParams.toString())
                       next.set("pageSize", value)
                       next.set("page", "1")
-                      router.replace(`/admin/indicacoes?${next.toString()}`, { scroll: false })
+                      router.replace(`${listPath}?${next.toString()}`, { scroll: false })
                     }}>
                       <SelectTrigger className="w-[110px]" aria-label="Itens por página"><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -582,7 +600,7 @@ export default function AdminIndicacoesPage() {
                         <SelectItem value="100">100</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => router.replace(`/admin/indicacoes?month=${currentMonthKey()}&page=1&pageSize=20`, { scroll: false })}>Limpar filtros</Button>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => router.replace(`${listPath}?month=${currentMonthKey()}&page=1&pageSize=20${channel === "direct" ? "" : `&channel=${channel}`}`, { scroll: false })}>Limpar filtros</Button>
                   </div>
                 </div>
               ) : null}
@@ -602,4 +620,8 @@ export default function AdminIndicacoesPage() {
       </Card>
     </div>
   )
+}
+
+export default function AdminIndicacoesPage() {
+  return <AdminReferralList />
 }

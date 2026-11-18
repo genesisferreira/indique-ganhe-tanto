@@ -15,6 +15,7 @@ import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle,
 import type { PublicPreRegistrationMetrics } from "@/lib/public-pre-registration/dashboard"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, Label } from "recharts"
 import { PeriodFilter } from "@/components/period/period-filter"
+import { ChannelSummary } from "@/components/channels/channel-summary"
 import { chartAxis, chartColor, chartGrid, chartIsEmpty, chartTooltip, pieSlices } from "@/lib/charts/theme"
 import { currentMonthKey } from "@/lib/period/range"
 
@@ -225,6 +226,7 @@ export default function AdminDashboard() {
         description={`Período: ${periodLabel}. O saldo contábil atual permanece cumulativo.`}
       />
       <PeriodFilter />
+      <ChannelSummary mode="general" />
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
