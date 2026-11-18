@@ -51,12 +51,28 @@ export function restoreListScroll() {
   if (typeof window === "undefined") return
   const raw = sessionStorage.getItem(SCROLL_KEY)
   if (!raw) return
-  sessionStorage.removeItem(SCROLL_KEY)
+  let saved: { href?: string; y?: number }
   try {
-    const saved = JSON.parse(raw) as { href?: string; y?: number }
-    const here = `${window.location.pathname}${window.location.search}`
-    if (saved.href === here && Number.isFinite(saved.y)) window.scrollTo(0, Number(saved.y))
+    saved = JSON.parse(raw) as { href?: string; y?: number }
   } catch {
     sessionStorage.removeItem(SCROLL_KEY)
+    return
   }
+  const here = `${window.location.pathname}${window.location.search}`
+  const y = Number(saved.y)
+  if (saved.href !== here || !Number.isFinite(y)) {
+    sessionStorage.removeItem(SCROLL_KEY)
+    return
+  }
+  let tries = 0
+  const apply = () => {
+    window.scrollTo(0, y)
+    if (Math.abs(window.scrollY - y) <= 2 || tries >= 10) {
+      sessionStorage.removeItem(SCROLL_KEY)
+      return
+    }
+    tries += 1
+    window.setTimeout(apply, 120)
+  }
+  apply()
 }
