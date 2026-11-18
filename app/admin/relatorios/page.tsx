@@ -6,7 +6,6 @@ import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import {
@@ -19,7 +18,7 @@ import { Download, TrendingUp, Users, DollarSign, FileText, BarChart3, PieChart 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, Legend } from "recharts"
 import { PeriodFilter } from "@/components/period/period-filter"
 import { chartAxis, chartColor, chartGrid, chartTooltip, pieSlices } from "@/lib/charts/theme"
-import { currentMonthKey } from "@/lib/period/range"
+import { currentMonthKey, parsePeriod } from "@/lib/period/range"
 import type { Indicacao, Indicador, Comercial, Pagamento } from "@/types"
 
 const MOCK_REPORT_MONTHLY = [
@@ -177,7 +176,7 @@ type ReportPayload = {
 export default function AdminRelatoriosPage() {
   const isMock = isDataProviderMock()
   const searchParams = useSearchParams()
-  const [periodo, setPeriodo] = useState("6meses")
+  const periodLabel = parsePeriod(new URLSearchParams(searchParams.toString())).label
   const [indicacoesS, setIndicacoesS] = useState<Indicacao[]>([])
   const [indicadoresS, setIndicadoresS] = useState<Indicador[]>([])
   const [comerciaisS, setComerciaisS] = useState<Comercial[]>([])
@@ -274,22 +273,10 @@ export default function AdminRelatoriosPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <PageHeader
           title="Relatórios"
-          description="Métricas do período selecionado. O saldo atual permanece cumulativo."
+          description={`Período analisado: ${periodLabel}. O saldo atual permanece cumulativo.`}
         />
         <PeriodFilter />
         <div className="flex items-center gap-2">
-          <Select value={periodo} onValueChange={setPeriodo}>
-            <SelectTrigger className="w-[150px]">
-              <SelectValue placeholder="Período" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="7dias">Últimos 7 dias</SelectItem>
-              <SelectItem value="30dias">Últimos 30 dias</SelectItem>
-              <SelectItem value="3meses">Últimos 3 meses</SelectItem>
-              <SelectItem value="6meses">Últimos 6 meses</SelectItem>
-              <SelectItem value="1ano">Último ano</SelectItem>
-            </SelectContent>
-          </Select>
           <Button variant="outline">
             <Download className="mr-2 h-4 w-4" />
             Exportar

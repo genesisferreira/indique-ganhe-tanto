@@ -63,7 +63,7 @@ export default function ComercialPipelinePage() {
   const metrics = computePipelineMetrics(cards)
 
   return (
-    <div className="space-y-6 -mx-1 px-1">
+    <div className="min-w-0 max-w-full space-y-6 overflow-x-hidden">
       <PageHeader
         title="Pipeline Comercial"
         description={`Pipeline do período ${period.label}.`}
@@ -72,7 +72,8 @@ export default function ComercialPipelinePage() {
 
       <PipelineMetricsBar metrics={metrics} />
 
-      <div className="rounded-2xl border border-white/5 bg-gradient-to-b from-zinc-950 to-zinc-900/50 p-3 sm:p-4">
+      <p className="text-sm text-muted-foreground">O quadro rola para o lado. A página permanece no lugar.</p>
+      <div className="min-w-0 max-w-full overflow-hidden rounded-2xl border border-white/5 bg-gradient-to-b from-zinc-950 to-zinc-900/50 p-3 sm:p-4">
         <PipelineKanbanBoard
           cards={cards}
           onCardsChange={setCards}

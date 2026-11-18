@@ -39,6 +39,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { ControlledDeletionButton } from "@/components/admin/controlled-deletion"
 import { PeriodFilter } from "@/components/period/period-filter"
 import { currentMonthKey } from "@/lib/period/range"
+import { buildInternalReturn, rememberListScroll, restoreListScroll } from "@/lib/period/return-to"
 import { CommercialSlaOverdueBadge } from "@/components/commercial/commercial-sla-overdue-badge"
 import { CommercialRedistributedBadge } from "@/components/commercial/commercial-redistributed-badge"
 import { devLogCommercialSla } from "@/lib/commercial-sla"
@@ -179,6 +180,7 @@ export default function AdminIndicacoesPage() {
 
   useEffect(() => {
     setSelectedIds([])
+    restoreListScroll()
   }, [listQuery])
 
   useEffect(() => {
@@ -367,7 +369,10 @@ export default function AdminIndicacoesPage() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem asChild>
-              <Link href={`/admin/indicacoes/${indicacao.id}?${searchParams.toString()}`}>
+              <Link
+                href={`/admin/indicacoes/${indicacao.id}?returnTo=${encodeURIComponent(buildInternalReturn("/admin/indicacoes", searchParams))}`}
+                onClick={() => rememberListScroll(buildInternalReturn("/admin/indicacoes", searchParams))}
+              >
                 <Eye className="mr-2 h-4 w-4" />
                 Ver Detalhes
               </Link>

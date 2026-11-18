@@ -12,7 +12,8 @@ import {
 import { StatusPill } from "@/components/employee-portal/status-pill"
 
 /** Tabela no desktop; cards empilhados no mobile (sem overflow horizontal). */
-export function SalesList({ items }: { items: SaleListItem[] }) {
+export function SalesList({ items, returnTo = "/funcionario/vendas" }: { items: SaleListItem[]; returnTo?: string }) {
+  const hrefFor = (id: string) => `/funcionario/vendas/${id}?returnTo=${encodeURIComponent(returnTo)}`
   return (
     <>
       <div className="hidden overflow-hidden rounded-xl border border-border/50 lg:block">
@@ -35,7 +36,7 @@ export function SalesList({ items }: { items: SaleListItem[] }) {
             {items.map((s) => (
               <tr key={s.id} className="border-t border-border/40 align-top">
                 <td className="px-3 py-2 font-mono">
-                  <Link href={`/funcionario/vendas/${s.id}`} className="text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-primary">
+                  <Link href={hrefFor(s.id)} className="text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-primary">
                     {s.reference}
                   </Link>
                 </td>
@@ -58,7 +59,7 @@ export function SalesList({ items }: { items: SaleListItem[] }) {
         {items.map((s) => (
           <li key={s.id} className="min-w-0 rounded-xl border border-border/50 bg-card/50 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <Link href={`/funcionario/vendas/${s.id}`} className="font-mono text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-primary">
+              <Link href={hrefFor(s.id)} className="font-mono text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-primary">
                 {s.reference}
               </Link>
               <StatusPill label={labelFor(ENTITLEMENT_STATUS_LABEL, s.commissionStatus)} tone={ENTITLEMENT_STATUS_TONE[s.commissionStatus] ?? "neutral"} />

@@ -20,21 +20,17 @@ const fieldClass =
  * Filtros de CONSULTA (method=GET, somente querystring). Não envia dados,
  * não cria registro, não tem POST. Sem JavaScript.
  */
-export function SalesFilters({ query }: { query: SalesQuery | null }) {
+export function SalesFilters({ query, preserved }: { query: SalesQuery | null; preserved?: { month?: string | null; period?: string | null; from?: string | null; to?: string | null } }) {
   return (
     <form method="get" action="/funcionario/vendas" role="search" aria-label="Filtrar minhas vendas" className="grid gap-3 rounded-xl border border-border/50 bg-card/40 p-4 sm:grid-cols-2 lg:grid-cols-4">
       <div className="min-w-0 sm:col-span-2">
         <label htmlFor="f-q" className="mb-1 block text-xs font-medium text-muted-foreground">Buscar (protocolo, nome exibido ou plano)</label>
         <input id="f-q" name="q" type="search" maxLength={SALES_SEARCH_MAX} defaultValue={query?.search ?? ""} placeholder="Ex.: A1B2C3D4 ou Maria" className={fieldClass} />
       </div>
-      <div className="min-w-0">
-        <label htmlFor="f-from" className="mb-1 block text-xs font-medium text-muted-foreground">De</label>
-        <input id="f-from" name="from" type="date" defaultValue={query?.from ?? ""} className={fieldClass} />
-      </div>
-      <div className="min-w-0">
-        <label htmlFor="f-to" className="mb-1 block text-xs font-medium text-muted-foreground">Até</label>
-        <input id="f-to" name="to" type="date" defaultValue={query?.to ?? ""} className={fieldClass} />
-      </div>
+      {preserved?.period === "all" ? <input type="hidden" name="period" value="all" /> : null}
+      {preserved?.month ? <input type="hidden" name="month" value={preserved.month} /> : null}
+      {preserved?.from ? <input type="hidden" name="from" value={preserved.from} /> : null}
+      {preserved?.to ? <input type="hidden" name="to" value={preserved.to} /> : null}
       <div className="min-w-0">
         <label htmlFor="f-stage" className="mb-1 block text-xs font-medium text-muted-foreground">Etapa</label>
         <select id="f-stage" name="stage" defaultValue={query?.stage ?? ""} className={fieldClass}>

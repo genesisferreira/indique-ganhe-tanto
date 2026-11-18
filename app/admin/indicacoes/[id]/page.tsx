@@ -59,6 +59,7 @@ import {
 } from "@/lib/public-pre-registration/observation"
 import { formatPublicPreRegistrationBirthDate } from "@/lib/public-pre-registration/normalize"
 import { isPublicPreRegistrationReferral } from "@/lib/referral-reward-eligibility"
+import { resolveListReturn } from "@/lib/period/return-to"
 
 const STATUS_OPTIONS: IndicacaoStatus[] = [
   "pendente",
@@ -76,7 +77,7 @@ export default function AdminIndicacaoDetalhePage({
 }) {
   const { id } = use(params)
   const router = useRouter()
-  const listQuery = useSearchParams().toString()
+  const listReturn = resolveListReturn(useSearchParams(), "/admin/indicacoes")
 
   const mockIndicacao = useMemo(
     () => (isDataProviderMock() ? indicacoes.find((i) => i.id === id) : undefined),
@@ -289,7 +290,7 @@ export default function AdminIndicacaoDetalhePage({
       <div className="flex flex-col items-center justify-center py-20">
         <p className="text-muted-foreground mb-4">Indicação não encontrada</p>
         <Button asChild variant="outline">
-          <Link href={`/admin/indicacoes?${listQuery}`}>Voltar</Link>
+          <Link href={listReturn}>Voltar</Link>
         </Button>
       </div>
     )
@@ -321,7 +322,7 @@ export default function AdminIndicacaoDetalhePage({
     <div className="space-y-6">
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="sm" asChild>
-          <Link href={`/admin/indicacoes?${listQuery}`}>
+          <Link href={listReturn}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Voltar
           </Link>

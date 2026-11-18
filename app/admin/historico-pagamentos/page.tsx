@@ -46,7 +46,6 @@ export default function AdminHistoricoPagamentosPage() {
   const page = parsePage(searchParams.get("page"))
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("todos")
-  const [periodoFilter, setPeriodoFilter] = useState<string>("todos")
   const [lista, setLista] = useState<Pagamento[]>([])
 
   const loadHistorico = useCallback(async () => {
@@ -96,16 +95,9 @@ export default function AdminHistoricoPagamentosPage() {
       const matchesStatus =
         statusFilter === "todos" || pagamento.status === statusFilter
 
-      let matchesPeriodo = true
-      if (periodoFilter !== "todos") {
-        const dias = periodoFilter === "7dias" ? 7 : periodoFilter === "30dias" ? 30 : 90
-        const limite = Date.now() - dias * 24 * 60 * 60 * 1000
-        matchesPeriodo = new Date(pagamento.createdAt).getTime() >= limite
-      }
-
-      return matchesSearch && matchesStatus && matchesPeriodo
+      return matchesSearch && matchesStatus
     })
-  }, [lista, search, statusFilter, periodoFilter])
+  }, [lista, search, statusFilter])
 
   const totalPago = lista
     .filter((p: Pagamento) => p.status === "pago")
@@ -287,17 +279,6 @@ export default function AdminHistoricoPagamentosPage() {
                   <SelectItem value="pendente">Pendente</SelectItem>
                   <SelectItem value="rejeitado">Rejeitado</SelectItem>
                   <SelectItem value="cancelado">Cancelado</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={periodoFilter} onValueChange={setPeriodoFilter}>
-                <SelectTrigger className="w-full sm:w-[160px]">
-                  <SelectValue placeholder="Período" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="todos">Todo período</SelectItem>
-                  <SelectItem value="7dias">Últimos 7 dias</SelectItem>
-                  <SelectItem value="30dias">Últimos 30 dias</SelectItem>
-                  <SelectItem value="90dias">Últimos 90 dias</SelectItem>
                 </SelectContent>
               </Select>
             </div>

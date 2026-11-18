@@ -88,6 +88,27 @@ export function parsePage(value: string | null): number {
   return page
 }
 
+/** Datas civis inclusivas para consultas que comparam o dia em São Paulo. */
+export function inclusiveCivilDates(period: { selection: PeriodSelection; from: Date | null; to: Date | null }): { from: string | null; to: string | null } {
+  if (period.selection.kind === "all" || !period.from || !period.to) return { from: null, to: null }
+  const start = saoPauloParts(period.from)
+  const end = saoPauloParts(new Date(period.to.getTime() - 1000))
+  const fmt = (part: { year: number; month: number; day: number }) =>
+    `${part.year}-${String(part.month).padStart(2, "0")}-${String(part.day).padStart(2, "0")}`
+  return { from: fmt(start), to: fmt(end) }
+}
+
+/** Os últimos N meses civis, do primeiro dia do mais antigo até o último dia do mês atual. */
+export function recentMonthsRange(count: number, now = new Date()): { from: string; to: string } {
+  const safe = Math.min(24, Math.max(1, Math.trunc(count)))
+  const { year, month } = saoPauloParts(now)
+  const start = new Date(Date.UTC(year, month - 1 - (safe - 1), 1))
+  const end = new Date(Date.UTC(year, month, 0))
+  const fmt = (date: Date) =>
+    `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`
+  return { from: fmt(start), to: fmt(end) }
+}
+
 export function periodSearch(selection: PeriodSelection): URLSearchParams {
   const params = new URLSearchParams()
   if (selection.kind === "all") params.set("period", "all")

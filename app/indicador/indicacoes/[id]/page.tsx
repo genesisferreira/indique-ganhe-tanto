@@ -2,6 +2,8 @@
 
 import { use, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
+import { resolveListReturn } from "@/lib/period/return-to"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -42,6 +44,7 @@ export default function DetalheIndicacaoPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = use(params)
+  const listReturn = resolveListReturn(useSearchParams(), "/indicador/indicacoes")
 
   const mockIndicacao = useMemo(
     () => (isDataProviderMock() ? indicacoes.find((i) => i.id === id) : undefined),
@@ -91,7 +94,7 @@ export default function DetalheIndicacaoPage({
       <div className="flex flex-col items-center justify-center py-20">
         <p className="text-muted-foreground mb-4">Indicação não encontrada</p>
         <Button asChild>
-          <Link href="/indicador/indicacoes">Voltar</Link>
+          <Link href={listReturn}>Voltar</Link>
         </Button>
       </div>
     )
@@ -145,7 +148,7 @@ export default function DetalheIndicacaoPage({
     <div>
       <div className="mb-6">
         <Link
-          href="/indicador/indicacoes"
+          href={listReturn}
           className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="w-4 h-4" />

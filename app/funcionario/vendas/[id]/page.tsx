@@ -1,4 +1,5 @@
 import { parseOpportunityId } from "@/lib/employee-portal/contracts"
+import { resolveListReturn } from "@/lib/period/return-to"
 import { loadEmployeeSaleDetail } from "@/lib/employee-portal/service"
 import { formatCompetence, formatDate, formatMoney } from "@/lib/employee-portal/format"
 import {
@@ -16,13 +17,26 @@ import { StatusPill } from "@/components/employee-portal/status-pill"
 
 export const dynamic = "force-dynamic"
 
-export default async function DetalheVendaPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function DetalheVendaPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const { id } = await params
+  const raw = await searchParams
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(raw)) {
+    const item = Array.isArray(value) ? value[0] : value
+    if (item) query.set(key, item)
+  }
+  const back = resolveListReturn(query, "/funcionario/vendas")
   const opportunityId = parseOpportunityId(id)
   const r = opportunityId ? await loadEmployeeSaleDetail(opportunityId) : ({ ok: false, kind: "not_found" } as const)
   return (
     <div className="space-y-6">
-      <BackLink href="/funcionario/vendas" label="Minhas vendas" />
+      <BackLink href={back} label="Minhas vendas" />
       {!r.ok ? (
         <>
           <PageHeader title="Detalhe da venda" />

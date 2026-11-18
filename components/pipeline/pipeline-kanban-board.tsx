@@ -101,7 +101,17 @@ export function PipelineKanbanBoard({
   )
 
   return (
-    <div className="flex gap-3 overflow-x-auto pb-4 min-h-[calc(100vh-280px)]">
+    <div
+      className="flex w-full max-w-full gap-3 overflow-x-auto overscroll-x-contain pb-4 min-h-[280px] scroll-smooth focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      tabIndex={0}
+      role="region"
+      aria-label="Quadro do pipeline. Use as setas para alcançar as outras colunas."
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return
+        event.preventDefault()
+        event.currentTarget.scrollBy({ left: event.key === "ArrowRight" ? 288 : -288, behavior: "smooth" })
+      }}
+    >
       {PIPELINE_STAGE_CONFIG.map((column) => {
         const columnCards = cardsByStage.get(column.id) ?? []
         const isDropTarget = dropStage === column.id
@@ -110,7 +120,7 @@ export function PipelineKanbanBoard({
           <div
             key={column.id}
             className={cn(
-              "flex w-[272px] shrink-0 flex-col rounded-xl border border-white/5",
+              "flex w-[min(272px,calc(100vw-3.5rem))] shrink-0 flex-col rounded-xl border border-white/5",
               "bg-zinc-950/80 backdrop-blur-sm shadow-lg shadow-black/20",
               isDropTarget && "ring-2 ring-primary/50 border-primary/30"
             )}

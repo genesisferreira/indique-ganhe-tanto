@@ -2303,9 +2303,16 @@ function devWarnIndicacoesMock(reason: string): void {
  * Indicações do indicador logado: referrals por user + planos em query separada.
  * Retorna null em falha (UI mantém lista mock).
  */
-export async function loadIndicadorReferralsListFromSupabase(): Promise<
-  Indicacao[] | null
-> {
+const INDICADOR_LIST_STATUSES = new Set(["pendente", "em_andamento", "em_atendimento", "em_negociacao", "aprovada", "recusada", "paga"])
+
+export async function loadIndicadorReferralsListFromSupabase(query?: {
+  from?: string | null
+  to?: string | null
+  page?: number
+  pageSize?: number
+  search?: string
+  status?: string
+}): Promise<{ items: Indicacao[]; total: number } | null> {
   try {
     devLogIndicacoes("início loadIndicadorReferralsListFromSupabase")
 
@@ -2334,7 +2341,10 @@ export async function loadIndicadorReferralsListFromSupabase(): Promise<
       return null
     }
 
-    const { data: refData, error: refError } = await db
+    const page = Math.max(1, query?.page ?? 1)
+    const pageSize = query?.pageSize === 50 || query?.pageSize === 100 ? query.pageSize : 20
+    const term = (query?.search ?? "").normalize("NFKC").replace(/[^\p{L}\p{N} ]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 80)
+    let request = db
       .from("referrals")
       .select(
         `
@@ -2357,10 +2367,23 @@ export async function loadIndicadorReferralsListFromSupabase(): Promise<
         rejection_reason,
         created_at,
         updated_at
-      `
+      `,
+        { count: "exact" }
       )
       .eq("indicator_profile_id", user.id)
+    if (query?.from) request = request.gte("created_at", query.from)
+    if (query?.to) request = request.lt("created_at", query.to)
+    if (query?.status && INDICADOR_LIST_STATUSES.has(query.status)) request = request.eq("status", query.status)
+    if (term.length >= 2) {
+      const digits = term.replace(/\D/g, "")
+      request = digits.length >= 2
+        ? request.or(`referred_name.ilike.%${term}%,referred_phone.ilike.%${digits}%`)
+        : request.ilike("referred_name", `%${term}%`)
+    }
+    const { data: refData, error: refError, count } = await request
       .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1)
 
     devLogIndicacoes("query referrals", {
       error: refError?.message ?? null,
@@ -2412,7 +2435,7 @@ export async function loadIndicadorReferralsListFromSupabase(): Promise<
     )
 
     devLogIndicacoes("sucesso", { total: result.length })
-    return result
+    return { items: result, total: count ?? result.length }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     devWarnIndicacoesMock(`exceção: ${msg}`)
@@ -4422,6 +4445,34 @@ function devLogComercialLeads(...args: unknown[]): void {
 function devWarnComercialLeadsMock(reason: string): void {
   if (isDev()) {
     console.warn(COMERCIAL_LEADS_LOG_PREFIX, "fallback mock →", reason)
+  }
+}
+
+export async function loadCommercialCurrentState(): Promise<{ activeLeads: number; availability: string | null } | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const { data: userData } = await supabase.auth.getUser()
+    if (!userData.user) return null
+    const db = supabase as unknown as {
+      from: (table: string) => {
+        select: (columns: string, options?: { count?: "exact"; head?: boolean }) => {
+          eq: (column: string, value: string) => {
+            in: (column: string, values: string[]) => Promise<{ count: number | null; error: { message?: string } | null }>
+            maybeSingle: () => Promise<{ data: { availability_status?: string } | null; error: { message?: string } | null }>
+          }
+        }
+      }
+    }
+    const total = await db.from("referrals").select("id", { count: "exact", head: true }).eq("commercial_profile_id", userData.user.id).in("status", ["pendente", "em_andamento", "em_atendimento", "em_negociacao", "aprovada", "paga", "recusada"])
+    const closed = await db.from("referrals").select("id", { count: "exact", head: true }).eq("commercial_profile_id", userData.user.id).in("status", ["aprovada", "paga", "recusada"])
+    const availability = await db.from("commercial_availability").select("availability_status").eq("commercial_profile_id", userData.user.id).maybeSingle()
+    if (total.error || closed.error) return null
+    return {
+      activeLeads: Math.max(0, (total.count ?? 0) - (closed.count ?? 0)),
+      availability: availability.data?.availability_status ?? null,
+    }
+  } catch {
+    return null
   }
 }
 

@@ -1,14 +1,15 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
+import { Button } from "@/components/ui/button"
+import { PeriodFilter } from "@/components/period/period-filter"
 import { isDataProviderMock } from "@/lib/auth/env-data-provider"
 import { currentComercial, dashboardComercial, leads } from "@/lib/services/mock-data.service"
-import {
-  getAuthProfileBasicsFromSupabase,
-  loadComercialLeadsFromSupabase,
-} from "@/lib/services/supabase-data.service"
+import { loadCommercialCurrentState } from "@/lib/services/supabase-data.service"
+import { currentMonthKey, parsePeriod } from "@/lib/period/range"
 import type { DashboardComercial } from "@/types/dashboard"
 import type { Lead } from "@/types/lead"
 import {
@@ -80,35 +81,69 @@ export default function DesempenhoPage() {
   )
 
   const [assigned, setAssigned] = useState<Lead[]>(mockAssigned)
+  const searchParams = useSearchParams()
+  const period = parsePeriod(new URLSearchParams(searchParams.toString()))
+  const [server, setServer] = useState<{ total: number; pending: number; approved: number; rejected: number; activeNow: number; availability: string | null } | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [reload, setReload] = useState(0)
 
   useEffect(() => {
     if (isDataProviderMock()) {
       setAssigned(mockAssigned)
       return
     }
+    const params = new URLSearchParams(searchParams.toString())
+    if (!params.get("month") && !params.get("period") && !params.get("from")) params.set("month", currentMonthKey())
+    let cancelled = false
     void (async () => {
-      const [all, basics] = await Promise.all([
-        loadComercialLeadsFromSupabase(),
-        getAuthProfileBasicsFromSupabase(),
+      const [response, current] = await Promise.all([
+        fetch(`/api/me/period?${params.toString()}`, { cache: "no-store", credentials: "same-origin" }),
+        loadCommercialCurrentState(),
       ])
-      if (!all.ok) {
-        console.error("[commercial-leads:error]", all.error, all.meta)
+      if (cancelled) return
+      if (!response.ok) {
+        setFailed(true)
+        return
       }
-      const uid = basics?.id ?? null
-      const rows = all.ok ? all.data : []
-      setAssigned(uid ? rows.filter((l) => l.comercialId === uid) : [])
+      const body = await response.json() as { ok?: boolean; totalReferrals?: number; pendingReferrals?: number; approvedReferrals?: number; rejectedReferrals?: number }
+      if (!body.ok) {
+        setFailed(true)
+        return
+      }
+      setFailed(false)
+      setServer({
+        total: body.totalReferrals ?? 0,
+        pending: body.pendingReferrals ?? 0,
+        approved: body.approvedReferrals ?? 0,
+        rejected: body.rejectedReferrals ?? 0,
+        activeNow: current?.activeLeads ?? 0,
+        availability: current?.availability ?? null,
+      })
     })()
-  }, [mockAssigned])
+    return () => {
+      cancelled = true
+    }
+  }, [mockAssigned, reload, searchParams])
 
   const d = isDataProviderMock()
     ? dashboardComercial
-    : dashboardFromAssignedLeads(assigned)
+    : {
+        leadsNovos: server?.pending ?? 0,
+        leadsEmAtendimento: 0,
+        leadsSemContato: 0,
+        leadsEmNegociacao: 0,
+        vendasRealizadas: server?.approved ?? 0,
+        leadsPerdidos: server?.rejected ?? 0,
+        tempoMedioPrimeiroContato: "N/D",
+      }
 
   const leadsAtivosCount = isDataProviderMock()
     ? currentComercial.leadsAtivos
-    : assigned.filter((l) => l.status !== "vendido" && l.status !== "perdido").length
+    : server?.activeNow ?? 0
 
-  const totalEncerradosOuAbertos = d.vendasRealizadas + d.leadsPerdidos + leadsAtivosCount
+  const totalEncerradosOuAbertos = isDataProviderMock()
+    ? d.vendasRealizadas + d.leadsPerdidos + leadsAtivosCount
+    : server?.total ?? 0
   const taxaConversao =
     d.vendasRealizadas + d.leadsPerdidos > 0
       ? ((d.vendasRealizadas / (d.vendasRealizadas + d.leadsPerdidos)) * 100).toFixed(1)
@@ -133,13 +168,17 @@ export default function DesempenhoPage() {
     <div>
       <PageHeader
         title="Meu Desempenho"
-        description="Acompanhe suas métricas e resultados"
+        description={`Período ${period.label}. Os leads ativos e a disponibilidade são o estado atual.`}
       />
+      <PeriodFilter />
+      {failed ? <Button variant="outline" onClick={() => setReload((value) => value + 1)}>Tentar de novo</Button> : null}
+      <p className="text-sm text-muted-foreground">Leads ativos agora: {leadsAtivosCount}. Disponibilidade: {server?.availability === "disponivel" ? "disponível agora" : server?.availability ? "indisponível agora" : "não informada"}.</p>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <StatCard
-          title="Vendas Realizadas"
+          title="Conversões no período"
           value={d.vendasRealizadas}
+          subtitle="No período"
           icon={ShoppingCart}
           variant="success"
         />
@@ -155,8 +194,9 @@ export default function DesempenhoPage() {
           icon={Clock}
         />
         <StatCard
-          title="Leads Perdidos"
+          title="Recusadas no período"
           value={d.leadsPerdidos}
+          subtitle="No período"
           icon={UserX}
           variant="destructive"
         />
@@ -172,7 +212,7 @@ export default function DesempenhoPage() {
             <div className="flex items-center justify-between p-4 rounded-lg bg-muted/30">
               <div>
                 <p className="text-sm text-muted-foreground">
-                  Total de Leads Atribuídos
+                  Indicações no período
                 </p>
                 <p className="text-2xl font-bold text-foreground">
                   {isDataProviderMock()
