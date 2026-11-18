@@ -34,8 +34,8 @@ export function DashboardLayout({
         userRole={userRole}
         policyRole={policyRole}
       />
-      <main className="flex-1 pt-14 lg:pt-0">
-        <div className="p-4 lg:p-8">{children}</div>
+      <main className="min-w-0 flex-1 overflow-x-hidden pt-14 lg:pt-0">
+        <div className="min-w-0 max-w-full p-4 lg:p-8">{children}</div>
       </main>
     </div>
   )

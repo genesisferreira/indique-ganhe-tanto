@@ -102,7 +102,7 @@ export function PipelineKanbanBoard({
 
   return (
     <div
-      className="flex w-full max-w-full gap-3 overflow-x-auto overscroll-x-contain pb-4 min-h-[280px] scroll-smooth focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      className="flex w-full min-w-0 max-w-full gap-3 overflow-x-auto overscroll-x-contain pb-4 min-h-[280px] scroll-smooth focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
       tabIndex={0}
       role="region"
       aria-label="Quadro do pipeline. Use as setas para alcançar as outras colunas."

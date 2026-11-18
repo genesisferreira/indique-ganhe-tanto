@@ -532,6 +532,13 @@ export default function AdminIndicacoesPage() {
                     <p className="text-sm text-muted-foreground">{indicacao.telefoneIndicado}</p>
                     <p className="text-sm">{indicacao.plano?.nome || "Plano não informado"}</p>
                     <StatusBadge status={indicacao.status} />
+                    <Link
+                      href={`/admin/indicacoes/${indicacao.id}?returnTo=${encodeURIComponent(buildInternalReturn("/admin/indicacoes", searchParams))}`}
+                      onClick={() => rememberListScroll(buildInternalReturn("/admin/indicacoes", searchParams))}
+                      className="mt-2 inline-flex text-sm font-medium text-primary"
+                    >
+                      Ver detalhes
+                    </Link>
                   </article>
                 ))}
               </div>
