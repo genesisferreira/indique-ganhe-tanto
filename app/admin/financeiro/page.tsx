@@ -1,6 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -11,12 +12,12 @@ import {
   useRealtimeReload,
 } from "@/hooks/use-supabase-realtime"
 import { pagamentos } from "@/lib/services/mock-data.service"
-import { loadAdminAllPaymentsFromSupabase } from "@/lib/services/supabase-data.service"
 import type { Pagamento } from "@/types"
 import { DollarSign, TrendingUp, Clock, CheckCircle, ArrowUpRight, ArrowDownRight, Wallet } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from "recharts"
 import { PeriodFilter } from "@/components/period/period-filter"
-import { chartAxis, chartColor, chartGrid, chartTooltip, pieSlices } from "@/lib/charts/theme"
+import { chartAxis, chartColor, chartGrid, chartIsEmpty, chartTooltip, pieSlices } from "@/lib/charts/theme"
+import { currentMonthKey } from "@/lib/period/range"
 import Link from "next/link"
 
 const MOCK_MONTHLY = [
@@ -74,17 +75,57 @@ function buildLastSixMonthsSeries(
   })
 }
 
+type FinancePoint = { mes: string; pago: number; pendente: number; entrada: number; saida: number }
+
 export default function AdminFinanceiroPage() {
+  const searchParams = useSearchParams()
   const [lista, setLista] = useState<Pagamento[]>([])
+  const [series, setSeries] = useState<FinancePoint[]>([])
+  const [paidValue, setPaidValue] = useState(0)
+  const [pendingValue, setPendingValue] = useState(0)
+  const [pendingCount, setPendingCount] = useState(0)
+  const [paidCount, setPaidCount] = useState(0)
+  const [cancelledCount, setCancelledCount] = useState(0)
+  const [currentBalance, setCurrentBalance] = useState(0)
+  const [periodLabel, setPeriodLabel] = useState(currentMonthKey())
 
   const loadFinanceiro = useCallback(async () => {
     if (isDataProviderMock()) {
       setLista(pagamentos)
       return
     }
-    const r = await loadAdminAllPaymentsFromSupabase()
-    setLista(r ?? [])
-  }, [])
+    const params = new URLSearchParams(searchParams.toString())
+    if (!params.get("month") && !params.get("period") && !params.get("from")) params.set("month", currentMonthKey())
+    const response = await fetch(`/api/admin/dashboard?${params.toString()}`, { cache: "no-store", credentials: "same-origin" })
+    if (!response.ok) return
+    const data = await response.json() as {
+      ok?: boolean
+      periodLabel?: string
+      paidValue?: number
+      pendingValue?: number
+      pendingCount?: number
+      paidCount?: number
+      cancelledCount?: number
+      currentBalance?: number
+      paymentSeries?: Array<{ bucket: string; pago: number; pendente: number }>
+    }
+    if (!data.ok) return
+    setPeriodLabel(data.periodLabel ?? currentMonthKey())
+    setPaidValue(Number(data.paidValue ?? 0))
+    setPendingValue(Number(data.pendingValue ?? 0))
+    setPendingCount(Number(data.pendingCount ?? 0))
+    setPaidCount(Number(data.paidCount ?? 0))
+    setCancelledCount(Number(data.cancelledCount ?? 0))
+    setCurrentBalance(Number(data.currentBalance ?? 0))
+    setSeries((data.paymentSeries ?? []).map((row) => ({
+      mes: row.bucket,
+      pago: Number(row.pago) || 0,
+      pendente: Number(row.pendente) || 0,
+      entrada: (Number(row.pago) || 0) + (Number(row.pendente) || 0),
+      saida: Number(row.pago) || 0,
+    })))
+    setLista([])
+  }, [searchParams])
 
   useEffect(() => {
     void loadFinanceiro()
@@ -94,38 +135,20 @@ export default function AdminFinanceiroPage() {
     enabled: !isDataProviderMock(),
   })
 
-  const pagamentosPendentes = lista.filter((p: Pagamento) => p.status === "pendente")
-  const pagamentosPagos = lista.filter((p: Pagamento) => p.status === "pago")
-  const pagamentosCancelados = lista.filter(
-    (p: Pagamento) => p.status === "cancelado" || p.status === "rejeitado"
-  )
-
-  const totalPendente = pagamentosPendentes.reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
-  const totalPago = pagamentosPagos.reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
+  const mockPending = lista.filter((p: Pagamento) => p.status === "pendente")
+  const mockPaid = lista.filter((p: Pagamento) => p.status === "pago")
+  const mockCancelled = lista.filter((p: Pagamento) => p.status === "cancelado" || p.status === "rejeitado")
+  const usingServer = !isDataProviderMock()
+  const totalPendente = usingServer ? pendingValue : mockPending.reduce((acc, p) => acc + p.valor, 0)
+  const totalPago = usingServer ? paidValue : mockPaid.reduce((acc, p) => acc + p.valor, 0)
   const totalGeral = totalPendente + totalPago
-
-  const monthlyData = useMemo(() => {
-    if (isDataProviderMock()) return MOCK_MONTHLY
-    return buildLastSixMonthsSeries(lista).map(({ mes, pago, pendente }) => ({
-      mes,
-      pago,
-      pendente,
-    }))
-  }, [lista])
-
-  const fluxoCaixa = useMemo(() => {
-    if (isDataProviderMock()) return MOCK_FLUXO
-    return buildLastSixMonthsSeries(lista).map(({ mes, entrada, saida }) => ({
-      mes,
-      entrada,
-      saida,
-    }))
-  }, [lista])
-
+  const pendingShown = usingServer ? pendingCount : mockPending.length
+  const monthlyData = usingServer ? series : MOCK_MONTHLY
+  const fluxoCaixa = usingServer ? series : MOCK_FLUXO
   const statusData = pieSlices([
-    { name: "Pago", value: pagamentosPagos.length, color: chartColor(2) },
-    { name: "Pendente", value: pagamentosPendentes.length, color: chartColor(1) },
-    { name: "Cancelado", value: pagamentosCancelados.length, color: chartColor(4) },
+    { name: "Pago", value: usingServer ? paidCount : mockPaid.length, color: chartColor(2) },
+    { name: "Pendente", value: usingServer ? pendingShown : mockPending.length, color: chartColor(1) },
+    { name: "Cancelado", value: usingServer ? cancelledCount : mockCancelled.length, color: chartColor(4) },
   ])
 
   const receitaMesCard =
@@ -141,7 +164,7 @@ export default function AdminFinanceiroPage() {
           <Button variant="outline" asChild>
             <Link href="/admin/pagamentos-pendentes">
               <Clock className="mr-2 h-4 w-4" />
-              Pendentes ({pagamentosPendentes.length})
+              Pendentes ({pendingShown})
             </Link>
           </Button>
           <Button asChild>
@@ -155,28 +178,28 @@ export default function AdminFinanceiroPage() {
         <StatCard
           title="Total em Comissoes"
           value={`R$ ${totalGeral.toLocaleString("pt-BR")}`}
-          subtitle="Acumulado"
+          subtitle={`No período: ${periodLabel}`}
           icon={DollarSign}
           variant="primary"
         />
         <StatCard
           title="Total Pago"
           value={`R$ ${totalPago.toLocaleString("pt-BR")}`}
-          subtitle={`${pagamentosPagos.length} pagamentos`}
+          subtitle={`${usingServer ? paidCount : mockPaid.length} pagamentos no período`}
           icon={CheckCircle}
           variant="success"
         />
         <StatCard
           title="Pendente"
           value={`R$ ${totalPendente.toLocaleString("pt-BR")}`}
-          subtitle={`${pagamentosPendentes.length} solicitacoes`}
+          subtitle={`${pendingShown} solicitações no período`}
           icon={Clock}
           variant="warning"
         />
         <StatCard
           title="Saldo atual"
-          value={`R$ ${Math.max(0, totalGeral - totalPago).toLocaleString("pt-BR")}`}
-          subtitle="Cumulativo, sem filtro mensal"
+          value={`R$ ${(usingServer ? currentBalance : Math.max(0, totalGeral - totalPago)).toLocaleString("pt-BR")}`}
+          subtitle="Saldo atual, sem filtro mensal"
           icon={Wallet}
         />
       </div>
@@ -188,12 +211,16 @@ export default function AdminFinanceiroPage() {
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
+              {chartIsEmpty(monthlyData) ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Sem pagamentos neste período.</div>
+              ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={monthlyData}>
                   <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
                   <XAxis dataKey="mes" stroke={chartAxis.stroke} fontSize={12} />
                   <YAxis stroke={chartAxis.stroke} fontSize={12} />
                   <Tooltip
+                    cursor={false}
                     contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                     formatter={(value: number) => `R$ ${value.toLocaleString("pt-BR")}`}
                   />
@@ -201,6 +228,7 @@ export default function AdminFinanceiroPage() {
                   <Bar dataKey="pendente" fill={chartColor(1)} radius={[4, 4, 0, 0]} name="Pendente" />
                 </BarChart>
               </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -211,6 +239,9 @@ export default function AdminFinanceiroPage() {
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
+              {statusData.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Sem status neste período.</div>
+              ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -233,6 +264,7 @@ export default function AdminFinanceiroPage() {
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -305,7 +337,7 @@ export default function AdminFinanceiroPage() {
                 <ArrowDownRight className="h-6 w-6 text-destructive" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Total pago (acumulado)</p>
+                <p className="text-sm text-muted-foreground">Total pago no período</p>
                 <p className="text-2xl font-bold">
                   R$ {totalPago.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                 </p>
@@ -324,8 +356,8 @@ export default function AdminFinanceiroPage() {
               <div>
                 <p className="text-sm text-muted-foreground">Indicadores</p>
                 <p className="text-2xl font-bold">
-                  {lista.length > 0 && pagamentosPagos.length > 0
-                    ? `${((pagamentosPagos.length / lista.length) * 100).toFixed(0)}%`
+                  {paidCount + pendingShown > 0
+                    ? `${((paidCount / (paidCount + pendingShown)) * 100).toFixed(0)}%`
                     : "—"}
                 </p>
                 <p className="text-xs text-muted-foreground">

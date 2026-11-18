@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/ui/page-header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { EmployeeDashboardSection } from "@/components/employee-portal/employee-dashboard-section"
 import { ShareLinksCard } from "@/components/referral-share/share-card"
+import { RolePeriodSummary } from "@/components/period/role-period-summary"
 
 export const dynamic = "force-dynamic"
 
@@ -49,6 +50,7 @@ export default async function FuncionarioHomePage() {
         mode="self"
         originKind="employee"
       />
+      <RolePeriodSummary />
       <EmployeeDashboardSection />
       <PageHeader
         title="Operação"

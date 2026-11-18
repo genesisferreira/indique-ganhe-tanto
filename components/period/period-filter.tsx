@@ -49,6 +49,18 @@ export function PeriodFilter({ label = "Período" }: { label?: string }) {
           <SelectItem value="all">Todo o período</SelectItem>
         </SelectContent>
       </Select>
+      <div className="flex flex-wrap gap-2">
+        <input aria-label="Início do intervalo" className="h-9 rounded-md border bg-background px-2 text-sm" type="date" onChange={(event) => {
+          const from = event.target.value
+          const to = params.get("to") || from
+          if (from) apply({ kind: "range", from, to })
+        }} />
+        <input aria-label="Fim do intervalo" className="h-9 rounded-md border bg-background px-2 text-sm" type="date" onChange={(event) => {
+          const to = event.target.value
+          const from = params.get("from") || to
+          if (to) apply({ kind: "range", from, to })
+        }} />
+      </div>
     </div>
   )
 }

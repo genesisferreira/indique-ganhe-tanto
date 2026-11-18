@@ -8334,7 +8334,8 @@ export async function countAdminActiveIndicadoresFromSupabase(): Promise<
  * Lista saques Pix (admin). Filtro por status opcional.
  */
 export async function loadAdminPixWithdrawalsFromSupabase(
-  status?: "pendente" | "aprovado" | "pago" | "rejeitado" | "todos"
+  status?: "pendente" | "aprovado" | "pago" | "rejeitado" | "todos",
+  bounds?: { from?: string | null; to?: string | null }
 ): Promise<Pagamento[] | null> {
   try {
     const supabase = getSupabaseClient()
@@ -8380,8 +8381,10 @@ export async function loadAdminPixWithdrawalsFromSupabase(
     } else {
       q = q.in("status", ["pendente", "aprovado"])
     }
+    if (bounds?.from) q = q.gte("created_at", bounds.from)
+    if (bounds?.to) q = q.lt("created_at", bounds.to)
 
-    const { data, error } = await q
+    const { data, error } = await q.limit(100)
     if (error) {
       devWarnPixWithdrawal(`admin payments: ${error.message}`)
       return null
@@ -8429,7 +8432,7 @@ export async function loadAdminPixWithdrawalsFromSupabase(
 /**
  * Todos os pagamentos (admin): indicações e saques Pix.
  */
-export async function loadAdminAllPaymentsFromSupabase(): Promise<Pagamento[] | null> {
+export async function loadAdminAllPaymentsFromSupabase(bounds?: { from?: string | null; to?: string | null; page?: number; pageSize?: number }): Promise<Pagamento[] | null> {
   try {
     const supabase = getSupabaseClient()
     const db = supabase as unknown as {
@@ -8452,11 +8455,15 @@ export async function loadAdminAllPaymentsFromSupabase(): Promise<Pagamento[] | 
       return null
     }
 
-    const { data, error } = await db
+    const pageSize = bounds?.pageSize ?? (bounds ? 20 : 500)
+    const page = Math.max(1, bounds?.page ?? 1)
+    let paymentsQuery = db
       .from("payments")
       .select(PAYMENTS_SELECT)
       .order("created_at", { ascending: false })
-      .limit(500)
+    if (bounds?.from) paymentsQuery = paymentsQuery.gte("created_at", bounds.from)
+    if (bounds?.to) paymentsQuery = paymentsQuery.lt("created_at", bounds.to)
+    const { data, error } = await paymentsQuery.range((page - 1) * pageSize, page * pageSize - 1)
 
     if (error) {
       devWarnPixWithdrawal(`admin all payments: ${error.message}`)

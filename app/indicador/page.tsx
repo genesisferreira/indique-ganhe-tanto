@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import { useIndicadorHome } from "./indicador-home-provider"
 import { ShareLinksCard } from "@/components/referral-share/share-card"
+import { RolePeriodSummary } from "@/components/period/role-period-summary"
 
 export default function IndicadorDashboard() {
   const { indicador, dashboard, recentIndicacoes } = useIndicadorHome()
@@ -37,6 +38,9 @@ export default function IndicadorDashboard() {
       </PageHeader>
 
       <div className="mb-8">
+        <RolePeriodSummary />
+      </div>
+      <div className="mb-8">
         <ShareLinksCard
           title="Meu link de indicação"
           description="Compartilhe seu link ou QR. A indicação fica atribuída a você."
@@ -50,6 +54,7 @@ export default function IndicadorDashboard() {
         <StatCard
           title="Total de Indicações"
           value={dashboard.totalIndicacoes}
+          subtitle="Acumulado"
           icon={Users}
         />
         <StatCard
@@ -86,7 +91,7 @@ export default function IndicadorDashboard() {
           icon={TrendingUp}
         />
         <StatCard
-          title="Saldo Disponível"
+          title="Saldo atual"
           value={`R$ ${dashboard.saldoDisponivel.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
           icon={Receipt}
           variant="success"

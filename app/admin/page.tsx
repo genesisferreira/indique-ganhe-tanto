@@ -13,7 +13,7 @@ import {
 } from "@/hooks/use-supabase-realtime"
 import { Users, UserCheck, DollarSign, TrendingUp, FileText, Clock, CheckCircle, Globe } from "lucide-react"
 import type { PublicPreRegistrationMetrics } from "@/lib/public-pre-registration/dashboard"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } from "recharts"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, Label } from "recharts"
 import { PeriodFilter } from "@/components/period/period-filter"
 import { chartAxis, chartColor, chartGrid, chartIsEmpty, chartTooltip, pieSlices } from "@/lib/charts/theme"
 import { currentMonthKey } from "@/lib/period/range"
@@ -101,7 +101,13 @@ export default function AdminDashboard() {
           paidValue?: number
           pendingValue?: number
           pendingCount?: number
-          currentBalance?: number
+          currentIndicators?: number
+          activeIndicators?: number
+          currentCommercials?: number
+          availableCommercials?: number
+          todayConversions?: number
+          referralSeries?: Array<{ bucket: string; indicacoes: number; conversoes: number }>
+          topIndicadores?: Array<{ nome: string; conversoes: number; total: number }>
         }
         if (data.ok) {
           setPeriodLabel(data.periodLabel ?? currentMonthKey())
@@ -115,7 +121,13 @@ export default function AdminDashboard() {
             pendingPaymentsCount: data.pendingCount ?? 0,
             pendingPaymentsValue: Number(data.pendingValue ?? 0),
             totalPaidValue: Number(data.paidValue ?? 0),
-            monthlyData: [{ mes: data.periodLabel ?? "Período", indicacoes: data.totalReferrals ?? 0, conversoes: data.approvedReferrals ?? 0 }],
+            totalIndicators: data.currentIndicators ?? 0,
+            activeIndicators: data.activeIndicators ?? 0,
+            totalCommercials: data.currentCommercials ?? 0,
+            availableCommercials: data.availableCommercials ?? 0,
+            todayReferrals: data.todayConversions ?? 0,
+            monthlyData: (data.referralSeries ?? []).map((row) => ({ mes: row.bucket, indicacoes: row.indicacoes, conversoes: row.conversoes })),
+            topIndicadores: (data.topIndicadores ?? []).slice(0, 5),
           })
           return
         }
@@ -186,12 +198,14 @@ export default function AdminDashboard() {
   const totalPendente = dashboardMetrics.pendingPaymentsValue
   const totalPago = dashboardMetrics.totalPaidValue
 
-  const statusData = pieSlices([
+  const statusRows = [
     { name: "Pendente", value: dashboardMetrics.pendingReferrals, color: chartColor(0) },
-    { name: "Em Andamento", value: dashboardMetrics.inAttendanceReferrals, color: chartColor(1) },
+    { name: "Em atendimento", value: dashboardMetrics.inAttendanceReferrals, color: chartColor(1) },
     { name: "Aprovada", value: dashboardMetrics.approvedReferrals, color: chartColor(2) },
     { name: "Recusada", value: dashboardMetrics.rejectedReferrals, color: chartColor(4) },
-  ])
+  ]
+  const statusData = pieSlices(statusRows)
+  const statusTotal = statusRows.reduce((sum, row) => sum + row.value, 0)
   const monthlyData = dashboardMetrics.monthlyData
   const topIndicadores = dashboardMetrics.topIndicadores
 
@@ -214,28 +228,28 @@ export default function AdminDashboard() {
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          title="Total de Indicadores"
+          title="Indicadores ativos"
           value={totalIndicadores}
-          subtitle={`${indicadoresAtivos} ativos`}
+          subtitle={`${indicadoresAtivos} ativos agora`}
           icon={Users}
         />
         <StatCard
           title="Taxa de Conversao"
           value={`${taxaConversao}%`}
-          subtitle={`${indicacoesAprovadas} de ${totalIndicacoes}`}
+          subtitle={`${indicacoesAprovadas} de ${totalIndicacoes} no período`}
           icon={TrendingUp}
         />
         <StatCard
           title="Pagamentos Pendentes"
           value={`R$ ${totalPendente.toLocaleString("pt-BR")}`}
-          subtitle={`${pagamentosPendentes} solicitacoes`}
+          subtitle={`${pagamentosPendentes} solicitações no período`}
           icon={Clock}
           variant="warning"
         />
         <StatCard
           title="Total Pago"
           value={`R$ ${totalPago.toLocaleString("pt-BR")}`}
-          subtitle="Neste mes"
+          subtitle="No período"
           icon={DollarSign}
           variant="success"
         />
@@ -302,19 +316,20 @@ export default function AdminDashboard() {
             <CardTitle className="text-lg font-semibold">Indicacoes por Mes</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-[300px]">
-              {chartIsEmpty(monthlyData) ? <p className="text-sm text-muted-foreground">Sem séries neste período.</p> : null}
+            <div className="h-[300px]" aria-label="Indicações e conversões por mês real">
+              {chartIsEmpty(monthlyData) ? <p className="flex h-full items-center justify-center text-sm text-muted-foreground">Sem indicações neste período.</p> : (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={monthlyData} aria-label="Indicações e conversões do período">
+                <LineChart data={monthlyData}>
                   <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
                   <XAxis dataKey="mes" stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} />
-                  <YAxis stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} />
+                  <YAxis stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} allowDecimals={false} />
                   <Tooltip {...chartTooltip} />
                   <Legend />
-                  <Line type="monotone" dataKey="indicacoes" stroke={chartColor(0)} strokeWidth={2} dot={{ fill: chartColor(0) }} name="Indicacoes" />
-                  <Line type="monotone" dataKey="conversoes" stroke={chartColor(2)} strokeWidth={2} dot={{ fill: chartColor(2) }} name="Conversoes" />
+                  <Line type="monotone" dataKey="indicacoes" stroke={chartColor(0)} strokeWidth={2} dot={{ r: 4, fill: chartColor(0) }} name="Indicações" connectNulls={false} />
+                  <Line type="monotone" dataKey="conversoes" stroke={chartColor(2)} strokeWidth={2} dot={{ r: 4, fill: chartColor(2) }} name="Conversões" connectNulls={false} />
                 </LineChart>
               </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -324,28 +339,38 @@ export default function AdminDashboard() {
             <CardTitle className="text-lg font-semibold">Status das Indicacoes</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-[300px]">
+            <div className="h-[300px]" aria-label="Status das indicações no período">
+              {statusTotal === 0 ? <p className="flex h-full items-center justify-center text-sm text-muted-foreground">Sem indicações neste período.</p> : (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie
-                    data={statusData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
-                    paddingAngle={5}
-                    dataKey="value"
-                    nameKey="name"
-                  >
-                    {statusData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
+                  <Pie data={statusData} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={2} dataKey="value" nameKey="name">
+                    {statusData.map((entry) => (
+                      <Cell key={entry.name} fill={entry.color} />
                     ))}
+                    <Label
+                      content={({ viewBox }) => {
+                        if (!viewBox || !("cx" in viewBox) || !("cy" in viewBox)) return null
+                        return (
+                          <text x={viewBox.cx} y={viewBox.cy} textAnchor="middle" fill="#f8fafc">
+                            <tspan x={viewBox.cx} dy="-0.2em" fontSize="22">{statusTotal}</tspan>
+                            <tspan x={viewBox.cx} dy="1.3em" fontSize="11" fill="#cbd5e1">No período</tspan>
+                          </text>
+                        )
+                      }}
+                    />
                   </Pie>
-                  <Tooltip {...chartTooltip} />
-                  <Legend />
+                  <Tooltip {...chartTooltip} formatter={(value) => {
+                    const amount = Number(value ?? 0)
+                    const percent = statusTotal > 0 ? ((amount / statusTotal) * 100).toFixed(1) : "0.0"
+                    return [`${amount} (${percent}%)`, "Quantidade"]
+                  }} />
                 </PieChart>
               </ResponsiveContainer>
+              )}
             </div>
+            <ul className="mt-3 grid gap-1 text-sm text-muted-foreground">
+              {statusRows.map((row) => <li key={row.name}>{row.name}: {row.value}</li>)}
+            </ul>
           </CardContent>
         </Card>
       </div>
@@ -354,18 +379,21 @@ export default function AdminDashboard() {
         <Card className="border-border/50 bg-card/50">
           <CardHeader>
             <CardTitle className="text-lg font-semibold">Top 5 Indicadores</CardTitle>
+            <p className="text-sm text-muted-foreground">Ordenado por conversões no período.</p>
           </CardHeader>
           <CardContent>
-            <div className="h-[300px]">
+            <div className="h-[300px]" aria-label="Cinco indicadores com mais conversões no período">
+              {topIndicadores.length === 0 ? <p className="flex h-full items-center justify-center text-sm text-muted-foreground">Sem indicadores neste período.</p> : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={topIndicadores} layout="vertical">
+                <BarChart data={topIndicadores} layout="vertical" barSize={18}>
                   <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
-                  <XAxis type="number" stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} />
-                  <YAxis dataKey="nome" type="category" stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} width={80} />
-                  <Tooltip {...chartTooltip} />
-                  <Bar dataKey="conversoes" fill={chartColor(0)} radius={[0, 4, 4, 0]} name="Conversoes" />
+                  <XAxis type="number" stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} allowDecimals={false} />
+                  <YAxis dataKey="nome" type="category" stroke={chartAxis.stroke} tick={chartAxis.tick} fontSize={12} width={120} />
+                  <Tooltip {...chartTooltip} cursor={false} />
+                  <Bar dataKey="conversoes" fill={chartColor(0)} radius={[0, 4, 4, 0]} name="Conversões" />
                 </BarChart>
               </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -382,7 +410,7 @@ export default function AdminDashboard() {
                 </div>
                 <div>
                   <p className="font-medium">Indicadores</p>
-                  <p className="text-sm text-muted-foreground">{indicadoresAtivos} de {totalIndicadores} ativos</p>
+                  <p className="text-sm text-muted-foreground">Total ativo: {indicadoresAtivos} de {totalIndicadores}</p>
                 </div>
               </div>
               <span className="text-2xl font-bold">{totalIndicadores}</span>
@@ -395,7 +423,7 @@ export default function AdminDashboard() {
                 </div>
                 <div>
                   <p className="font-medium">Comerciais</p>
-                  <p className="text-sm text-muted-foreground">{comerciaisDisponiveis} disponiveis</p>
+                  <p className="text-sm text-muted-foreground">{comerciaisDisponiveis} disponíveis agora</p>
                 </div>
               </div>
               <span className="text-2xl font-bold">{totalComerciais}</span>
@@ -407,8 +435,8 @@ export default function AdminDashboard() {
                   <CheckCircle className="h-5 w-5 text-success" />
                 </div>
                 <div>
-                  <p className="font-medium">Conversoes Hoje</p>
-                  <p className="text-sm text-muted-foreground">Meta: 10</p>
+                  <p className="font-medium">Conversões hoje</p>
+                  <p className="text-sm text-muted-foreground">Dia atual em São Paulo</p>
                 </div>
               </div>
               <span className="text-2xl font-bold">{dashboardMetrics.todayReferrals}</span>
@@ -421,7 +449,7 @@ export default function AdminDashboard() {
                 </div>
                 <div>
                   <p className="font-medium">Leads Pendentes</p>
-                  <p className="text-sm text-muted-foreground">Aguardando atendimento</p>
+                  <p className="text-sm text-muted-foreground">Pendentes no período</p>
                 </div>
               </div>
               <span className="text-2xl font-bold">{dashboardMetrics.pendingReferrals}</span>

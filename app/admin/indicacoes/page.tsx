@@ -178,6 +178,10 @@ export default function AdminIndicacoesPage() {
       })
 
   useEffect(() => {
+    setSelectedIds([])
+  }, [listQuery])
+
+  useEffect(() => {
     if (isDataProviderMock()) return
     const timer = window.setTimeout(() => {
       const next = new URLSearchParams(searchParams.toString())

@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatCard } from "@/components/ui/stat-card"
 import { Button } from "@/components/ui/button"
@@ -14,16 +15,11 @@ import {
   comerciais as mockComerciais,
   pagamentos as mockPagamentos,
 } from "@/lib/services/mock-data.service"
-import {
-  loadAdminAllPaymentsFromSupabase,
-  loadAdminComerciaisFromSupabase,
-  loadAdminIndicatorsFromSupabase,
-  loadAdminReferralsFromSupabase,
-} from "@/lib/services/supabase-data.service"
 import { Download, TrendingUp, Users, DollarSign, FileText, BarChart3, PieChart as PieChartIcon } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, Legend } from "recharts"
 import { PeriodFilter } from "@/components/period/period-filter"
 import { chartAxis, chartColor, chartGrid, chartTooltip, pieSlices } from "@/lib/charts/theme"
+import { currentMonthKey } from "@/lib/period/range"
 import type { Indicacao, Indicador, Comercial, Pagamento } from "@/types"
 
 const MOCK_REPORT_MONTHLY = [
@@ -163,51 +159,42 @@ function planoDistribuicao(indicacoes: Indicacao[]) {
   }))
 }
 
+type ReportPayload = {
+  periodLabel: string
+  totalReferrals: number
+  approvedReferrals: number
+  pendingReferrals: number
+  inAttendanceReferrals: number
+  rejectedReferrals: number
+  paidValue: number
+  currentIndicators: number
+  referralSeries: Array<{ bucket: string; indicacoes: number; conversoes: number }>
+  paymentSeries: Array<{ bucket: string; pago: number }>
+  topComerciais: Array<{ nome: string; conversoes: number; total: number }>
+  plans: Array<{ plano: string; quantidade: number }>
+}
+
 export default function AdminRelatoriosPage() {
   const isMock = isDataProviderMock()
+  const searchParams = useSearchParams()
   const [periodo, setPeriodo] = useState("6meses")
   const [indicacoesS, setIndicacoesS] = useState<Indicacao[]>([])
   const [indicadoresS, setIndicadoresS] = useState<Indicador[]>([])
   const [comerciaisS, setComerciaisS] = useState<Comercial[]>([])
   const [pagamentosS, setPagamentosS] = useState<Pagamento[]>([])
+  const [report, setReport] = useState<ReportPayload | null>(null)
 
   useEffect(() => {
     if (isMock) return
-    void (async () => {
-      const [a, b, c, d] = await Promise.all([
-        loadAdminReferralsFromSupabase(),
-        loadAdminIndicatorsFromSupabase(),
-        loadAdminComerciaisFromSupabase(),
-        loadAdminAllPaymentsFromSupabase(),
-      ])
-      if (a && !a.ok) {
-        console.error("[admin-indicacoes:error]", a.error, a.meta)
-      }
-      setIndicacoesS(a?.ok ? a.data : [])
-      setIndicadoresS(b ?? [])
-      setComerciaisS(c ?? [])
-      setPagamentosS(d ?? [])
-      if (isDev()) {
-        const anyNull = !a?.ok || b === null || c === null || d === null
-        console.log("[supabase-query:debug]", {
-          query: "admin-relatorios-bundle",
-          referrals: a?.ok ? a.data.length : "error",
-          indicators: b?.length ?? "null",
-          commercials: c?.length ?? "null",
-          payments: d?.length ?? "null",
-        })
-        if (anyNull) {
-          console.warn("[flow-check:debug]", {
-            flow: "admin-relatorios",
-            ok: false,
-            note: "Alguma consulta retornou null — usando listas vazias onde aplicável",
-          })
-        } else {
-          console.log("[flow-check:debug]", { flow: "admin-relatorios", ok: true })
-        }
-      }
-    })()
-  }, [isMock])
+    const params = new URLSearchParams(searchParams.toString())
+    if (!params.get("month") && !params.get("period") && !params.get("from")) params.set("month", currentMonthKey())
+    void fetch(`/api/admin/dashboard?${params.toString()}`, { cache: "no-store", credentials: "same-origin" })
+      .then(async (response) => {
+        if (!response.ok) return
+        const data = await response.json() as ReportPayload & { ok?: boolean }
+        if (data.ok) setReport(data)
+      })
+  }, [isMock, searchParams])
 
   const indicacoes = isMock ? mockIndicacoes : indicacoesS
   const indicadores = isMock ? mockIndicadores : indicadoresS
@@ -216,8 +203,9 @@ export default function AdminRelatoriosPage() {
 
   const monthlyData = useMemo(() => {
     if (isMock) return MOCK_REPORT_MONTHLY
-    return buildMonthlySeries(indicacoes, pagamentos)
-  }, [isMock, indicacoes, pagamentos])
+    const paid = new Map((report?.paymentSeries ?? []).map((row) => [row.bucket, row.pago]))
+    return (report?.referralSeries ?? []).map((row) => ({ mes: row.bucket, indicacoes: row.indicacoes, conversoes: row.conversoes, valor: paid.get(row.bucket) ?? 0 }))
+  }, [isMock, report])
 
   const statusData = useMemo(() => {
     if (isMock) {
@@ -244,8 +232,13 @@ export default function AdminRelatoriosPage() {
         },
       ].filter((r) => r.value > 0)
     }
-    return statusPieFromIndicacoes(indicacoes)
-  }, [isMock, indicacoes])
+    return pieSlices([
+      { name: "Pendente", value: report?.pendingReferrals ?? 0, color: chartColor(0) },
+      { name: "Em atendimento", value: report?.inAttendanceReferrals ?? 0, color: chartColor(1) },
+      { name: "Aprovada", value: report?.approvedReferrals ?? 0, color: chartColor(2) },
+      { name: "Recusada", value: report?.rejectedReferrals ?? 0, color: chartColor(4) },
+    ])
+  }, [isMock, indicacoes, report])
 
   const comercialData = useMemo(() => {
     if (isMock) {
@@ -262,24 +255,19 @@ export default function AdminRelatoriosPage() {
         .sort((a: { conversoes: number }, b: { conversoes: number }) => b.conversoes - a.conversoes)
         .slice(0, 5)
     }
-    return comercialRanking(comerciais)
-  }, [isMock, comerciais])
+    return (report?.topComerciais ?? []).slice(0, 5)
+  }, [isMock, comerciais, report])
 
   const planoData = useMemo(() => {
     if (isMock) return MOCK_PLANO_DATA
-    const derived = planoDistribuicao(indicacoes)
-    return derived.length > 0 ? derived : []
-  }, [isMock, indicacoes])
+    return (report?.plans ?? []).map((row, index) => ({ ...row, cor: chartColor(index) }))
+  }, [isMock, indicacoes, report])
 
-  const totalIndicacoes = indicacoes.length
-  const totalConversoes = indicacoes.filter((i: Indicacao) =>
-    ["aprovada", "paga"].includes(i.status)
-  ).length
+  const totalIndicacoes = isMock ? indicacoes.length : report?.totalReferrals ?? 0
+  const totalConversoes = isMock ? indicacoes.filter((i: Indicacao) => ["aprovada", "paga"].includes(i.status)).length : report?.approvedReferrals ?? 0
   const taxaGeral =
     totalIndicacoes > 0 ? ((totalConversoes / totalIndicacoes) * 100).toFixed(1) : "0"
-  const totalPago = pagamentos
-    .filter((p: Pagamento) => p.status === "pago")
-    .reduce((acc: number, p: Pagamento) => acc + p.valor, 0)
+  const totalPago = isMock ? pagamentos.filter((p: Pagamento) => p.status === "pago").reduce((acc: number, p: Pagamento) => acc + p.valor, 0) : report?.paidValue ?? 0
 
   return (
     <div className="space-y-6">
@@ -320,7 +308,7 @@ export default function AdminRelatoriosPage() {
           value={`${taxaGeral}%`}
           icon={TrendingUp}
         />
-        <StatCard title="Indicadores Ativos" value={indicadores.length} icon={Users} />
+        <StatCard title="Indicadores ativos" value={isMock ? indicadores.length : report?.currentIndicators ?? 0} subtitle="Total ativo" icon={Users} />
         <StatCard
           title="Total Pago"
           value={`R$ ${totalPago.toLocaleString("pt-BR")}`}
@@ -349,18 +337,23 @@ export default function AdminRelatoriosPage() {
               </CardHeader>
               <CardContent>
                 <div className="h-[300px]">
+                  {monthlyData.length === 0 ? (
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Sem indicações neste período.</div>
+                  ) : (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={monthlyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
                       <XAxis dataKey="mes" stroke={chartAxis.stroke} fontSize={12} />
                       <YAxis stroke={chartAxis.stroke} fontSize={12} />
                       <Tooltip
+                        cursor={false}
                         contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                       />
                       <Bar dataKey="indicacoes" fill={chartColor(0)} radius={[4, 4, 0, 0]} name="Indicações" />
                       <Bar dataKey="conversoes" fill={chartColor(2)} radius={[4, 4, 0, 0]} name="Conversões" />
                     </BarChart>
                   </ResponsiveContainer>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -430,6 +423,7 @@ export default function AdminRelatoriosPage() {
                         width={100}
                       />
                       <Tooltip
+                        cursor={false}
                         contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                       />
                       <Bar
@@ -465,6 +459,7 @@ export default function AdminRelatoriosPage() {
                       <XAxis dataKey="plano" stroke={chartAxis.stroke} fontSize={12} />
                       <YAxis stroke={chartAxis.stroke} fontSize={12} />
                       <Tooltip
+                        cursor={false}
                         contentStyle={chartTooltip.contentStyle} labelStyle={chartTooltip.labelStyle} itemStyle={chartTooltip.itemStyle}
                       />
                       <Bar dataKey="quantidade" radius={[4, 4, 0, 0]} name="Quantidade">
@@ -492,6 +487,9 @@ export default function AdminRelatoriosPage() {
             </CardHeader>
             <CardContent>
               <div className="h-[400px]">
+                {monthlyData.length === 0 ? (
+                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Sem pagamentos neste período.</div>
+                ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={monthlyData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartGrid.stroke} />
@@ -514,6 +512,7 @@ export default function AdminRelatoriosPage() {
                     />
                   </AreaChart>
                 </ResponsiveContainer>
+                )}
               </div>
             </CardContent>
           </Card>

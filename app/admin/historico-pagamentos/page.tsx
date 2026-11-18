@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -33,9 +34,16 @@ import {
   Clock,
 } from "lucide-react"
 import { StatCard } from "@/components/ui/stat-card"
+import { PeriodFilter } from "@/components/period/period-filter"
+import { parsePage, parsePeriod } from "@/lib/period/range"
 import Link from "next/link"
 
 export default function AdminHistoricoPagamentosPage() {
+  const searchParams = useSearchParams()
+  const period = parsePeriod(new URLSearchParams(searchParams.toString()))
+  const fromIso = period.from?.toISOString() ?? null
+  const toIso = period.to?.toISOString() ?? null
+  const page = parsePage(searchParams.get("page"))
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("todos")
   const [periodoFilter, setPeriodoFilter] = useState<string>("todos")
@@ -53,7 +61,7 @@ export default function AdminHistoricoPagamentosPage() {
       }
       return
     }
-    const remoto = await loadAdminAllPaymentsFromSupabase()
+    const remoto = await loadAdminAllPaymentsFromSupabase({ from: fromIso, to: toIso, page, pageSize: 20 })
     if (process.env.NODE_ENV === "development") {
       console.log("[page-data:debug]", {
         page: "/admin/historico-pagamentos",
@@ -62,7 +70,7 @@ export default function AdminHistoricoPagamentosPage() {
       })
     }
     setLista(remoto ?? [])
-  }, [])
+  }, [fromIso, toIso, page])
 
   useEffect(() => {
     void loadHistorico()
@@ -226,6 +234,7 @@ export default function AdminHistoricoPagamentosPage() {
           Exportar CSV
         </Button>
       </PageHeader>
+      <PeriodFilter />
 
       <div className="grid gap-4 md:grid-cols-4">
         <StatCard

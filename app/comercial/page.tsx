@@ -5,6 +5,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
+import { RolePeriodSummary } from "@/components/period/role-period-summary"
 import { StatCard } from "@/components/ui/stat-card"
 import { StatusBadge } from "@/components/ui/status-badge"
 import {
@@ -277,6 +278,9 @@ export default function ComercialDashboard() {
           <span className="text-xs text-muted-foreground">· {leadsHoje} hoje</span>
         </div>
       </PageHeader>
+      <div className="mb-8">
+        <RolePeriodSummary />
+      </div>
 
       {/* Stats Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">

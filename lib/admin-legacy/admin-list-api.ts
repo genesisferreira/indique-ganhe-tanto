@@ -74,7 +74,7 @@ export async function adminIndicacoesPageHttp(client: AdminReadClient, url: URL,
   if (query.planId) request = request.eq("plan_id", query.planId)
   if (query.search) {
     const safe = query.search.replace(/[^0-9A-Za-zÀ-ÿ ]/g, "").slice(0, 80)
-    if (safe.length >= 2) request = request.or(`referred_name.ilike.%${safe}%,referred_phone.ilike.%${safe}%`)
+    if (safe.length >= 2) request = request.or(`referred_name.ilike.%${safe}%,referred_phone.ilike.%${safe}%,referred_document.ilike.%${safe}%`)
   }
   const start = (query.page - 1) * query.pageSize
   const { data, error, count } = await request.order("created_at", { ascending: false }).order("id", { ascending: false }).range(start, start + query.pageSize - 1)

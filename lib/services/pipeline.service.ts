@@ -423,7 +423,8 @@ async function loadPlanNamesForPipeline(
 }
 
 export async function loadPipelineCardsFromSupabase(
-  scope: "comercial" | "admin"
+  scope: "comercial" | "admin",
+  bounds?: { from: string | null; to: string | null }
 ): Promise<PipelineBoardLoadResult> {
   const emptyMetrics = computePipelineMetrics([])
 
@@ -503,12 +504,11 @@ export async function loadPipelineCardsFromSupabase(
 
     let filterDesc: string | null = null
     const applyFilter = (qb: ReturnType<PipelineDb["from"]>) => {
-      if (scope === "comercial") {
-        filterDesc = `commercial_profile_id.eq.${profileId}`
-        return qb.eq("commercial_profile_id", profileId)
-      }
-      filterDesc = "(admin — todas visíveis via RLS)"
-      return qb
+      let next = scope === "comercial" ? qb.eq("commercial_profile_id", profileId) : qb
+      if (bounds?.from) next = next.gte("created_at", bounds.from)
+      if (bounds?.to) next = next.lt("created_at", bounds.to)
+      filterDesc = scope === "comercial" ? `commercial_profile_id.eq.${profileId}` : "admin"
+      return next
     }
 
     meta = { ...meta, filter: filterDesc }
@@ -626,9 +626,10 @@ export async function loadPipelineCardsFromSupabase(
 }
 
 export async function loadPipelineBoardFromSupabase(
-  scope: "comercial" | "admin"
+  scope: "comercial" | "admin",
+  bounds?: { from: string | null; to: string | null }
 ): Promise<PipelineBoardLoadResult> {
-  return loadPipelineCardsFromSupabase(scope)
+  return loadPipelineCardsFromSupabase(scope, bounds)
 }
 
 export type MovePipelineStageResult =

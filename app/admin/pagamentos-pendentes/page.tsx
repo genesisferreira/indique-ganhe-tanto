@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/ui/page-header"
 import { DataTable } from "@/components/ui/data-table"
@@ -25,6 +25,8 @@ import {
   useRealtimeReload,
 } from "@/hooks/use-supabase-realtime"
 import { pagamentos } from "@/lib/services/mock-data.service"
+import { PeriodFilter } from "@/components/period/period-filter"
+import { parsePeriod } from "@/lib/period/range"
 import {
   approvePixWithdrawalFromSupabase,
   completePixWithdrawalFromSupabase,
@@ -58,6 +60,10 @@ const RECEIPT_ACCEPT = "application/pdf,image/png,image/jpeg,image/webp"
 
 export default function AdminPagamentosPendentesPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const period = parsePeriod(new URLSearchParams(searchParams.toString()))
+  const fromIso = period.from?.toISOString() ?? null
+  const toIso = period.to?.toISOString() ?? null
   const [search, setSearch] = useState("")
   const [role, setRole] = useState<UserRole | null>(null)
   const [pendentes, setPendentes] = useState<Pagamento[]>([])
@@ -90,8 +96,9 @@ export default function AdminPagamentosPendentesPage() {
       return
     }
 
-    const p = await loadAdminPixWithdrawalsFromSupabase("pendente")
-    const a = await loadAdminPixWithdrawalsFromSupabase("aprovado")
+    const bounds = { from: fromIso, to: toIso }
+    const p = await loadAdminPixWithdrawalsFromSupabase("pendente", bounds)
+    const a = await loadAdminPixWithdrawalsFromSupabase("aprovado", bounds)
 
     setPendentes(p ?? [])
     setAprovados(a ?? [])
@@ -103,7 +110,7 @@ export default function AdminPagamentosPendentesPage() {
         aprovados: a?.length ?? 0,
       })
     }
-  }, [])
+  }, [fromIso, toIso])
 
   useEffect(() => {
     void getAuthProfileRoleFromSupabase().then((r) => {
@@ -376,7 +383,7 @@ export default function AdminPagamentosPendentesPage() {
     <div className="space-y-6">
       <PageHeader
         title="Saques Pix"
-        description="Solicitações pendentes, aprovadas aguardando comprovante e auditoria"
+        description={`Solicitações do período ${period.label}.`}
       >
         <div className="flex gap-2">
           <Button variant="outline" asChild>
@@ -387,6 +394,7 @@ export default function AdminPagamentosPendentesPage() {
           </Button>
         </div>
       </PageHeader>
+      <PeriodFilter />
 
       {!podeAgir && role != null && (
         <p className="text-sm text-muted-foreground rounded-lg border border-border bg-muted/30 px-4 py-3">
