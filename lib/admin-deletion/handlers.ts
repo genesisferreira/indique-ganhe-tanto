@@ -55,7 +55,7 @@ export async function runDeletion(
   }
   const allowed = action.startsWith("preview")
     ? ["referralId", "referralIds", "indicatorId"]
-    : ["referralId", "referralIds", "indicatorId", "reason", "confirmation", "idempotencyKey", "mode", "authConfirmation", "financeConfirmation"]
+    : ["referralId", "referralIds", "indicatorId", "reason", "confirmation", "idempotencyKey", "mode", "authConfirmation", "financeConfirmation", "revision"]
   if (Object.keys(body).some((key) => !allowed.includes(key))) return deletionError("unknown_field")
   if (!client) return deletionError("unavailable", 503)
 
@@ -96,12 +96,17 @@ export async function runDeletion(
       return deletionError("finance_confirmation_mismatch")
     }
     const sendsFinance = kind === "delete_referral" || kind === "delete_bulk" || (kind === "commit_indicator" && body.mode === "hard_delete")
+    const revision = body.revision
+    if ((kind === "delete_referral" || kind === "delete_bulk") && revision != null && (typeof revision !== "string" || !/^[a-f0-9]{32}$/.test(revision))) {
+      return deletionError("stale_preview")
+    }
     args = {
       ...args,
       p_reason: body.reason.trim(),
       p_confirmation: confirmation,
       p_idempotency_key: body.idempotencyKey,
       ...(sendsFinance ? { p_finance_confirmation: body.financeConfirmation ?? null } : {}),
+      ...(kind === "delete_referral" || kind === "delete_bulk" ? { p_revision: typeof revision === "string" ? revision : null } : {}),
       ...(kind === "commit_indicator" ? { p_mode: body.mode, p_auth_confirmation: body.authConfirmation ?? null } : {}),
     }
   }

@@ -14,8 +14,10 @@ import {
   FINANCE_CONFIRMATION,
   INDICATOR_CONFIRMATION,
   PRESERVE_MESSAGE,
+  REAL_REASON_MIN,
   REFERRAL_CONFIRMATION,
   bulkConfirmation,
+  deletionFailureMessage,
 } from "@/lib/admin-deletion/contract"
 
 type Kind = "referral" | "indicator" | "bulk"
@@ -103,7 +105,18 @@ export function ControlledDeletionButton({
         setMessage("A confirmação digitada não confere.")
         return
       }
-      const common = { reason, confirmation: phrase, idempotencyKey: keyRef.current, financeConfirmation: financeConfirmation || null }
+      const reasonMin = Number(preview?.reasonMin ?? REAL_REASON_MIN)
+      if (reason.trim().length < reasonMin) {
+        setMessage(deletionFailureMessage("reason_too_short"))
+        return
+      }
+      const common = {
+        reason,
+        confirmation: phrase,
+        idempotencyKey: keyRef.current,
+        financeConfirmation: financeConfirmation || null,
+        ...(typeof preview?.revision === "string" ? { revision: preview.revision } : {}),
+      }
       const action = mode === "deactivate"
         ? kind === "indicator" ? "commit_indicator" : "deactivate_referral"
         : kind === "indicator" ? "commit_indicator" : kind === "bulk" ? "delete_bulk" : "delete_referral"
@@ -114,13 +127,7 @@ export function ControlledDeletionButton({
           : { ...common, referralId: ids[0] }
       const result = await postDeletion(action, payload)
       if (!result.ok) {
-        setMessage(result.body?.code === "confirmation_mismatch"
-          ? "A confirmação digitada não confere."
-          : result.body?.code === "reason_invalid" || result.body?.code === "reason_too_short"
-            ? "Informe um motivo detalhado, sem documento ou e-mail. Registro real exige pelo menos 40 caracteres."
-            : result.body?.code === "finance_confirmation_required" || result.body?.code === "finance_confirmation_mismatch"
-              ? "A limpeza financeira exige a confirmação adicional."
-            : "A exclusão não foi concluída. Nenhum dado financeiro foi apagado.")
+        setMessage(deletionFailureMessage(String(result.body?.code ?? "delete_failed"), typeof result.body?.auditRef === "string" ? result.body.auditRef : null))
         return
       }
       setOpen(false)
@@ -166,6 +173,7 @@ export function ControlledDeletionButton({
                 {preview.revokedLinks != null ? <li>Links revogados: {String(preview.revokedLinks)}</li> : null}
                 {preview.count != null ? <li>Selecionadas: {String(preview.count)}</li> : null}
                 {preview.blocked != null ? <li>Bloqueadas: {String(preview.blocked)}</li> : null}
+                {preview.reasonMin != null ? <li>Motivo mínimo: {String(preview.reasonMin)} caracteres</li> : null}
               </ul>
               {blockers.length > 0 ? <p>Bloqueios: {blockers.join(", ")}</p> : null}
               <div className="grid gap-1.5">

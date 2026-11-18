@@ -537,8 +537,17 @@ export function AdminReferralList({ forcedChannel }: { forcedChannel?: "direct" 
                     enabled
                     label="Excluir selecionadas"
                     onCompleted={() => {
+                      const removingPage = pageMeta != null && lista.length > 0 && selectedIds.length >= lista.length && pageMeta.page > 1
+                      const previousPage = pageMeta?.page ?? 1
                       setSelectedIds([])
-                      void loadAdminReferrals({ silent: true })
+                      if (removingPage) {
+                        const next = new URLSearchParams(searchParams.toString())
+                        next.set("page", String(previousPage - 1))
+                        router.replace(`${listPath}?${next.toString()}`, { scroll: false })
+                        emitReferralDataMutated()
+                        return
+                      }
+                      void refreshAfterMutation()
                     }}
                   />
                 </div>

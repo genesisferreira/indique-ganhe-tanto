@@ -30,6 +30,20 @@ export function bulkConfirmation(_count?: number): string {
   return BULK_CONFIRMATION
 }
 
+export function deletionFailureMessage(code: string, auditRef?: string | null): string {
+  const audit = typeof auditRef === "string" && /^[0-9a-f-]{8,}$/i.test(auditRef) ? auditRef.slice(0, 8) : ""
+  if (code === "confirmation_mismatch") return "A confirmação digitada não confere."
+  if (code === "reason_invalid" || code === "reason_too_short") return "Registro real exige um motivo com pelo menos 40 caracteres, sem documento ou e-mail."
+  if (code === "finance_confirmation_required" || code === "finance_confirmation_mismatch") return "A limpeza financeira exige a confirmação adicional."
+  if (code === "external_payment" || code === "hard_delete_blocked") return "Há um vínculo financeiro protegido. Nenhum registro foi apagado."
+  if (code === "financial_dependency") return "Há uma dependência que não pode ser removida. Nenhum registro foi apagado."
+  if (code === "bulk_blocked") return "Um registro ficou bloqueado depois da prévia. Nenhum registro foi apagado."
+  if (code === "stale_preview") return "O registro mudou depois da prévia. Abra a prévia novamente. Nenhum registro foi apagado."
+  if (code === "forbidden" || code === "unauthenticated") return "A sessão ou o papel não autoriza a exclusão."
+  if (audit) return `Falha interna ${audit}. Nenhum registro foi apagado.`
+  return "Falha interna. Nenhum registro foi apagado."
+}
+
 export function reasonIssue(reason: string): "ok" | "short" | "digits" {
   const value = reason.trim()
   if (value.length < MIN_REASON || value.length > 500) return "short"
